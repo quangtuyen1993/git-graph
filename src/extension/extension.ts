@@ -96,6 +96,33 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   context.subscriptions.push(openCommand);
+
+  // File watcher: auto-refresh graph when git refs change
+  if (workspaceFolders && workspaceFolders.length > 0) {
+    const rootPath = workspaceFolders[0].uri.fsPath;
+
+    // Watch .git directory for changes (commits, branch switches, etc.)
+    const gitWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(rootPath, '.git/{HEAD,refs/**,index}')
+    );
+
+    const debounceRefresh = (() => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      return () => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          router.sendEvent('git.refsChanged');
+          router.sendEvent('graph.invalidated');
+        }, 500);
+      };
+    })();
+
+    gitWatcher.onDidChange(debounceRefresh);
+    gitWatcher.onDidCreate(debounceRefresh);
+    gitWatcher.onDidDelete(debounceRefresh);
+
+    context.subscriptions.push(gitWatcher);
+  }
 }
 
 export function deactivate(): void {

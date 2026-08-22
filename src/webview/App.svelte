@@ -39,24 +39,33 @@
   onMount(async () => {
     try {
       await bridge.send('ping.hello');
-
-      // Load branches
-      branches = await bridge.send('git.branches') as Branch[];
-
-      // Build graph layout
-      const result = await bridge.send('graph.build', { all: true, maxCount: 500 }) as { totalRows: number; maxLane: number };
-      totalRows = result.totalRows;
-      maxLane = result.maxLane;
-
-      // Get initial window
-      await fetchWindow(0);
-
-      status = `${branches.length} branches, ${totalRows} commits`;
+      await refreshGraph();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       status = 'Error';
     }
+
+    // Listen for refresh events from host (file watcher)
+    bridge.on('graph.invalidated', () => {
+      refreshGraph();
+    });
   });
+
+  async function refreshGraph() {
+    // Load branches
+    branches = await bridge.send('git.branches') as Branch[];
+
+    // Build graph layout
+    const result = await bridge.send('graph.build', { all: true, maxCount: 500 }) as { totalRows: number; maxLane: number };
+    totalRows = result.totalRows;
+    maxLane = result.maxLane;
+
+    // Get window at current scroll position
+    const range = calculateVisibleRange({ scrollTop, viewportHeight, totalRows });
+    await fetchWindow(range.startRow);
+
+    status = `${branches.length} branches, ${totalRows} commits`;
+  }
 
   async function fetchWindow(startRow: number) {
     if (loading) return;
