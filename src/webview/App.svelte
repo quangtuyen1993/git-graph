@@ -1,6 +1,8 @@
 <script lang="ts">
   import { bridge } from './lib/message-bridge';
   import { onMount } from 'svelte';
+  import { calculateVisibleRange, getTotalHeight, ROW_HEIGHT, BUFFER_ROWS } from './lib/virtual-scroll';
+  import GraphCanvas from './components/graph/GraphCanvas.svelte';
 
   interface Branch {
     name: string;
@@ -8,39 +10,88 @@
     hash: string;
   }
 
-  interface Commit {
-    abbreviatedHash: string;
-    subject: string;
-    author: string;
-    authorDate: string;
-    refs: string[];
+  interface GraphWindow {
+    nodes: any[];
+    edges: any[];
+    startRow: number;
+    endRow: number;
+    totalRows: number;
+    maxLane: number;
   }
 
-  let status = 'Connecting...';
+  let status = 'Loading...';
   let branches: Branch[] = [];
-  let commits: Commit[] = [];
   let error = '';
+
+  // Graph state
+  let totalRows = 0;
+  let maxLane = 0;
+  let graphWindow: GraphWindow | null = null;
+  let selectedHash: string | null = null;
+
+  // Virtual scroll state
+  let scrollContainer: HTMLDivElement;
+  let viewportHeight = 600;
+  let scrollTop = 0;
+  let currentStartRow = 0;
+  let loading = false;
 
   onMount(async () => {
     try {
-      // Test connection
       await bridge.send('ping.hello');
-      status = 'Connected';
 
-      // Load git data
-      const [branchData, logData] = await Promise.all([
-        bridge.send('git.branches') as Promise<Branch[]>,
-        bridge.send('git.log', { maxCount: 20, all: true }) as Promise<Commit[]>
-      ]);
+      // Load branches
+      branches = await bridge.send('git.branches') as Branch[];
 
-      branches = branchData;
-      commits = logData;
-      status = `Connected — ${branches.length} branches, ${commits.length} commits loaded`;
+      // Build graph layout
+      const result = await bridge.send('graph.build', { all: true, maxCount: 500 }) as { totalRows: number; maxLane: number };
+      totalRows = result.totalRows;
+      maxLane = result.maxLane;
+
+      // Get initial window
+      await fetchWindow(0);
+
+      status = `${branches.length} branches, ${totalRows} commits`;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       status = 'Error';
     }
   });
+
+  async function fetchWindow(startRow: number) {
+    if (loading) return;
+    loading = true;
+    try {
+      const count = Math.ceil(viewportHeight / ROW_HEIGHT) + BUFFER_ROWS * 2;
+      graphWindow = await bridge.send('graph.getWindow', { startRow, count }) as GraphWindow;
+      currentStartRow = startRow;
+    } finally {
+      loading = false;
+    }
+  }
+
+  function handleScroll() {
+    if (!scrollContainer) return;
+    scrollTop = scrollContainer.scrollTop;
+    viewportHeight = scrollContainer.clientHeight;
+
+    const range = calculateVisibleRange({ scrollTop, viewportHeight, totalRows });
+
+    // Fetch new window if we've scrolled beyond current buffer
+    if (graphWindow) {
+      const needsFetch =
+        range.startRow < graphWindow.startRow ||
+        range.endRow > graphWindow.endRow;
+
+      if (needsFetch) {
+        fetchWindow(range.startRow);
+      }
+    }
+  }
+
+  function handleSelectCommit(event: CustomEvent<{ hash: string }>) {
+    selectedHash = event.detail.hash;
+  }
 </script>
 
 <div class="container">
@@ -66,35 +117,34 @@
       </ul>
     </aside>
 
-    <section class="graph-area">
-      <h2>Recent Commits</h2>
-      <table class="commit-table">
-        <thead>
-          <tr>
-            <th>Hash</th>
-            <th>Message</th>
-            <th>Author</th>
-            <th>Date</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each commits as commit}
-            <tr>
-              <td class="hash">{commit.abbreviatedHash}</td>
-              <td class="message">
-                {#each commit.refs as ref}
-                  <span class="ref-badge">{ref}</span>
-                {/each}
-                {commit.subject}
-              </td>
-              <td class="author">{commit.author}</td>
-              <td class="date">{new Date(commit.authorDate).toLocaleDateString()}</td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
+    <section class="graph-area" bind:this={scrollContainer} on:scroll={handleScroll}>
+      <div class="scroll-content" style="height: {getTotalHeight(totalRows)}px; position: relative;">
+        {#if graphWindow}
+          <div
+            class="graph-viewport"
+            style="position: absolute; top: {currentStartRow * ROW_HEIGHT}px; left: 0; right: 0;"
+          >
+            <GraphCanvas
+              nodes={graphWindow.nodes}
+              edges={graphWindow.edges}
+              startRow={graphWindow.startRow}
+              {totalRows}
+              maxLane={graphWindow.maxLane}
+              on:selectCommit={handleSelectCommit}
+            />
+          </div>
+        {:else}
+          <div class="loading">Loading graph...</div>
+        {/if}
+      </div>
     </section>
   </main>
+
+  {#if selectedHash}
+    <footer class="detail-bar">
+      Selected: {selectedHash}
+    </footer>
+  {/if}
 </div>
 
 <style>
@@ -110,6 +160,7 @@
     display: flex;
     align-items: center;
     gap: 12px;
+    flex-shrink: 0;
   }
 
   .toolbar h1 {
@@ -127,6 +178,7 @@
     background: var(--error);
     color: var(--bg);
     font-size: 12px;
+    flex-shrink: 0;
   }
 
   .content {
@@ -140,6 +192,7 @@
     border-right: 1px solid var(--border);
     padding: 8px;
     overflow-y: auto;
+    flex-shrink: 0;
   }
 
   .sidebar h2 {
@@ -176,69 +229,24 @@
 
   .graph-area {
     flex: 1;
-    padding: 8px 16px;
     overflow: auto;
   }
 
-  .graph-area h2 {
-    font-size: 12px;
-    font-weight: 600;
-    margin-bottom: 8px;
-    text-transform: uppercase;
-    opacity: 0.7;
+  .scroll-content {
+    min-width: 100%;
   }
 
-  .commit-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-  }
-
-  .commit-table th {
-    text-align: left;
-    padding: 4px 8px;
-    border-bottom: 1px solid var(--border);
-    font-weight: 600;
-    font-size: 11px;
-    text-transform: uppercase;
-    opacity: 0.7;
-  }
-
-  .commit-table td {
-    padding: 4px 8px;
-    border-bottom: 1px solid var(--border);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .hash {
-    font-family: monospace;
-    color: var(--accent);
-    width: 70px;
-  }
-
-  .message {
-    max-width: 400px;
-  }
-
-  .author {
-    opacity: 0.7;
-    width: 120px;
-  }
-
-  .date {
+  .loading {
+    padding: 32px;
+    text-align: center;
     opacity: 0.5;
-    width: 90px;
   }
 
-  .ref-badge {
-    display: inline-block;
-    background: var(--accent);
-    color: var(--bg);
-    padding: 1px 6px;
-    border-radius: 3px;
-    font-size: 11px;
-    margin-right: 4px;
+  .detail-bar {
+    padding: 8px 16px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    font-family: monospace;
+    flex-shrink: 0;
   }
 </style>
