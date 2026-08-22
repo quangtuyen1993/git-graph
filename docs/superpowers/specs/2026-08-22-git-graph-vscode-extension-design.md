@@ -124,7 +124,30 @@ AIReviewService
 └── cancelReview()          → abort ongoing request
 ```
 
-### 3.4 ConfigService
+### 3.5 Interactive Rebase
+
+Interactive rebase UI flow:
+1. User right-clicks branch/commit → "Interactive Rebase onto..."
+2. Host runs `git rebase -i --autostash <onto> --exec "echo done"` in dry-run mode to get commit list
+3. Webview shows sortable commit list with actions per commit: pick, reword, squash, fixup, drop
+4. User reorders/selects actions → confirms
+5. Host generates todo file → runs `GIT_SEQUENCE_EDITOR="<script>" git rebase -i <onto>`
+6. If conflict → same conflict resolution flow (Section 9.2)
+
+### 3.6 Submodules & Worktrees
+
+**Submodules:**
+- `git submodule status` → list submodules with current commit
+- Graph shows submodule refs as special nodes (different color/shape)
+- Operations scoped to parent repo; submodule clicks open new graph tab for that submodule
+
+**Worktrees:**
+- `git worktree list` → show active worktrees
+- UI indicator when viewing a worktree (not main working tree)
+- Create/remove worktree from context menu
+- Each worktree can open its own graph tab
+
+### 3.7 ConfigService
 
 ```
 ConfigService
