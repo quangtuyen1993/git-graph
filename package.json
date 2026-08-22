@@ -4,6 +4,7 @@
   "description": "Interactive Git graph with full workflow and AI code review",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "engines": {
     "vscode": "^1.85.0"
   },
