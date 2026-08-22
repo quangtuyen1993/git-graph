@@ -1,0 +1,35 @@
+:root {
+  --bg: var(--vscode-editor-background);
+  --fg: var(--vscode-editor-foreground);
+  --accent: var(--vscode-focusBorder);
+  --border: var(--vscode-panel-border);
+  --hover-bg: var(--vscode-list-hoverBackground);
+  --selection-bg: var(--vscode-list-activeSelectionBackground);
+  --selection-fg: var(--vscode-list-activeSelectionForeground);
+  --error: var(--vscode-errorForeground);
+  --warning: var(--vscode-editorWarning-foreground);
+  --info: var(--vscode-editorInfo-foreground);
+  --success: var(--vscode-gitDecoration-addedResourceForeground);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--fg);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  line-height: 1.4;
+  overflow: hidden;
+}
+
+#app {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
