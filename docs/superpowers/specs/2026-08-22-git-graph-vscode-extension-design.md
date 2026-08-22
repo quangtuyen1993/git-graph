@@ -491,7 +491,84 @@ Always use `spawn('git', [args...])` — never string interpolation. Validate al
 
 ---
 
-## 12. Reference
+## 12. Subagent Assignment Strategy
+
+### 12.1 Task Difficulty Tiers
+
+| Tier | Description | Examples |
+|------|-------------|----------|
+| **T1 — Trivial** | Boilerplate, config, scaffolding, copy-paste patterns | package.json, tsconfig, vite config, .vscodeignore, CSS variables, type definitions |
+| **T2 — Standard** | Straightforward logic with clear inputs/outputs | ConfigService, MessageBridge, Toast component, FileList, context menu wiring |
+| **T3 — Moderate** | Requires understanding of APIs, integration points, or non-trivial logic | GitService (CLI spawn + parse), WebviewProvider, CommitDetail, DiffView, message-router |
+| **T4 — Complex** | Algorithm design, performance-critical, or multi-system coordination | GraphService (layout engine), virtual scrolling, custom lane algorithm, AIReviewService (chunking + streaming) |
+| **T5 — Research** | Needs deep exploration of reference code or unfamiliar APIs before implementation | git-parser (from mhutchie), interactive rebase flow, dagre integration, VS Code SecretStorage patterns |
+
+### 12.2 Current Orchestration Rules (Kiro Subagents)
+
+| Tier | Strategy |
+|------|----------|
+| **T1** | Orchestrator does directly — no subagent needed |
+| **T2** | `general-task-execution` subagent — parallel dispatch multiple T2 tasks |
+| **T3** | `general-task-execution` subagent — one task per agent, clear spec in prompt |
+| **T4** | Orchestrator does directly (needs full context + iterative refinement) OR `general-task-execution` with very detailed prompt + examples |
+| **T5** | `context-gatherer` first → then orchestrator or `general-task-execution` implements based on findings |
+
+**Rules:**
+- T1-T2 tasks that are independent → dispatch in parallel (up to 4-5 simultaneously)
+- T3+ tasks → sequential or max 2 parallel (risk of conflicts)
+- Any task touching graph rendering or virtual scroll → orchestrator handles (needs tight iteration loop)
+- Before any T4-T5 task that touches mhutchie reference code → always dispatch `context-gatherer` first
+- `semantic_reviewer` after each major phase completion (not per-task)
+
+### 12.3 Future Model Assignment (When Configurable)
+
+When tools support model selection per subagent:
+
+| Tier | Recommended Model Class | Reasoning |
+|------|------------------------|-----------|
+| **T1** | Fast/cheap (GPT-4o-mini, Claude Haiku, Gemini Flash) | Boilerplate needs speed, not reasoning |
+| **T2** | Mid-tier (GPT-4o, Claude Sonnet) | Standard logic, good balance |
+| **T3** | Mid-tier to Strong (Claude Sonnet, GPT-4o) | Needs API knowledge + integration skill |
+| **T4** | Strongest available (Claude Opus, GPT-4-turbo, o1/o3) | Algorithm design, performance optimization needs deep reasoning |
+| **T5** | Strongest for research, then mid-tier for implementation | Research phase needs exploration + synthesis ability |
+
+**Token budget guidelines:**
+- T1: ~2k tokens output max
+- T2: ~4k tokens output
+- T3: ~8k tokens output
+- T4: ~16k+ tokens output (iterative)
+- T5: Research phase unlimited, implementation follows tier of actual work
+
+### 12.4 Task-to-Tier Mapping for This Project
+
+| Task | Tier |
+|------|------|
+| Project scaffold (package.json, configs, directory structure) | T1 |
+| Type definitions (git.types, graph.types, messages.types, review.types) | T1 |
+| ConfigService | T2 |
+| MessageBridge (webview side) | T2 |
+| Toast, BranchSelector, RefBadge components | T2 |
+| Toolbar, BranchDialog, MergeDialog, StashDialog | T2 |
+| message-router (host side) | T3 |
+| WebviewProvider | T3 |
+| GitService (spawn + queue + error handling) | T3 |
+| git-parser (from mhutchie reference) | T5 → T3 |
+| CommitNode, BranchLine SVG components | T3 |
+| CommitDetail + FileList + DiffView | T3 |
+| GraphService — dagre integration | T4 |
+| GraphService — custom lane algorithm | T4 |
+| Virtual scrolling (GraphCanvas + lib) | T4 |
+| AIReviewService (chunking, streaming, prompt) | T4 |
+| ReviewPanel + AnnotationList (streaming UI) | T3 |
+| Interactive rebase UI flow | T5 → T4 |
+| Submodules/Worktrees integration | T5 → T3 |
+| Security (CSP, SecretStorage, input validation) | T3 |
+| File watcher + event system | T3 |
+| Context menus (wiring all operations) | T2 |
+
+---
+
+## 13. Reference
 
 - **mhutchie/vscode-git-graph** — git parsing logic, command patterns, edge case handling
 - **dagre** — graph layout algorithm
