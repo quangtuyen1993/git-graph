@@ -1,9 +1,16 @@
 import * as vscode from 'vscode';
+import { MessageRouter } from '../controllers/message-router';
 
 export class GitGraphWebviewProvider {
   private panel: vscode.WebviewPanel | undefined;
+  private router: MessageRouter;
 
-  constructor(private readonly extensionUri: vscode.Uri) {}
+  constructor(
+    private readonly extensionUri: vscode.Uri,
+    router: MessageRouter
+  ) {
+    this.router = router;
+  }
 
   public openPanel(): vscode.WebviewPanel {
     if (this.panel) {
@@ -25,6 +32,7 @@ export class GitGraphWebviewProvider {
     );
 
     this.panel.webview.html = this.getHtmlContent(this.panel.webview);
+    this.router.setPanel(this.panel);
 
     this.panel.onDidDispose(() => {
       this.panel = undefined;

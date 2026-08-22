@@ -2,11 +2,17 @@
   import { bridge } from './lib/message-bridge';
   import { onMount } from 'svelte';
 
-  let status = 'Loading...';
+  let status = 'Connecting...';
 
-  onMount(() => {
-    status = 'Git Graph Pro — Ready';
-    // Future: bridge.send('git.status') to load initial data
+  onMount(async () => {
+    try {
+      const result = await bridge.send('ping.hello') as { pong: boolean; timestamp: number };
+      if (result.pong) {
+        status = 'Git Graph Pro — Connected ✓';
+      }
+    } catch (e) {
+      status = `Git Graph Pro — Error: ${e}`;
+    }
   });
 </script>
 
