@@ -9,6 +9,7 @@
         "--extensionDevelopmentPath=${workspaceFolder}"
       ],
       "outFiles": [
+        "${workspaceFolder}/dist/**/*.cjs",
         "${workspaceFolder}/dist/**/*.js"
       ],
       "preLaunchTask": "npm: build"

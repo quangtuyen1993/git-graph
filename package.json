@@ -10,7 +10,7 @@
   },
   "categories": ["SCM Providers"],
   "activationEvents": [],
-  "main": "./dist/extension.js",
+  "main": "./dist/extension.cjs",
   "contributes": {
     "commands": [
       {
@@ -21,10 +21,10 @@
   },
   "scripts": {
     "dev": "concurrently \"npm run dev:host\" \"npm run dev:webview\"",
-    "dev:host": "esbuild src/extension/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap --watch",
+    "dev:host": "esbuild src/extension/extension.ts --bundle --outfile=dist/extension.cjs --external:vscode --format=cjs --platform=node --sourcemap --watch",
     "dev:webview": "vite build --watch --mode development",
     "build": "npm run build:host && npm run build:webview",
-    "build:host": "esbuild src/extension/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --minify",
+    "build:host": "esbuild src/extension/extension.ts --bundle --outfile=dist/extension.cjs --external:vscode --format=cjs --platform=node --minify",
     "build:webview": "vite build",
     "package": "vsce package"
   },
