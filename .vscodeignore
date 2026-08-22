@@ -1,0 +1,9 @@
+.vscode/**
+src/**
+node_modules/**
+docs/**
+tsconfig.json
+svelte.config.js
+vite.config.ts
+esbuild.config.mjs
+.gitignore
