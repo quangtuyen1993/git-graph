@@ -2,7 +2,9 @@ import * as vscode from 'vscode';
 import { GitGraphWebviewProvider } from './providers/webview-provider';
 import { MessageRouter } from './controllers/message-router';
 import { GitService } from './services/git.service';
+import { GraphService } from './services/graph.service';
 import type { GitLogOptions } from './types/git.types';
+import type { GraphOptions } from './types/graph.types';
 
 let webviewProvider: GitGraphWebviewProvider;
 
@@ -12,6 +14,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // Determine repo path from workspace
   const workspaceFolders = vscode.workspace.workspaceFolders;
   let gitService: GitService | null = null;
+  const graphService = new GraphService();
 
   if (workspaceFolders && workspaceFolders.length > 0) {
     const rootPath = workspaceFolders[0].uri.fsPath;
@@ -39,6 +42,43 @@ export function activate(context: vscode.ExtensionContext): void {
         return gitService.show(p.hash as string);
       case 'git.diff':
         return gitService.diff(p.ref1 as string, p.ref2 as string);
+      default:
+        throw new Error(`Unknown method: ${method}`);
+    }
+  });
+
+  // Register graph namespace handler
+  router.register('graph', async (method: string, params: unknown) => {
+    if (!gitService) {
+      throw new Error('No git repository found in workspace');
+    }
+
+    const p = (params ?? {}) as Record<string, unknown>;
+
+    switch (method) {
+      case 'graph.build': {
+        const options = p as GraphOptions;
+        const logOptions: GitLogOptions = {
+          maxCount: options.maxCount ?? 500,
+          skip: options.skip,
+          branch: options.branch,
+          all: options.all ?? true
+        };
+        const commits = await gitService.log(logOptions);
+        const layout = graphService.buildLayout(commits);
+        return { totalRows: layout.totalRows, maxLane: layout.maxLane };
+      }
+      case 'graph.getWindow': {
+        const startRow = (p.startRow as number) ?? 0;
+        const count = (p.count as number) ?? 50;
+        return graphService.getWindow(startRow, count);
+      }
+      case 'graph.getLayout': {
+        return {
+          totalRows: graphService.getTotalRows(),
+          maxLane: graphService.getMaxLane()
+        };
+      }
       default:
         throw new Error(`Unknown method: ${method}`);
     }
