@@ -60,50 +60,58 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     let debounceTimer: ReturnType<typeof setTimeout> | undefined;
     let watcherGeneration = 0;
     let disposed = false;
+    let repositorySwitchQueue = Promise.resolve();
 
     async function bindGitWatcher(): Promise<void> {
       const generation = ++watcherGeneration;
       gitWatcher?.dispose();
       gitWatcher = undefined;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = undefined;
       const gitService = session.getGitService();
       if (!gitService) return;
 
-      const gitDirectory = await gitService.gitDirectory();
-      if (disposed || generation !== watcherGeneration) return;
-
-      gitWatcher = vscode.workspace.createFileSystemWatcher(
-        new vscode.RelativePattern(gitDirectory, '{HEAD,refs/**,index}'),
-      );
-      const invalidate = () => {
-        if (debounceTimer) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-          debounceTimer = undefined;
-          session.invalidate();
-          router.sendEvent('git.refsChanged');
-          router.sendEvent('graph.invalidated');
-        }, 500);
-      };
-      gitWatcher.onDidChange(invalidate);
-      gitWatcher.onDidCreate(invalidate);
-      gitWatcher.onDidDelete(invalidate);
-    }
-
-    async function bindGitWatcherSafely(): Promise<void> {
       try {
-        await bindGitWatcher();
+        const gitDirectory = await gitService.gitDirectory();
+        if (disposed || generation !== watcherGeneration) return;
+
+        gitWatcher = vscode.workspace.createFileSystemWatcher(
+          new vscode.RelativePattern(gitDirectory, '{HEAD,refs/**,index}'),
+        );
+        const invalidate = () => {
+          if (debounceTimer) clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => {
+            debounceTimer = undefined;
+            session.invalidate();
+            router.sendEvent('git.refsChanged');
+            router.sendEvent('graph.invalidated');
+          }, 500);
+        };
+        gitWatcher.onDidChange(invalidate);
+        gitWatcher.onDidCreate(invalidate);
+        gitWatcher.onDidDelete(invalidate);
       } catch (error) {
-        if (disposed) return;
+        if (disposed || generation !== watcherGeneration) return;
+        gitWatcher?.dispose();
+        gitWatcher = undefined;
         const message = error instanceof Error ? error.message : String(error);
-        await vscode.window.showWarningMessage(`Unable to watch Git repository: ${message}`);
+        const warning = vscode.window.showWarningMessage(`Unable to watch Git repository: ${message}`);
+        void Promise.resolve(warning).catch(() => undefined);
       }
     }
 
     router.register('repo', async (method: string, params: unknown) => {
-      const result = await session.handleRepo(method, params);
       if (request.kind === 'root' && method === 'repo.switch') {
-        await bindGitWatcherSafely();
+        const switchRepository = async () => {
+          const result = await session.handleRepo(method, params);
+          await bindGitWatcher();
+          return result;
+        };
+        const result = repositorySwitchQueue.then(switchRepository, switchRepository);
+        repositorySwitchQueue = result.then(() => undefined, () => undefined);
+        return result;
       }
-      return result;
+      return session.handleRepo(method, params);
     });
     router.register('git', (method: string, params: unknown) => session.handleGit(method, params));
     router.register('graph', (method: string, params: unknown) => session.handleGraph(method, params));
@@ -267,7 +275,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
 
     router.setPanel(panel);
-    void bindGitWatcherSafely();
+    void bindGitWatcher();
 
     panel.onDidDispose(() => {
       disposed = true;

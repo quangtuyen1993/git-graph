@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const hostMocks = vi.hoisted(() => ({
   createFileSystemWatcher: vi.fn(),
@@ -64,6 +64,10 @@ vi.mock('../../src/extension/services/git.service', () => ({
     resolveSubmodule(relativePath: string): Promise<unknown> {
       return hostMocks.resolveSubmodule(this.repoPath, relativePath);
     }
+
+    branches(): Promise<Array<{ name: string }>> {
+      return Promise.resolve([{ name: this.repoPath }]);
+    }
   },
 }));
 
@@ -120,12 +124,39 @@ function fakePanel(): FakePanel {
 }
 
 function fakeWatcher() {
+  let change: (() => void) | undefined;
   return {
     dispose: vi.fn(),
-    onDidChange: vi.fn(),
+    onDidChange: vi.fn((callback: () => void) => {
+      change = callback;
+    }),
     onDidCreate: vi.fn(),
     onDidDelete: vi.fn(),
+    fireChange() {
+      change?.();
+    },
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function responseFor(panel: FakePanel, id: string): Promise<Record<string, unknown>> {
+  let response: Record<string, unknown> | undefined;
+  await vi.waitFor(() => {
+    response = panel.webview.postMessage.mock.calls
+      .map(([message]) => message as Record<string, unknown>)
+      .find(message => message.type === 'response' && message.id === id);
+    expect(response).toBeDefined();
+  });
+  return response!;
 }
 
 async function activateAndOpenRoot(): Promise<FakePanel> {
@@ -158,6 +189,10 @@ describe('extension panel sessions', () => {
     hostMocks.createFileSystemWatcher.mockImplementation(() => fakeWatcher());
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('binds each root session watcher initially, rebinds after switching, and disposes it with the panel', async () => {
     const panel = await activateAndOpenRoot();
 
@@ -180,7 +215,7 @@ describe('extension panel sessions', () => {
     expect(reboundWatcher.dispose).toHaveBeenCalledTimes(1);
   });
 
-  it('warns about initial and rebind watcher failures without rejecting panel setup or repo.switch', async () => {
+  it('warns about initial and rebind watcher failures without delaying repo.switch for warning dismissal', async () => {
     hostMocks.gitDirectory.mockRejectedValueOnce(new Error('initial watcher failed'));
     const panel = await activateAndOpenRoot();
 
@@ -190,6 +225,8 @@ describe('extension panel sessions', () => {
     expect(panel.webview.html).toContain('<div id="app"></div>');
 
     hostMocks.gitDirectory.mockRejectedValueOnce(new Error('rebind watcher failed'));
+    const pendingWarning = deferred<string | undefined>();
+    hostMocks.showWarningMessage.mockReturnValueOnce(pendingWarning.promise);
     panel.receive({ id: 'switch', type: 'request', method: 'repo.switch', params: { path: '/repo/other' } });
 
     await vi.waitFor(() => expect(hostMocks.showWarningMessage).toHaveBeenCalledWith(
@@ -200,6 +237,85 @@ describe('extension panel sessions', () => {
       type: 'response',
       result: { success: true, name: 'other', path: '/repo/other' },
     }));
+    pendingWarning.resolve(undefined);
+  });
+
+  it('serializes overlapping root switches so response order matches the installed repository watcher', async () => {
+    hostMocks.workspaceFolders.push({ name: 'last', uri: { fsPath: '/workspace/last' } });
+    const slowOtherDirectory = deferred<string>();
+    hostMocks.gitDirectory.mockImplementation((path: string) => (
+      path === '/repo/other'
+        ? slowOtherDirectory.promise
+        : Promise.resolve(path.replace('/repo', '/git'))
+    ));
+    const panel = await activateAndOpenRoot();
+    await vi.waitFor(() => expect(hostMocks.createFileSystemWatcher).toHaveBeenCalledTimes(1));
+
+    const appliedRepositories: string[] = [];
+    panel.webview.postMessage.mockImplementation((message: Record<string, unknown>) => {
+      if (message.type === 'response' && (message.id === 'switch-other' || message.id === 'switch-last')) {
+        const result = message.result as { path?: string } | undefined;
+        if (result?.path) appliedRepositories.push(result.path);
+      }
+    });
+
+    panel.receive({
+      id: 'switch-other',
+      type: 'request',
+      method: 'repo.switch',
+      params: { path: '/repo/other' },
+    });
+    await vi.waitFor(() => expect(hostMocks.gitDirectory).toHaveBeenCalledWith('/repo/other'));
+    panel.receive({
+      id: 'switch-last',
+      type: 'request',
+      method: 'repo.switch',
+      params: { path: '/repo/last' },
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    slowOtherDirectory.resolve('/git/other');
+
+    await responseFor(panel, 'switch-other');
+    await responseFor(panel, 'switch-last');
+
+    expect(appliedRepositories).toEqual(['/repo/other', '/repo/last']);
+    expect(hostMocks.createFileSystemWatcher.mock.calls.at(-1)?.[0]).toMatchObject({ base: '/git/last' });
+  });
+
+  it('suppresses a stale initial watcher failure after a newer repository bind succeeds', async () => {
+    const staleInitialDirectory = deferred<string>();
+    hostMocks.gitDirectory.mockImplementation((path: string) => (
+      path === '/repo/root'
+        ? staleInitialDirectory.promise
+        : Promise.resolve(path.replace('/repo', '/git'))
+    ));
+    const panel = await activateAndOpenRoot();
+    await vi.waitFor(() => expect(hostMocks.gitDirectory).toHaveBeenCalledWith('/repo/root'));
+
+    panel.receive({ id: 'switch', type: 'request', method: 'repo.switch', params: { path: '/repo/other' } });
+    await responseFor(panel, 'switch');
+    staleInitialDirectory.reject(new Error('superseded watcher failed'));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(hostMocks.showWarningMessage).not.toHaveBeenCalled();
+  });
+
+  it('cancels a pending watcher invalidation when repository switching supersedes it', async () => {
+    vi.useFakeTimers();
+    const panel = await activateAndOpenRoot();
+    await vi.waitFor(() => expect(hostMocks.createFileSystemWatcher).toHaveBeenCalledTimes(1));
+    const initialWatcher = hostMocks.createFileSystemWatcher.mock.results[0].value;
+    initialWatcher.fireChange();
+
+    panel.receive({ id: 'switch', type: 'request', method: 'repo.switch', params: { path: '/repo/other' } });
+    await responseFor(panel, 'switch');
+    await vi.advanceTimersByTimeAsync(500);
+
+    const events = panel.webview.postMessage.mock.calls
+      .map(([message]) => message as { type: string })
+      .filter(message => message.type === 'event');
+    expect(events).toEqual([]);
   });
 
   it('resolves a relative submodule path in the panel session before opening its repository panel', async () => {
@@ -221,5 +337,72 @@ describe('extension panel sessions', () => {
       type: 'response',
       result: { success: true },
     }));
+  });
+
+  it('keeps child repo and Git RPCs fixed to the canonical child repository', async () => {
+    const rootPanel = await activateAndOpenRoot();
+    await vi.waitFor(() => expect(hostMocks.createFileSystemWatcher).toHaveBeenCalledTimes(1));
+    rootPanel.receive({
+      id: 'open-submodule',
+      type: 'request',
+      method: 'ui.openSubmodule',
+      params: { path: 'packages/sdk' },
+    });
+    await vi.waitFor(() => expect(hostMocks.createWebviewPanel).toHaveBeenCalledTimes(2));
+    const childPanel = hostMocks.createWebviewPanel.mock.results[1].value as FakePanel;
+
+    childPanel.receive({ id: 'child-list', type: 'request', method: 'repo.list', params: {} });
+    childPanel.receive({ id: 'child-branches', type: 'request', method: 'git.branches', params: {} });
+    childPanel.receive({
+      id: 'child-switch',
+      type: 'request',
+      method: 'repo.switch',
+      params: { path: '/repo/other' },
+    });
+
+    expect(await responseFor(childPanel, 'child-list')).toMatchObject({
+      result: { repos: [{ name: 'sdk', path: '/real/sdk', active: true }] },
+    });
+    expect(await responseFor(childPanel, 'child-branches')).toMatchObject({
+      result: [{ name: '/real/sdk' }],
+    });
+    expect(await responseFor(childPanel, 'child-switch')).toMatchObject({
+      error: { message: expect.stringContaining('fixed repository') },
+    });
+  });
+
+  it('isolates child watcher events and disposal from the root panel session', async () => {
+    vi.useFakeTimers();
+    const rootPanel = await activateAndOpenRoot();
+    await vi.waitFor(() => expect(hostMocks.createFileSystemWatcher).toHaveBeenCalledTimes(1));
+    rootPanel.receive({
+      id: 'open-submodule',
+      type: 'request',
+      method: 'ui.openSubmodule',
+      params: { path: 'packages/sdk' },
+    });
+    await vi.waitFor(() => expect(hostMocks.createFileSystemWatcher).toHaveBeenCalledTimes(2));
+    const childPanel = hostMocks.createWebviewPanel.mock.results[1].value as FakePanel;
+    const rootWatcher = hostMocks.createFileSystemWatcher.mock.results[0].value;
+    const childWatcher = hostMocks.createFileSystemWatcher.mock.results[1].value;
+
+    childWatcher.fireChange();
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(rootPanel.webview.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'event' }));
+    expect(childPanel.webview.postMessage).toHaveBeenCalledWith({
+      type: 'event',
+      event: 'git.refsChanged',
+      data: undefined,
+    });
+
+    childPanel.disposePanel();
+    expect(childWatcher.dispose).toHaveBeenCalledTimes(1);
+    expect(rootWatcher.dispose).not.toHaveBeenCalled();
+
+    rootPanel.receive({ id: 'root-branches', type: 'request', method: 'git.branches', params: {} });
+    expect(await responseFor(rootPanel, 'root-branches')).toMatchObject({
+      result: [{ name: '/repo/root' }],
+    });
   });
 });
