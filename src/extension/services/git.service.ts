@@ -214,9 +214,10 @@ export class GitService {
     await this.cli.exec(args, { timeout: 60000 });
   }
 
-  public async pull(remote?: string, branch?: string, options?: { rebase?: boolean }): Promise<void> {
+  public async pull(remote?: string, branch?: string, options?: { rebase?: boolean; ffOnly?: boolean }): Promise<void> {
     const args = ['pull'];
     if (options?.rebase) args.push('--rebase');
+    if (options?.ffOnly) args.push('--ff-only');
     if (remote) args.push(remote);
     if (branch) args.push(branch);
     await this.cli.exec(args, { timeout: 60000 });

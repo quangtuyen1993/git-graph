@@ -87,7 +87,7 @@ export async function handleGitMethod(
       await gitService.pull(
         p.remote as string | undefined,
         p.branch as string | undefined,
-        p.options as { rebase?: boolean } | undefined,
+        p.options as { rebase?: boolean; ffOnly?: boolean } | undefined,
       );
       return { success: true };
     case 'git.fetch':

@@ -15,6 +15,7 @@
   let wasVisible = false;
   let previouslyFocusedElement: HTMLElement | null = null;
   let restoreFocusOnClose = false;
+  let openSubmenuIndex: number = -1;
 
   function close({ restoreFocus = false }: { restoreFocus?: boolean } = {}) {
     restoreFocusOnClose = restoreFocus;
@@ -65,8 +66,22 @@
 
   function handleItemClick(item: MenuItem) {
     if (item.disabled || item.divider) return;
+    if (item.children && item.children.length > 0) return; // submenu items don't fire action
     close({ restoreFocus: true });
     dispatch('action', { action: item.action });
+  }
+
+  function handleSubmenuAction(event: CustomEvent<{ action: string }>) {
+    close({ restoreFocus: true });
+    dispatch('action', event.detail);
+  }
+
+  function handleItemMouseEnter(index: number, item: MenuItem) {
+    if (item.children && item.children.length > 0) {
+      openSubmenuIndex = index;
+    } else {
+      openSubmenuIndex = -1;
+    }
   }
 
   function handleClickOutside(event: MouseEvent) {
@@ -141,9 +156,45 @@
     tabindex="-1"
     on:keydown={handleKeydown}
   >
-    {#each items as item}
+    {#each items as item, index}
       {#if item.divider}
         <div class="divider" role="separator"></div>
+      {:else if item.children && item.children.length > 0}
+        <div class="menu-item-wrapper">
+          <button
+            class="menu-item has-submenu"
+            class:disabled={item.disabled}
+            role="menuitem"
+            disabled={item.disabled}
+            tabindex="-1"
+            on:click={() => { openSubmenuIndex = openSubmenuIndex === index ? -1 : index; }}
+            on:mouseenter={() => handleItemMouseEnter(index, item)}
+          >
+            {item.label}
+            <span class="submenu-arrow">▶</span>
+          </button>
+          {#if openSubmenuIndex === index}
+            <div class="submenu" role="menu">
+              {#each item.children as child}
+                {#if child.divider}
+                  <div class="divider" role="separator"></div>
+                {:else}
+                  <button
+                    class="menu-item"
+                    class:disabled={child.disabled}
+                    class:danger={child.danger}
+                    role="menuitem"
+                    disabled={child.disabled}
+                    tabindex="-1"
+                    on:click={() => handleSubmenuAction(new CustomEvent('action', { detail: { action: child.action } }))}
+                  >
+                    {child.label}
+                  </button>
+                {/if}
+              {/each}
+            </div>
+          {/if}
+        </div>
       {:else}
         <button
           class="menu-item"
@@ -153,6 +204,7 @@
           disabled={item.disabled}
           tabindex="-1"
           on:click={() => handleItemClick(item)}
+          on:mouseenter={() => { openSubmenuIndex = -1; }}
         >
           {item.label}
         </button>
@@ -215,5 +267,34 @@
     height: 1px;
     margin: 4px 8px;
     background: var(--vscode-menu-separatorBackground, #454545);
+  }
+
+  .menu-item-wrapper {
+    position: relative;
+  }
+
+  .has-submenu {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .submenu-arrow {
+    font-size: 9px;
+    opacity: 0.6;
+    margin-left: 12px;
+  }
+
+  .submenu {
+    position: absolute;
+    left: 100%;
+    top: -4px;
+    background: var(--vscode-menu-background, #252526);
+    border: 1px solid var(--vscode-menu-border, #454545);
+    border-radius: 4px;
+    padding: 4px 0;
+    min-width: 160px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    z-index: 1001;
   }
 </style>

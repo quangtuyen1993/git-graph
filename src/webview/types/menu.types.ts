@@ -4,4 +4,5 @@ export interface MenuItem {
   disabled?: boolean;
   divider?: boolean;
   danger?: boolean;
+  children?: MenuItem[];
 }

@@ -494,8 +494,20 @@
       // Current branch menu (can't delete or checkout)
       const hasUpstream = !!branch.upstream;
       contextMenuItems = [
-        { label: hasUpstream ? 'Push' : 'Publish', action: hasUpstream ? 'push' : 'publish' },
-        ...(hasUpstream ? [{ label: 'Pull', action: 'pull' }] : []),
+        hasUpstream
+          ? { label: 'Push', action: '', children: [
+              { label: 'Push', action: 'push' },
+              { label: 'Push (Force with Lease)', action: 'pushForce' },
+              { label: 'Push (Set Upstream)', action: 'publish' },
+            ]}
+          : { label: 'Publish Branch', action: 'publish' },
+        ...(hasUpstream ? [{
+          label: 'Pull', action: '', children: [
+            { label: 'Pull', action: 'pull' },
+            { label: 'Pull (Rebase)', action: 'pullRebase' },
+            { label: 'Pull (Fast-forward only)', action: 'pullFF' },
+          ]
+        }] : []),
         { label: 'Fetch', action: 'fetch' },
         { label: '', action: '', divider: true },
         { label: 'Rename branch...', action: 'renameBranch' },
@@ -508,8 +520,19 @@
         { label: 'Merge into current branch', action: 'merge' },
         { label: 'Rebase current onto this', action: 'rebase' },
         { label: '', action: '', divider: true },
-        { label: hasUpstream ? 'Push' : 'Publish', action: hasUpstream ? 'push' : 'publish' },
-        ...(hasUpstream ? [{ label: 'Pull', action: 'pull' }] : []),
+        hasUpstream
+          ? { label: 'Push', action: '', children: [
+              { label: 'Push', action: 'push' },
+              { label: 'Push (Force with Lease)', action: 'pushForce' },
+            ]}
+          : { label: 'Publish Branch', action: 'publish' },
+        ...(hasUpstream ? [{
+          label: 'Pull', action: '', children: [
+            { label: 'Pull', action: 'pull' },
+            { label: 'Pull (Rebase)', action: 'pullRebase' },
+            { label: 'Pull (Fast-forward only)', action: 'pullFF' },
+          ]
+        }] : []),
         { label: 'Fetch', action: 'fetch' },
         { label: '', action: '', divider: true },
         { label: 'Rename branch...', action: 'renameBranch' },
@@ -845,11 +868,20 @@
           case 'push':
             await runMutation('git.push', { remote: 'origin', branch: branchName });
             break;
+          case 'pushForce':
+            await runMutation('git.push', { remote: 'origin', branch: branchName, options: { force: true } });
+            break;
           case 'publish':
             await runMutation('git.push', { remote: 'origin', branch: branchName, options: { setUpstream: true } });
             break;
           case 'pull':
             await runMutation('git.pull', { remote: 'origin', branch: branchName });
+            break;
+          case 'pullRebase':
+            await runMutation('git.pull', { remote: 'origin', branch: branchName, options: { rebase: true } });
+            break;
+          case 'pullFF':
+            await runMutation('git.pull', { remote: 'origin', branch: branchName, options: { ffOnly: true } });
             break;
           case 'fetch':
             await runMutation('git.fetch', { remote: 'origin' });
