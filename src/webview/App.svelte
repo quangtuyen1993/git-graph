@@ -66,6 +66,8 @@
     maxLane: number;
   }
 
+  const BRANCH_HIGHLIGHT_DURATION_MS = 300;
+
   let status = 'Loading...';
   let branches: Branch[] = [];
   let tags: { name: string; hash: string; message: string | null; taggerDate: string | null }[] = [];
@@ -121,7 +123,7 @@
       branchHighlightTimer = undefined;
       selectedSidebarBranch = null;
       focusedBranchHash = null;
-    }, 2_000);
+    }, BRANCH_HIGHLIGHT_DURATION_MS);
   }
 
   onDestroy(() => {
@@ -731,7 +733,6 @@
       clearBranchHighlight();
       selectedSidebarBranch = branch.name;
       focusedBranchHash = branch.hash;
-      scheduleBranchHighlightClear();
       const workingRowOffset = hasWorkingChanges ? 1 : 0;
       const targetTop = (result.row + workingRowOffset) * ROW_HEIGHT;
       const nextScrollTop = Math.max(0, targetTop - Math.floor(viewportHeight / 2));
@@ -741,8 +742,11 @@
         calculateVisibleRange({ scrollTop, viewportHeight, totalRows }),
         graphWindow,
       );
+      await tick();
+      scheduleBranchHighlightClear();
     } catch (e) {
       if (requestedLayoutVersion !== layoutVersion) return;
+      clearBranchHighlight();
       error = e instanceof Error ? e.message : String(e);
       setTimeout(() => { error = ''; }, 5000);
     }
@@ -1345,7 +1349,8 @@
               <div
                 class="commit-row"
                 style="top: {(node.row - graphWindow.startRow + currentStartRow) * ROW_HEIGHT + (hasWorkingChanges ? ROW_HEIGHT : 0)}px; --graph-col-width: {graphColWidth}px; --lane-rgb: {getColorRgb(node.color)}"
-                class:selected={selectedHash === node.hash || selectedHashes.has(node.hash) || focusedBranchHash === node.hash}
+                class:selected={selectedHash === node.hash || selectedHashes.has(node.hash)}
+                class:branch-focused={focusedBranchHash === node.hash}
                 on:click={(e) => handleRowClick(node.hash, e)}
                 on:keydown={(e) => { if (e.key === 'Enter') handleRowClick(node.hash); }}
                 on:contextmenu={(e) => handleRowContextMenu(e, node.hash)}
@@ -1693,6 +1698,34 @@
   .commit-row.selected {
     color: var(--vscode-list-activeSelectionForeground, #ffffff);
     box-shadow: inset 2px 0 0 0 rgb(var(--lane-rgb));
+  }
+
+  .commit-row.branch-focused {
+    --lane-alpha: 0.72;
+    z-index: 3;
+    color: #ffffff;
+    filter: brightness(1.45) saturate(1.35);
+    box-shadow:
+      inset 4px 0 0 rgb(var(--lane-rgb)),
+      inset 0 0 0 1px rgba(var(--lane-rgb), 0.95),
+      0 0 20px 4px rgba(var(--lane-rgb), 0.72);
+    animation: branch-focus-flash 300ms ease-out;
+  }
+
+  @keyframes branch-focus-flash {
+    from {
+      filter: brightness(2) saturate(1.8);
+      box-shadow:
+        inset 6px 0 0 rgb(var(--lane-rgb)),
+        inset 0 0 0 2px rgb(var(--lane-rgb)),
+        0 0 28px 8px rgba(var(--lane-rgb), 0.95);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .commit-row.branch-focused {
+      animation: none;
+    }
   }
 
   .commit-row .col-graph {

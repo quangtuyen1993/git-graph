@@ -128,12 +128,12 @@ describe('App sidebar primary actions', () => {
     });
   });
 
-  it('moves to a branch HEAD, highlights it for two seconds, and does not rebuild', async () => {
+  it('moves to a branch HEAD, brightly highlights it for 300ms, and does not rebuild', async () => {
     const { container, getByRole } = await renderApp();
     const buildCount = send.mock.calls.filter(([method]) => method === 'graph.build').length;
     const headRow = container.querySelector('.commit-row') as HTMLElement;
 
-    expect(headRow).not.toHaveClass('selected');
+    expect(headRow).not.toHaveClass('branch-focused');
 
     await fireEvent.click(getByRole('button', { name: 'main' }));
 
@@ -144,13 +144,13 @@ describe('App sidebar primary actions', () => {
       });
       expect((container.querySelector('.scroll-area') as HTMLElement).scrollTop).toBeGreaterThan(0);
       expect(getByRole('button', { name: 'main' })).toHaveAttribute('aria-pressed', 'true');
-      expect(headRow).toHaveClass('selected');
+      expect(headRow).toHaveClass('branch-focused');
     });
     expect(send.mock.calls.filter(([method]) => method === 'graph.build')).toHaveLength(buildCount);
     expect(send).not.toHaveBeenCalledWith('git.show', expect.anything());
 
-    await new Promise(resolve => setTimeout(resolve, 2_100));
-    expect(headRow).not.toHaveClass('selected');
+    await new Promise(resolve => setTimeout(resolve, 350));
+    expect(headRow).not.toHaveClass('branch-focused');
     expect(getByRole('button', { name: 'main' })).toHaveAttribute('aria-pressed', 'false');
   });
 
