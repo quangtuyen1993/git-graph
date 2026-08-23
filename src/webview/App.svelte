@@ -52,7 +52,17 @@
 
   let status = 'Loading...';
   let branches: Branch[] = [];
+  let tags: { name: string; hash: string; message: string | null; taggerDate: string | null }[] = [];
   let error = '';
+
+  // Multi-repo state
+  interface RepoEntry {
+    name: string;
+    path: string;
+    active: boolean;
+  }
+  let repos: RepoEntry[] = [];
+  let activeRepoName = '';
 
   // Graph state
   let totalRows = 0;
@@ -110,6 +120,11 @@
   onMount(async () => {
     try {
       await bridge.send('ping.hello');
+      // Load repos list
+      const repoResult = await bridge.send('repo.list') as { repos: RepoEntry[] };
+      repos = repoResult.repos;
+      const active = repos.find(r => r.active);
+      activeRepoName = active?.name ?? repos[0]?.name ?? '';
       await refreshGraph();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -121,8 +136,26 @@
     });
   });
 
+  async function switchRepo(path: string) {
+    try {
+      const result = await bridge.send('repo.switch', { path }) as { name: string };
+      activeRepoName = result.name;
+      repos = repos.map(r => ({ ...r, active: r.path === path }));
+      selectedHash = null;
+      selectedHashes = new Set();
+      rightPanelOpen = false;
+      detailCommit = null;
+      detailFiles = null;
+      await refreshGraph();
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      setTimeout(() => { error = ''; }, 5000);
+    }
+  }
+
   async function refreshGraph() {
     branches = await bridge.send('git.branches') as Branch[];
+    tags = await bridge.send('git.tags') as typeof tags;
 
     try {
       const st = await bridge.send('git.status') as { files?: unknown[] };
@@ -357,6 +390,26 @@
     contextMenuVisible = true;
   }
 
+  async function handleTagContextMenu(event: CustomEvent<{ event: MouseEvent; tag: { name: string; hash: string } }>) {
+    const { event: mouseEvent, tag } = event.detail;
+    contextMenuVisible = false;
+    await tick();
+
+    contextMenuTarget = { type: 'branch', value: tag.name };
+    contextMenuX = mouseEvent.clientX;
+    contextMenuY = mouseEvent.clientY;
+    contextMenuItems = [
+      { label: 'Checkout tag', action: 'checkout' },
+      { label: 'Create branch from tag...', action: 'createBranchFromTag' },
+      { label: '', action: '', divider: true },
+      { label: 'Push tag to remote', action: 'pushTag' },
+      { label: '', action: '', divider: true },
+      { label: 'Delete tag', action: 'deleteTag', danger: true },
+      { label: 'Delete tag (local + remote)', action: 'deleteTagAndRemote', danger: true },
+    ];
+    contextMenuVisible = true;
+  }
+
   async function handleBranchCheckout(event: CustomEvent<{ name: string }>) {
     try {
       await bridge.send('git.checkout', { ref: event.detail.name });
@@ -505,6 +558,30 @@
             }
             break;
           }
+          // Tag actions
+          case 'createBranchFromTag': {
+            const name = await bridge.send('ui.inputBox', { prompt: 'Branch name from tag:', placeholder: `branch-from-${branchName}` }) as string | null;
+            if (name) await bridge.send('git.createBranch', { name, startPoint: branchName });
+            break;
+          }
+          case 'pushTag':
+            await bridge.send('git.push', { remote: 'origin', branch: `refs/tags/${branchName}` });
+            break;
+          case 'deleteTag': {
+            const confirmed = await bridge.send('ui.confirm', { message: `Delete tag "${branchName}"?` }) as boolean;
+            if (confirmed) {
+              await bridge.send('git.deleteTag', { name: branchName });
+            }
+            break;
+          }
+          case 'deleteTagAndRemote': {
+            const confirmed = await bridge.send('ui.confirm', { message: `Delete tag "${branchName}" locally and from remote?` }) as boolean;
+            if (confirmed) {
+              await bridge.send('git.deleteTag', { name: branchName });
+              await bridge.send('git.push', { remote: 'origin', branch: `:refs/tags/${branchName}` });
+            }
+            break;
+          }
         }
       }
 
@@ -557,6 +634,18 @@
       title="Toggle branches panel"
     >☰</button>
     <h1>Git Graph</h1>
+    {#if repos.length > 1}
+      <select
+        class="repo-selector"
+        on:change={(e) => switchRepo(e.currentTarget.value)}
+      >
+        {#each repos as repo}
+          <option value={repo.path} selected={repo.active}>{repo.name}</option>
+        {/each}
+      </select>
+    {:else if activeRepoName}
+      <span class="repo-name">{activeRepoName}</span>
+    {/if}
     <span class="status">{status}</span>
   </header>
 
@@ -570,7 +659,9 @@
       <aside class="left-sidebar" style="width: {leftSidebarWidth}px;">
         <BranchSidebar
           {branches}
+          {tags}
           on:branchContextMenu={handleBranchContextMenu}
+          on:tagContextMenu={handleTagContextMenu}
           on:checkout={handleBranchCheckout}
         />
       </aside>
@@ -750,6 +841,28 @@
   .status {
     font-size: 11px;
     opacity: 0.6;
+    margin-left: auto;
+  }
+
+  .repo-selector {
+    padding: 2px 6px;
+    border: 1px solid var(--vscode-dropdown-border, #3c3c3c);
+    background: var(--vscode-dropdown-background, #1e1e1e);
+    color: var(--vscode-dropdown-foreground, #cccccc);
+    font-size: 12px;
+    border-radius: 3px;
+    outline: none;
+    cursor: pointer;
+  }
+
+  .repo-selector:focus {
+    border-color: var(--vscode-focusBorder, #007acc);
+  }
+
+  .repo-name {
+    font-size: 12px;
+    opacity: 0.8;
+    font-weight: 500;
   }
 
   .error-banner {

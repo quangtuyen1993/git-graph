@@ -8,18 +8,53 @@ import type { GraphOptions } from './types/graph.types';
 
 let webviewProvider: GitGraphWebviewProvider;
 
-export function activate(context: vscode.ExtensionContext): void {
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const router = new MessageRouter();
 
-  // Determine repo path from workspace
+  // Determine repo paths from workspace folders
   const workspaceFolders = vscode.workspace.workspaceFolders;
   let gitService: GitService | null = null;
   const graphService = new GraphService();
 
-  if (workspaceFolders && workspaceFolders.length > 0) {
-    const rootPath = workspaceFolders[0].uri.fsPath;
-    gitService = new GitService(rootPath);
+  // Multi-repo support
+  interface RepoInfo {
+    path: string;
+    name: string;
   }
+  const repos: RepoInfo[] = [];
+
+  if (workspaceFolders && workspaceFolders.length > 0) {
+    for (const folder of workspaceFolders) {
+      const repoPath = await GitService.findRepo(folder.uri.fsPath);
+      if (repoPath) {
+        repos.push({ path: repoPath, name: folder.name });
+      }
+    }
+
+    if (repos.length > 0) {
+      gitService = new GitService(repos[0].path);
+    }
+  }
+
+  // Register repo namespace handler
+  router.register('repo', async (method: string, params: unknown) => {
+    const p = (params ?? {}) as Record<string, unknown>;
+    switch (method) {
+      case 'repo.list':
+        return {
+          repos: repos.map((r, i) => ({ name: r.name, path: r.path, active: gitService?.getRepoPath() === r.path })),
+        };
+      case 'repo.switch': {
+        const targetPath = p.path as string;
+        const repo = repos.find(r => r.path === targetPath);
+        if (!repo) throw new Error(`Repo not found: ${targetPath}`);
+        gitService = new GitService(repo.path);
+        return { success: true, name: repo.name, path: repo.path };
+      }
+      default:
+        throw new Error(`Unknown method: ${method}`);
+    }
+  });
 
   // Register git namespace handler
   router.register('git', async (method: string, params: unknown) => {

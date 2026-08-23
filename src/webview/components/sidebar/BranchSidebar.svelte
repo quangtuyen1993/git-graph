@@ -9,7 +9,15 @@
     upstream: string | null;
   }
 
+  interface Tag {
+    name: string;
+    hash: string;
+    message: string | null;
+    taggerDate: string | null;
+  }
+
   export let branches: Branch[] = [];
+  export let tags: Tag[] = [];
 
   const dispatch = createEventDispatcher();
 
@@ -29,6 +37,7 @@
 
   let localExpanded = true;
   let remoteExpanded = true;
+  let tagsExpanded = true;
   let expandedRemotes: Record<string, boolean> = {};
 
   function isRemoteExpanded(remote: string): boolean {
@@ -48,6 +57,12 @@
 
   function handleBranchDblClick(branch: Branch) {
     dispatch('checkout', { name: branch.name });
+  }
+
+  function handleTagContextMenu(event: MouseEvent, tag: Tag) {
+    event.preventDefault();
+    event.stopPropagation();
+    dispatch('tagContextMenu', { event, tag });
   }
 
   function getShortName(branch: Branch): string {
@@ -132,6 +147,34 @@
           {/if}
         </div>
       {/each}
+    {/if}
+  </div>
+
+  <!-- TAGS section -->
+  <div class="section">
+    <button
+      class="section-header"
+      on:click={() => { tagsExpanded = !tagsExpanded; }}
+    >
+      <span class="chevron" class:collapsed={!tagsExpanded}>▶</span>
+      <span class="section-title">TAGS</span>
+      <span class="section-count">{tags.length}</span>
+    </button>
+
+    {#if tagsExpanded}
+      <ul class="branch-list">
+        {#each tags as tag (tag.name)}
+          <li
+            class="branch-item tag"
+            on:contextmenu={(e) => handleTagContextMenu(e, tag)}
+            role="treeitem"
+            aria-selected={false}
+          >
+            <span class="branch-icon">🏷</span>
+            <span class="branch-name">{tag.name}</span>
+          </li>
+        {/each}
+      </ul>
     {/if}
   </div>
 </div>
@@ -258,5 +301,13 @@
 
   .branch-item.remote .branch-name {
     color: var(--vscode-descriptionForeground, #aaaaaa);
+  }
+
+  .branch-item.tag .branch-icon {
+    font-size: 11px;
+  }
+
+  .branch-item.tag .branch-name {
+    color: var(--vscode-editorWarning-foreground, #d7ba7d);
   }
 </style>
