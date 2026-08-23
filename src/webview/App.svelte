@@ -594,7 +594,12 @@
 
   async function handleBranchCheckout(event: CustomEvent<{ name: string }>) {
     try {
-      await runDirectMutation('Checking out…', () => bridge.send('git.checkout', { ref: event.detail.name }) as Promise<void>);
+      // For remote branches (origin/main), checkout the local name (main)
+      let ref = event.detail.name;
+      if (ref.includes('/') && branches.some(b => b.remote && b.name === ref)) {
+        ref = ref.replace(/^[^/]+\//, '');
+      }
+      await runDirectMutation('Checking out…', () => bridge.send('git.checkout', { ref }) as Promise<void>);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       setTimeout(() => { error = ''; }, 5000);
@@ -821,9 +826,15 @@
       } else if (contextMenuTarget.type === 'branch') {
         const branchName = contextMenuTarget.value;
         switch (action) {
-          case 'checkout':
-            await runMutation('git.checkout', { ref: branchName });
+          case 'checkout': {
+            // For remote branches (origin/main), checkout the local name (main)
+            // Git will create a tracking branch if it doesn't exist locally
+            const checkoutRef = branchName.includes('/') && branches.some(b => b.remote && b.name === branchName)
+              ? branchName.replace(/^[^/]+\//, '')
+              : branchName;
+            await runMutation('git.checkout', { ref: checkoutRef });
             break;
+          }
           case 'merge':
             await runMutation('git.merge', { branch: branchName });
             break;
