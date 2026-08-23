@@ -87,6 +87,7 @@ export class AIReviewService {
       });
     }
 
+    console.log('[AIReview] Detected providers:', JSON.stringify(providers), 'paths:', JSON.stringify([...this.commandPaths]));
     return providers;
   }
 
@@ -172,12 +173,14 @@ export class AIReviewService {
       }
 
       const resolvedCmd = this.commandPaths.get(command) || command;
+      console.log(`[AIReview] Streaming: ${resolvedCmd} ${args.join(' ')}`);
       const proc = spawn(resolvedCmd, args, {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: this.getEnv(),
       });
 
       let fullOutput = '';
+      let stderrOutput = '';
 
       proc.stdout.on('data', (data: Buffer) => {
         const chunk = data.toString().replace(/\x1b\[[0-9;]*m/g, '');
@@ -185,7 +188,9 @@ export class AIReviewService {
         onChunk(chunk);
       });
 
-      proc.stderr.on('data', () => { /* ignore stderr */ });
+      proc.stderr.on('data', (data: Buffer) => {
+        stderrOutput += data.toString();
+      });
 
       proc.stdin.write(fullInput);
       proc.stdin.end();
@@ -205,7 +210,9 @@ export class AIReviewService {
             timestamp: new Date().toISOString(),
           });
         } else {
-          reject(new Error(`${command} failed (exit ${code})`));
+          const detail = stderrOutput.trim() || fullOutput.trim() || 'no output';
+          console.error(`[AIReview] ${command} failed (exit ${code}): ${detail}`);
+          reject(new Error(`${command} failed (exit ${code}): ${detail}`));
         }
       });
 
@@ -338,6 +345,7 @@ export class AIReviewService {
   private spawnWithStdin(command: string, args: string[], stdin: string): Promise<string> {
     // Use resolved full path if available
     const resolvedCommand = this.commandPaths.get(command) || command;
+    console.log(`[AIReview] Spawning: ${resolvedCommand} ${args.join(' ')}`);
     return new Promise((resolve, reject) => {
       const proc = spawn(resolvedCommand, args, {
         stdio: ['pipe', 'pipe', 'pipe'],
