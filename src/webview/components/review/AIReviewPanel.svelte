@@ -37,6 +37,8 @@
   let selectedProvider = '';
   let modelInput = '';
   let filterText = '';
+  let filesExpanded = true;
+  let reviewExpanded = true;
 
   // Sync initial source/target from parent (right-click context) — only on change
   let lastInitialSource = '';
@@ -86,11 +88,62 @@
 
   onDestroy(() => {
     if (elapsedTimer !== undefined) clearInterval(elapsedTimer);
+    if (copyTimer !== undefined) clearTimeout(copyTimer);
   });
 
   $: elapsedLabel = elapsedSeconds >= 60
     ? `${Math.floor(elapsedSeconds / 60)}m ${String(elapsedSeconds % 60).padStart(2, '0')}s`
     : `${elapsedSeconds}s`;
+
+  // A newly arrived review should always be visible, even if the section was
+  // collapsed while reading the previous one.
+  let lastShownReview: string | null = null;
+  $: if (reviewResult && reviewResult.timestamp !== lastShownReview) {
+    lastShownReview = reviewResult.timestamp;
+    reviewExpanded = true;
+  }
+
+  /** Markdown document for the current review, with the comparison as context. */
+  function buildReviewDocument(): string {
+    if (!reviewResult) return '';
+    const when = new Date(reviewResult.timestamp).toLocaleString();
+    return [
+      `# Code review: ${sourceBranch} → ${targetBranch}`,
+      '',
+      `- Base: \`${sourceBranch}\``,
+      `- Head: \`${targetBranch}\``,
+      `- Reviewer: ${reviewResult.provider}/${reviewResult.model}`,
+      `- Generated: ${when}`,
+      ...(compareFiles ? [`- Files changed: ${compareFiles.length}`] : []),
+      '',
+      '---',
+      '',
+      reviewResult.content.trim(),
+      '',
+    ].join('\n');
+  }
+
+  function handleOpenInEditor() {
+    if (!reviewResult) return;
+    dispatch('openReview', {
+      content: buildReviewDocument(),
+      label: `review-${sourceBranch}-to-${targetBranch}`,
+    });
+  }
+
+  let copied = false;
+  let copyTimer: ReturnType<typeof setTimeout> | undefined;
+  async function handleCopy() {
+    if (!reviewResult) return;
+    try {
+      await navigator.clipboard.writeText(buildReviewDocument());
+      copied = true;
+      clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => { copied = false; }, 1500);
+    } catch {
+      copied = false;
+    }
+  }
 
   $: filteredFiles = compareFiles?.filter(f =>
     f.path.toLowerCase().includes(filterText.toLowerCase())
@@ -228,16 +281,22 @@
 
   <!-- Files changed section -->
   {#if compareFiles !== null}
-    <div class="files-section">
-      <div class="files-header">
+    <div class="files-section" class:collapsed={!filesExpanded}>
+      <button
+        class="section-toggle"
+        aria-expanded={filesExpanded}
+        on:click={() => { filesExpanded = !filesExpanded; }}
+      >
+        <span class="chevron" class:collapsed={!filesExpanded}>▶</span>
         <span class="files-title">FILES CHANGED</span>
         <span class="files-count">{compareFiles.length}</span>
         <span class="files-stats">
           {#if totalAdditions > 0}<span class="stat-add">+{totalAdditions}</span>{/if}
           {#if totalDeletions > 0}<span class="stat-del">-{totalDeletions}</span>{/if}
         </span>
-      </div>
+      </button>
 
+      {#if filesExpanded}
       <div class="files-filter">
         <input
           type="text"
@@ -267,20 +326,45 @@
             </span>
           </button>
         {/each}
+        {#if filteredFiles.length === 0}
+          <p class="files-empty">
+            {compareFiles.length === 0 ? 'No differences between these branches.' : 'No files match the filter.'}
+          </p>
+        {/if}
       </div>
+      {/if}
     </div>
   {/if}
 
-  <!-- AI Review result -->
+  <!-- Review result -->
   {#if reviewResult}
-    <div class="review-result">
+    <div class="review-result" class:collapsed={!reviewExpanded}>
       <div class="result-header">
-        <span class="result-title">AI REVIEW</span>
+        <button
+          class="section-toggle result-toggle"
+          aria-expanded={reviewExpanded}
+          on:click={() => { reviewExpanded = !reviewExpanded; }}
+        >
+          <span class="chevron" class:collapsed={!reviewExpanded}>▶</span>
+          <span class="result-title">REVIEW</span>
+        </button>
         <span class="result-meta">{reviewResult.provider}/{reviewResult.model}</span>
+        <button
+          class="result-action"
+          title="Copy review as Markdown"
+          on:click={handleCopy}
+        >{copied ? '✓' : '⧉'}</button>
+        <button
+          class="result-action"
+          title="Open review in editor"
+          on:click={handleOpenInEditor}
+        >↗</button>
       </div>
-      <div class="result-content">
-        {@html formatMarkdown(reviewResult.content)}
-      </div>
+      {#if reviewExpanded}
+        <div class="result-content">
+          {@html formatMarkdown(reviewResult.content)}
+        </div>
+      {/if}
     </div>
   {/if}
 </div>
@@ -414,17 +498,64 @@
     border-bottom: 1px solid var(--vscode-panel-border, #2b2b2b);
   }
 
-  .files-header {
+  /* Collapsible section headers. Full-width buttons so the whole row is a hit
+     target, styled to read as a header rather than a control. */
+  .section-toggle {
     display: flex;
     align-items: center;
     gap: 8px;
+    width: 100%;
     padding: 8px 12px;
+    border: none;
+    background: none;
+    font: inherit;
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--vscode-sideBarSectionHeader-foreground, #bbb);
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .section-toggle:hover {
+    background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.04));
+  }
+
+  .section-toggle:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007acc);
+    outline-offset: -1px;
+  }
+
+  .chevron {
+    display: inline-block;
+    font-size: 9px;
+    width: 10px;
+    text-align: center;
+    transform: rotate(90deg);
+    transition: transform 0.15s ease;
+    flex-shrink: 0;
+  }
+
+  .chevron.collapsed {
+    transform: rotate(0deg);
+  }
+
+  /* The review section grows to fill the panel while open, but must not keep
+     reserving that space once collapsed. */
+  .review-result.collapsed,
+  .files-section.collapsed {
+    flex: 0 0 auto;
   }
 
   .files-title {
+    color: var(--vscode-descriptionForeground, #888);
+  }
+
+  .files-empty {
+    margin: 0;
+    padding: 10px 12px 14px;
+    font-size: 12px;
     color: var(--vscode-descriptionForeground, #888);
   }
 
@@ -522,9 +653,17 @@
   .result-header {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
+    gap: 4px;
+    padding: 0 8px 0 0;
     border-bottom: 1px solid var(--vscode-panel-border, #2b2b2b);
+  }
+
+  /* The toggle owns the left side; actions sit outside it so clicking them does
+     not also collapse the section. */
+  .result-toggle {
+    width: auto;
+    flex: 1;
+    min-width: 0;
   }
 
   .result-title {
@@ -540,10 +679,37 @@
     margin-left: auto;
   }
 
+  .result-action {
+    border: none;
+    background: transparent;
+    color: var(--vscode-foreground, #ccc);
+    font-size: 13px;
+    line-height: 1;
+    padding: 2px 5px;
+    border-radius: 3px;
+    cursor: pointer;
+    opacity: 0.65;
+  }
+
+  .result-action:hover {
+    opacity: 1;
+    background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.1));
+  }
+
+  .result-action:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007acc);
+    outline-offset: -1px;
+  }
+
   .result-content {
     padding: 16px;
     font-size: 13px;
     line-height: 1.7;
+    /* Reviews are prose: allow selection and keep long paths/URLs from
+       overflowing the narrow panel. */
+    user-select: text;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .result-content :global(h2), .result-content :global(h3), .result-content :global(h4) {
