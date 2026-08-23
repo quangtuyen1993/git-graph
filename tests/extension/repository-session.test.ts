@@ -58,10 +58,13 @@ describe('RepositorySession', () => {
         { name: 'other', path: '/other', active: false },
       ],
     });
+    await expect(root.handleRepo('repo.switch', { path: '/unconfigured' }))
+      .rejects.toThrow('Repo not found: /unconfigured');
 
     await root.handleRepo('repo.switch', { path: '/other' });
 
     expect(root.getCurrentRepository()?.path).toBe('/other');
+    expect(await root.handleGit('git.branches', {})).toEqual([{ name: '/other' }]);
     expect(child.getCurrentRepository()?.path).toBe('/root/packages/sdk');
     await expect(child.handleRepo('repo.switch', { path: '/root' })).rejects.toThrow('fixed repository');
   });
