@@ -126,7 +126,7 @@
   <!-- Branch comparison config -->
   <div class="compare-config">
     <div class="config-row">
-      <label class="config-label" for="cmp-source">Source</label>
+      <label class="config-label" for="cmp-source">Base</label>
       <select id="cmp-source" class="config-select" bind:value={sourceBranch}>
         {#each branches as branch}
           <option value={branch.name}>{branch.name}{branch.current ? ' ●' : ''}</option>
@@ -135,12 +135,12 @@
     </div>
 
     <div class="config-row">
-      <label class="config-label" for="cmp-target">Target</label>
+      <label class="config-label" for="cmp-target">Head</label>
       <select id="cmp-target" class="config-select" bind:value={targetBranch}>
         <option value="" disabled>Select branch...</option>
         {#each branches as branch}
           {#if branch.name !== sourceBranch}
-            <option value={branch.name}>{branch.name}</option>
+            <option value={branch.name}>{branch.name}{branch.current ? ' ●' : ''}</option>
           {/if}
         {/each}
       </select>

@@ -221,9 +221,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return aiReview.detectProviders();
       case 'ai.compare': {
         if (!gitService) throw new Error('No git repository found');
-        const sourceBranch = p.sourceBranch as string;
-        const targetBranch = p.targetBranch as string;
-        const result = await gitService.diff(targetBranch, sourceBranch);
+        const baseBranch = p.sourceBranch as string;
+        const headBranch = p.targetBranch as string;
+        // git diff base...head = what head introduced since diverging from base
+        const result = await gitService.diff(baseBranch, headBranch);
         return { files: result.files };
       }
       case 'ai.review': {

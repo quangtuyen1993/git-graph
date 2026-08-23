@@ -1008,10 +1008,10 @@
             // Unused — replaced by compareBranch
             break;
           case 'compareBranch': {
-            // Auto-compare: source = right-clicked branch, target = current branch
+            // Compare: base = right-clicked branch (merge target), head = current branch (your changes)
             const currentBr = branches.find(b => b.current);
-            const target = currentBr && currentBr.name !== branchName ? currentBr.name : '';
-            compareBranches(branchName, target);
+            const head = currentBr && currentBr.name !== branchName ? currentBr.name : '';
+            compareBranches(branchName, head);
             break;
           }
         }

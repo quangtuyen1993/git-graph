@@ -151,10 +151,11 @@ export class GitService {
   }
 
   /**
-   * Get raw diff text between two refs (for AI review).
+   * Get raw diff text between two refs (three-dot, like PR/MR diff).
+   * Shows changes introduced by ref2 since it diverged from ref1.
    */
   public async getDiff(ref1: string, ref2: string): Promise<string> {
-    return this.cli.exec(['diff', `${ref1}..${ref2}`]);
+    return this.cli.exec(['diff', `${ref1}...${ref2}`]);
   }
 
   // --- Write Operations ---

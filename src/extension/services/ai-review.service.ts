@@ -222,12 +222,20 @@ export class AIReviewService {
   }
 
   private async runCodex(input: string, model: string): Promise<string> {
-    // Use codex exec with stdin for review prompt
+    // codex exec reads prompt from stdin when piped
     const args = ['exec'];
     if (model && model !== 'default') args.push('-c', `model="${model}"`);
     const raw = await this.spawnWithStdin('codex', args, input);
-    // Strip ANSI escape codes
-    return raw.replace(/\x1b\[[0-9;]*m/g, '');
+    // Strip ANSI escape codes and codex header lines
+    return raw
+      .replace(/\x1b\[[0-9;]*m/g, '')
+      .replace(/^OpenAI Codex.*\n/m, '')
+      .replace(/^-+\n/m, '')
+      .replace(/^(workdir|model|provider|approval|sandbox|reasoning.*|session id):.*\n/gm, '')
+      .replace(/^user\n/m, '')
+      .replace(/^codex\n/m, '')
+      .replace(/^tokens used\n[\d,]+\n/m, '')
+      .trim();
   }
 
   private async runKiro(input: string): Promise<string> {
