@@ -72,7 +72,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   ));
 
   // Register a content provider for showing git file content in diff editor
-  const GIT_GRAPH_SCHEME = 'git-graph';
+  // NOTE: scheme must be unique — 'git-graph' collides with mhutchie.git-graph extension
+  const GIT_GRAPH_SCHEME = 'git-graph-pro-diff';
   const contentProvider = new (class implements vscode.TextDocumentContentProvider {
     private contents = new Map<string, string>();
     private readonly maxEntries = 100;
