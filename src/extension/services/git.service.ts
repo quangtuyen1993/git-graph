@@ -155,7 +155,9 @@ export class GitService {
    * Shows changes introduced by ref2 since it diverged from ref1.
    */
   public async getDiff(ref1: string, ref2: string): Promise<string> {
-    return this.cli.exec(['diff', `${ref1}...${ref2}`]);
+    const output = await this.cli.exec(['diff', `${ref1}...${ref2}`]);
+    // Strip null bytes and control chars that break JSON serialization
+    return output.replace(/\u0000/g, '').replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F]/g, '');
   }
 
   // --- Write Operations ---
@@ -308,10 +310,19 @@ export class GitService {
   /**
    * Get file content at a specific commit.
    * Returns null if the file doesn't exist at that commit (e.g. added/deleted).
+   * Binary files return a placeholder instead of raw bytes.
    */
   public async showFile(hash: string, path: string): Promise<string | null> {
     try {
       const output = await this.cli.exec(['show', `${hash}:${path}`]);
+      // Detect binary content (null bytes or high ratio of replacement chars)
+      if (output.includes('\u0000')) {
+        return '(binary file)';
+      }
+      const replacementCount = (output.match(/\ufffd/g) || []).length;
+      if (replacementCount > 0 && replacementCount / output.length > 0.01) {
+        return '(binary file)';
+      }
       return output;
     } catch {
       return null;

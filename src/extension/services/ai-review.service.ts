@@ -122,7 +122,7 @@ export class AIReviewService {
     }
 
     return {
-      content,
+      content: content.replace(/\u0000/g, '').replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F]/g, ''),
       provider: request.provider,
       model,
       timestamp: new Date().toISOString(),
