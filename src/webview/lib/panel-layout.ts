@@ -27,6 +27,8 @@ export interface PanelLayout {
 
 const defaultMinimumCenterWidth = 300;
 const defaultHandleWidth = 4;
+const defaultLeftMinimumWidth = 150;
+const defaultRightMinimumWidth = 280;
 const defaultLeftMaximumWidth = 400;
 const defaultRightMaximumWidth = 600;
 
@@ -51,22 +53,44 @@ export function calculatePanelLayout({
     leftOpen,
     rightOpen,
   });
-  const visibleLeftWidth = leftOpen ? widths.leftWidth : 0;
-  const visibleRightWidth = rightOpen ? widths.rightWidth : 0;
+  const historicalMinimumWidth = (leftOpen ? defaultLeftMinimumWidth : 0)
+    + (rightOpen ? defaultRightMinimumWidth : 0);
+  const preservesHistoricalMinimums = availablePanelWidth >= historicalMinimumWidth;
+  const leftMinimumWidth = leftOpen && preservesHistoricalMinimums ? defaultLeftMinimumWidth : 0;
+  const rightMinimumWidth = rightOpen && preservesHistoricalMinimums ? defaultRightMinimumWidth : 0;
+  const maximumLeftWidth = leftOpen ? Math.min(leftMaximumWidth, availablePanelWidth) : 0;
+  const maximumRightWidth = rightOpen ? Math.min(rightMaximumWidth, availablePanelWidth) : 0;
+
+  let visibleLeftWidth = leftOpen
+    ? Math.min(maximumLeftWidth, Math.max(leftMinimumWidth, widths.leftWidth))
+    : 0;
+  let visibleRightWidth = rightOpen
+    ? Math.min(maximumRightWidth, Math.max(rightMinimumWidth, widths.rightWidth))
+    : 0;
+  const overflow = visibleLeftWidth + visibleRightWidth - availablePanelWidth;
+
+  if (overflow > 0) {
+    const leftReduction = Math.min(overflow, visibleLeftWidth - leftMinimumWidth);
+    visibleLeftWidth -= leftReduction;
+    visibleRightWidth -= Math.min(
+      overflow - leftReduction,
+      visibleRightWidth - rightMinimumWidth,
+    );
+  }
 
   return {
     left: {
-      width: widths.leftWidth,
-      minWidth: 0,
+      width: leftOpen ? visibleLeftWidth : widths.leftWidth,
+      minWidth: leftMinimumWidth,
       maxWidth: leftOpen
-        ? Math.min(leftMaximumWidth, Math.max(0, availablePanelWidth - visibleRightWidth))
+        ? Math.min(maximumLeftWidth, availablePanelWidth - visibleRightWidth)
         : 0,
     },
     right: {
-      width: widths.rightWidth,
-      minWidth: 0,
+      width: rightOpen ? visibleRightWidth : widths.rightWidth,
+      minWidth: rightMinimumWidth,
       maxWidth: rightOpen
-        ? Math.min(rightMaximumWidth, Math.max(0, availablePanelWidth - visibleLeftWidth))
+        ? Math.min(maximumRightWidth, availablePanelWidth - visibleLeftWidth)
         : 0,
     },
   };
