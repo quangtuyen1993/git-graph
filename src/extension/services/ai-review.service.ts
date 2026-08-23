@@ -13,6 +13,8 @@ export interface ReviewRequest {
   provider: string;
   model?: string;
   customPrompt?: string;
+  /** Pre-assembled payload text. When present, `diff` is ignored. */
+  payloadText?: string;
 }
 
 export interface ReviewResult {
@@ -95,8 +97,12 @@ export class AIReviewService {
    * Run AI review on a diff string.
    */
   public async review(request: ReviewRequest): Promise<ReviewResult> {
-    const prompt = request.customPrompt || DEFAULT_PROMPT;
-    const fullInput = `${prompt}\n\n---\n\n${request.diff}`;
+    // A caller that assembled a full payload (instructions + change context +
+    // diff) passes it through untouched; nothing is trimmed on the way to the model.
+    const fullInput = request.payloadText
+      ?? `${request.customPrompt || DEFAULT_PROMPT}\n\n---\n\n${request.diff}`;
+
+    console.log(`[AIReview] ${request.provider}: sending ${fullInput.length} chars`);
 
     let content: string;
     let model = request.model || '';
@@ -186,7 +192,9 @@ export class AIReviewService {
       model: m,
       messages: [{ role: 'user', content: input }],
       temperature: 0.3,
-      max_tokens: 4096,
+      // A thorough review of a multi-file change needs room; 4096 truncated the
+      // review itself mid-section.
+      max_tokens: 8192,
     });
 
     const args = [
@@ -249,16 +257,16 @@ export class AIReviewService {
   }
 
   /**
-   * How long to let the AI CLI run, in ms. Reasoning models on a large diff can
-   * take several minutes, so this defaults high and is configurable. A value of
-   * 0 disables the timeout entirely.
+   * Inactivity deadline for the AI CLI, in ms. Defaults to 0 — no timeout — because
+   * a thorough review of a large diff can legitimately run for a long time and
+   * being cut off mid-answer is worse than waiting. Set
+   * gitGraphPro.aiReview.timeoutSeconds if you want a ceiling.
    */
   private getTimeoutMs(): number {
     const config = vscode.workspace.getConfiguration('gitGraphPro.aiReview');
     const seconds = config.get<number>('timeoutSeconds');
-    if (seconds === 0) return 0;
     if (typeof seconds === 'number' && seconds > 0) return seconds * 1000;
-    return 600_000; // 10 minutes
+    return 0;
   }
 
   /**

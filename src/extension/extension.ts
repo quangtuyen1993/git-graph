@@ -6,6 +6,7 @@ import {
   type PanelRequest,
 } from './providers/webview-provider';
 import { GitService } from './services/git.service';
+import { buildReviewPayload } from './services/review-payload';
 
 let webviewProvider: GitGraphWebviewProvider;
 
@@ -346,11 +347,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             };
           }
 
-          const maxChars = 100_000;
-          const truncatedDiff = diff.length > maxChars
-            ? diff.substring(0, maxChars) + `\n\n... (truncated, ${diff.length - maxChars} chars omitted)`
-            : diff;
-          return aiReview.review({ diff: truncatedDiff, provider, model });
+          // Give the reviewer the real change: the complete diff, plus the file
+          // stats and commit subjects it cannot infer from hunks alone. Nothing is
+          // trimmed unless the user opts into a budget.
+          const [changed, commits] = await Promise.all([
+            gitService.diff(sourceBranch, targetBranch).then((d) => d.files).catch(() => undefined),
+            gitService.log({ revisions: [`${sourceBranch}..${targetBranch}`], maxCount: 100 })
+              .then((cs) => cs.map((c) => c.subject))
+              .catch(() => undefined),
+          ]);
+
+          const budget = vscode.workspace
+            .getConfiguration('gitGraphPro.aiReview')
+            .get<number>('maxDiffChars') ?? 0;
+
+          const payload = buildReviewPayload({
+            baseBranch: sourceBranch,
+            headBranch: targetBranch,
+            diff,
+            files: changed,
+            commits,
+            budget,
+          });
+
+          console.log(
+            `[AIReview] payload ${payload.text.length} chars, ` +
+            `${payload.includedFiles} files included, ${payload.omittedFiles.length} omitted`
+          );
+
+          return aiReview.review({ diff, payloadText: payload.text, provider, model });
         }
         case 'ai.reviewDiff': {
           const diff = p.diff as string;

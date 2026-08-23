@@ -49,9 +49,15 @@
         },
         "gitGraphPro.aiReview.timeoutSeconds": {
           "type": "number",
-          "default": 600,
+          "default": 0,
           "minimum": 0,
-          "description": "Stop the AI review if it produces no output for this many seconds. Measures silence, not total runtime, so long answers are never cut off. Set to 0 to disable the timeout."
+          "description": "Stop the review if it produces no output for this many seconds. Measures silence, not total runtime. Default 0 means no timeout: a thorough review of a large change can take a long time, and being cut off mid-answer is worse than waiting."
+        },
+        "gitGraphPro.aiReview.maxDiffChars": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Cap the diff sent for review, in characters. Default 0 sends the complete diff so the reviewer sees the real change. Only set this if a model rejects the request for size; files are then dropped whole (never mid-hunk) and the omitted ones are named in the prompt."
         }
       }
     }
