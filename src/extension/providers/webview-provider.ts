@@ -25,11 +25,18 @@ export class GitGraphWebviewProvider {
       {
         enableScripts: true,
         localResourceRoots: [
-          vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview')
+          vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview'),
+          vscode.Uri.joinPath(this.extensionUri, 'resources')
         ],
         retainContextWhenHidden: true
       }
     );
+
+    // Set editor tab icon
+    this.panel.iconPath = {
+      light: vscode.Uri.joinPath(this.extensionUri, 'resources', 'icon.svg'),
+      dark: vscode.Uri.joinPath(this.extensionUri, 'resources', 'icon.svg'),
+    };
 
     this.panel.webview.html = this.getHtmlContent(this.panel.webview);
     this.router.setPanel(this.panel);

@@ -168,15 +168,6 @@
     bridge.on('graph.invalidated', () => {
       refreshGraph();
     });
-
-    // Listen for streaming AI review chunks
-    bridge.on('ai.reviewChunk', (data: unknown) => {
-      const { chunk } = data as { chunk: string };
-      if (!aiReviewResult) {
-        aiReviewResult = { content: '', provider: '', model: '', timestamp: new Date().toISOString() };
-      }
-      aiReviewResult = { ...aiReviewResult, content: aiReviewResult.content + chunk };
-    });
   });
 
   onMount(() => {

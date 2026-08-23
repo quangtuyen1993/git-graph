@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
+  import { marked } from 'marked';
 
   interface FileChange {
     path: string;
@@ -117,51 +118,7 @@
   }
 
   function formatMarkdown(text: string): string {
-    // Extract code blocks first (before HTML escaping)
-    const codeBlocks: string[] = [];
-    let processed = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_match, _lang, code) => {
-      const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      const idx = codeBlocks.length;
-      codeBlocks.push(`<pre><code>${escaped}</code></pre>`);
-      return `%%CODEBLOCK_${idx}%%`;
-    });
-
-    // Extract inline code
-    const inlineCodes: string[] = [];
-    processed = processed.replace(/`([^`]+)`/g, (_match, code) => {
-      const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      const idx = inlineCodes.length;
-      inlineCodes.push(`<code>${escaped}</code>`);
-      return `%%INLINE_${idx}%%`;
-    });
-
-    // Now escape HTML in remaining text
-    processed = processed
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-
-    // Apply markdown formatting
-    processed = processed
-      .replace(/^### (.+)$/gm, '<h4>$1</h4>')
-      .replace(/^## (.+)$/gm, '<h3>$1</h3>')
-      .replace(/^# (.+)$/gm, '<h2>$1</h2>')
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*(.+?)\*/g, '<em>$1</em>')
-      .replace(/^- (.+)$/gm, '<li>$1</li>')
-      .replace(/^(\d+)\. (.+)$/gm, '<li>$2</li>')
-      .replace(/\n\n/g, '</p><p>')
-      .replace(/\n/g, '<br>');
-
-    // Restore code blocks and inline code
-    codeBlocks.forEach((block, i) => {
-      processed = processed.replace(`%%CODEBLOCK_${i}%%`, block);
-    });
-    inlineCodes.forEach((code, i) => {
-      processed = processed.replace(`%%INLINE_${i}%%`, code);
-    });
-
-    return `<p>${processed}</p>`;
+    return marked.parse(text, { async: false, gfm: true, breaks: true }) as string;
   }
 </script>
 
