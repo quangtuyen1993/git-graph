@@ -7,6 +7,7 @@
   import type { MenuItem } from './types/menu.types';
   import { getGravatarUrl } from './lib/gravatar';
   import { hasWorkingTreeChanges, type WorkingTreeStatus } from './lib/git-status';
+  import { LatestRequestGate } from './lib/latest-request';
   import { MutationGate, runMutationWithProgress } from './lib/mutation-gate';
   import CommitDetail from './components/detail/CommitDetail.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
@@ -85,6 +86,7 @@
   let scrollTop = 0;
   let currentStartRow = 0;
   let loading = false;
+  const graphWindowRequestGate = new LatestRequestGate();
 
   // Commit detail state
   let detailCommit: {
@@ -174,7 +176,7 @@
       hasWorkingChanges = false;
     }
 
-    const result = await bridge.send('graph.build', { all: true, maxCount: 500 }) as { totalRows: number; maxLane: number };
+    const result = await bridge.send('graph.build', { all: true }) as { totalRows: number; maxLane: number };
     totalRows = result.totalRows;
     maxLane = result.maxLane;
 
@@ -185,14 +187,19 @@
   }
 
   async function fetchWindow(startRow: number) {
-    if (loading) return;
+    const requestToken = graphWindowRequestGate.issue();
     loading = true;
     try {
       const count = Math.ceil(viewportHeight / ROW_HEIGHT) + BUFFER_ROWS * 2;
-      graphWindow = await bridge.send('graph.getWindow', { startRow, count }) as GraphWindow;
-      currentStartRow = startRow;
+      const requestedWindow = await bridge.send('graph.getWindow', { startRow, count }) as GraphWindow;
+      if (graphWindowRequestGate.isLatest(requestToken)) {
+        graphWindow = requestedWindow;
+        currentStartRow = startRow;
+      }
     } finally {
-      loading = false;
+      if (graphWindowRequestGate.isLatest(requestToken)) {
+        loading = false;
+      }
     }
   }
 

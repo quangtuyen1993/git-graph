@@ -3,6 +3,7 @@ import { GitGraphWebviewProvider } from './providers/webview-provider';
 import { MessageRouter } from './controllers/message-router';
 import { handleGitMethod } from './controllers/git-method-handler';
 import { GitService } from './services/git.service';
+import { loadAllCommits } from './services/graph-loader';
 import { GraphService } from './services/graph.service';
 import type { GitLogOptions } from './types/git.types';
 import type { GraphOptions } from './types/graph.types';
@@ -76,18 +77,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     switch (method) {
       case 'graph.build': {
         const options = p as GraphOptions;
-        const logOptions: GitLogOptions = {
-          maxCount: options.maxCount ?? 500,
-          skip: options.skip,
+        const logOptions: Omit<GitLogOptions, 'maxCount' | 'skip'> = {
           branch: options.branch,
           all: options.all ?? true
         };
-        const commits = await gitService.log(logOptions);
+        const commits = await loadAllCommits(gitService, logOptions);
         const layout = graphService.buildLayout(commits);
 
         // Fetch shortstat and merge into nodes
         try {
-          const stats = await gitService.getShortStats(logOptions.maxCount ?? 500, logOptions.all ?? true);
+          const stats = await gitService.getShortStats(500, logOptions.all ?? true);
           for (const node of layout.nodes) {
             const stat = stats.get(node.hash);
             if (stat) {
