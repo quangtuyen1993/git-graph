@@ -7,6 +7,8 @@
     hash: string;
     remote: string | null;
     upstream: string | null;
+    ahead: number;
+    behind: number;
   }
 
   interface Tag {
@@ -99,9 +101,9 @@
 
   function getShortName(branch: Branch): string {
     if (branch.remote) {
-      // Remove remote prefix: "origin/feature" → "feature"
       const parts = branch.name.split('/');
-      return parts.slice(1).join('/');
+      const short = parts.slice(1).join('/');
+      return short || branch.name; // fallback to full name if short is empty
     }
     return branch.name;
   }
@@ -132,6 +134,12 @@
           >
             <span class="branch-icon">{branch.current ? '●' : '○'}</span>
             <span class="branch-name">{branch.name}</span>
+            {#if branch.ahead > 0 || branch.behind > 0}
+              <span class="ahead-behind">
+                {#if branch.ahead > 0}<span class="ahead">↑{branch.ahead}</span>{/if}
+                {#if branch.behind > 0}<span class="behind">↓{branch.behind}</span>{/if}
+              </span>
+            {/if}
           </li>
         {/each}
       </ul>
@@ -415,5 +423,23 @@
 
   .branch-item.worktree.main .branch-name {
     font-weight: 600;
+  }
+
+  .ahead-behind {
+    margin-left: auto;
+    display: flex;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    flex-shrink: 0;
+    padding-right: 8px;
+  }
+
+  .ahead {
+    color: var(--vscode-gitDecoration-addedResourceForeground, #81b88b);
+  }
+
+  .behind {
+    color: var(--vscode-editorWarning-foreground, #d7ba7d);
   }
 </style>

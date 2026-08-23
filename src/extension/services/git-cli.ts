@@ -49,7 +49,7 @@ export class GitCLI {
     const cwd = options.cwd ?? this.repoPath;
 
     return new Promise((resolve, reject) => {
-      const proc = spawn('git', args, {
+      const proc = spawn('git', ['-c', 'core.quotePath=false', ...args], {
         cwd,
         env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...(options.env ?? {}) },
         stdio: ['pipe', 'pipe', 'pipe']

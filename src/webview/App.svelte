@@ -16,6 +16,8 @@
     hash: string;
     remote: string | null;
     upstream: string | null;
+    ahead: number;
+    behind: number;
   }
 
   interface GraphNode {

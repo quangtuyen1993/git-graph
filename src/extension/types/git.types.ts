@@ -20,6 +20,8 @@ export interface Branch {
   upstream: string | null;  // tracking branch
   hash: string;             // tip commit
   lastCommitDate: string;   // ISO 8601
+  ahead: number;            // commits ahead of upstream
+  behind: number;           // commits behind upstream
 }
 
 export interface Tag {

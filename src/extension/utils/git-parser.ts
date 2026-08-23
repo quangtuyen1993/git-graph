@@ -28,7 +28,7 @@ export const LOG_FORMAT = [
  * Use with `git branch -a --format=BRANCH_FORMAT`
  */
 export const BRANCH_FORMAT =
-  `%(HEAD)%(refname:short)${FIELD_SEP}%(objectname:short)${FIELD_SEP}%(upstream:short)${FIELD_SEP}%(committerdate:iso8601-strict)${FIELD_SEP}%(refname)`;
+  `%(HEAD)%(refname:short)${FIELD_SEP}%(objectname:short)${FIELD_SEP}%(upstream:short)${FIELD_SEP}%(committerdate:iso8601-strict)${FIELD_SEP}%(refname)${FIELD_SEP}%(upstream:track,nobracket)`;
 
 /**
  * git tag --format string.
@@ -97,10 +97,21 @@ export function parseBranches(output: string): Branch[] {
     const upstream = (parts[2] ?? '').trim() || null;
     const lastCommitDate = (parts[3] ?? '').trim();
     const fullRef = (parts[4] ?? '').trim();
+    const trackInfo = (parts[5] ?? '').trim();
 
     // A branch is remote if its full refname starts with refs/remotes/
     const isRemote = fullRef.startsWith('refs/remotes/');
     const remote = isRemote ? (name.split('/')[0] ?? null) : null;
+
+    // Parse ahead/behind from track info (e.g. "ahead 3, behind 2" or "ahead 1")
+    let ahead = 0;
+    let behind = 0;
+    if (trackInfo) {
+      const aheadMatch = trackInfo.match(/ahead (\d+)/);
+      const behindMatch = trackInfo.match(/behind (\d+)/);
+      if (aheadMatch) ahead = parseInt(aheadMatch[1], 10);
+      if (behindMatch) behind = parseInt(behindMatch[1], 10);
+    }
 
     return {
       name,
@@ -108,9 +119,11 @@ export function parseBranches(output: string): Branch[] {
       remote,
       upstream,
       hash,
-      lastCommitDate
+      lastCommitDate,
+      ahead,
+      behind
     };
-  }).filter(b => !b.name.endsWith('/HEAD'));
+  }).filter(b => b.name && !b.name.endsWith('/HEAD') && !b.name.match(/^[^/]+\/HEAD$/));
 }
 
 /**
