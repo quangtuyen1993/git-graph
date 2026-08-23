@@ -449,8 +449,8 @@ export class GitService {
     const oldestParent = await this.cli.exec(['rev-parse', '--verify', `${oldestHash}^`])
       .catch(() => '');
     const rebaseArgs = oldestParent.trim()
-      ? ['rebase', '-i', `${oldestHash}^`]
-      : ['rebase', '-i', '--root'];
+      ? ['rebase', '-i', '--rebase-merges', `${oldestHash}^`]
+      : ['rebase', '-i', '--rebase-merges', '--root'];
     const tempDir = await mkdtemp(REBASE_TEMP_PREFIX);
 
     try {

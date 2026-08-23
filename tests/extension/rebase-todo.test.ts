@@ -26,4 +26,37 @@ describe('transformRebaseTodo', () => {
     expect(() => transformRebaseTodo(todo, { kind: 'reword', hash: 'eeeeeeeeeeee' }))
       .toThrow('Commit not found in rebase todo');
   });
+
+  it('preserves rebase-merges topology commands verbatim', () => {
+    const mergeTodo = [
+      'label onto',
+      '',
+      'reset onto',
+      'pick bbbbbbb B',
+      'label branch-point',
+      'pick fffffff Feature',
+      'label feature',
+      'reset branch-point # B',
+      'pick ccccccc C',
+      'merge -C eeeeeee feature # Merge feature',
+      '',
+    ].join('\n');
+
+    expect(transformRebaseTodo(mergeTodo, {
+      kind: 'reword',
+      hash: 'bbbbbbbbbbbb',
+    })).toBe([
+      'label onto',
+      '',
+      'reset onto',
+      'reword bbbbbbb B',
+      'label branch-point',
+      'pick fffffff Feature',
+      'label feature',
+      'reset branch-point # B',
+      'pick ccccccc C',
+      'merge -C eeeeeee feature # Merge feature',
+      '',
+    ].join('\n'));
+  });
 });

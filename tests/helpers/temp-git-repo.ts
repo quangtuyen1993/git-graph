@@ -1,5 +1,5 @@
 import { execFile } from 'child_process';
-import { mkdtemp, rm } from 'fs/promises';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { promisify } from 'util';
@@ -37,8 +37,20 @@ export class TempGitRepo {
     return hashes;
   }
 
+  public async commitFile(subject: string, filePath: string, contents: string): Promise<string> {
+    await writeFile(path.join(this.path, filePath), contents, 'utf8');
+    await this.execGit(['add', '--', filePath]);
+    await this.execGit(['commit', '-m', subject]);
+    return (await this.execGit(['rev-parse', 'HEAD'])).trim();
+  }
+
   public async subjects(): Promise<string[]> {
     const output = await this.execGit(['log', '--format=%s']);
+    return output.trim().split('\n').filter(Boolean);
+  }
+
+  public async firstParentSubjects(): Promise<string[]> {
+    const output = await this.execGit(['log', '--first-parent', '--format=%s']);
     return output.trim().split('\n').filter(Boolean);
   }
 
@@ -48,6 +60,15 @@ export class TempGitRepo {
 
   public async treeOf(ref: string): Promise<string> {
     return (await this.execGit(['rev-parse', `${ref}^{tree}`])).trim();
+  }
+
+  public async fileAt(ref: string, filePath: string): Promise<string> {
+    return this.execGit(['show', `${ref}:${filePath}`]);
+  }
+
+  public async parentCount(ref: string): Promise<number> {
+    const parents = (await this.execGit(['show', '-s', '--format=%P', ref])).trim();
+    return parents ? parents.split(' ').length : 0;
   }
 
   public async publishCurrentBranch(): Promise<void> {
