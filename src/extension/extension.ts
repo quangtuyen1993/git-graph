@@ -75,8 +75,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const GIT_GRAPH_SCHEME = 'git-graph';
   const contentProvider = new (class implements vscode.TextDocumentContentProvider {
     private contents = new Map<string, string>();
+    private readonly maxEntries = 100;
 
     setContent(uri: string, content: string): void {
+      // Evict oldest entries to prevent unbounded growth
+      if (this.contents.size >= this.maxEntries) {
+        const oldestKey = this.contents.keys().next().value;
+        if (oldestKey !== undefined) this.contents.delete(oldestKey);
+      }
       this.contents.set(uri, content);
     }
 
@@ -141,9 +147,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const shortHash = hash.substring(0, 7);
         const fileName = filePath.split('/').pop() ?? filePath;
 
-        // Create URIs for the virtual documents
-        const parentUri = vscode.Uri.parse(`${GIT_GRAPH_SCHEME}:${oldPath ?? filePath}?ref=${parentHash ?? 'empty'}&ts=${Date.now()}`);
-        const currentUri = vscode.Uri.parse(`${GIT_GRAPH_SCHEME}:${filePath}?ref=${hash}&ts=${Date.now()}`);
+        // Create URIs for the virtual documents (Uri.from avoids parse issues with special chars)
+        const parentUri = vscode.Uri.from({
+          scheme: GIT_GRAPH_SCHEME,
+          path: `/${oldPath ?? filePath}`,
+          query: `ref=${parentHash ?? 'empty'}&ts=${Date.now()}`,
+        });
+        const currentUri = vscode.Uri.from({
+          scheme: GIT_GRAPH_SCHEME,
+          path: `/${filePath}`,
+          query: `ref=${hash}&ts=${Date.now()}`,
+        });
 
         // Set content for the content provider
         contentProvider.setContent(parentUri.toString(), parentContent);
@@ -199,8 +213,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
         const fileName = filePath.split('/').pop() ?? filePath;
 
-        const targetUri = vscode.Uri.parse(`${GIT_GRAPH_SCHEME}:${oldPath ?? filePath}?ref=${tB}&ts=${Date.now()}`);
-        const sourceUri = vscode.Uri.parse(`${GIT_GRAPH_SCHEME}:${filePath}?ref=${sB}&ts=${Date.now()}`);
+        const targetUri = vscode.Uri.from({
+          scheme: GIT_GRAPH_SCHEME,
+          path: `/${oldPath ?? filePath}`,
+          query: `ref=${tB}&ts=${Date.now()}`,
+        });
+        const sourceUri = vscode.Uri.from({
+          scheme: GIT_GRAPH_SCHEME,
+          path: `/${filePath}`,
+          query: `ref=${sB}&ts=${Date.now()}`,
+        });
 
         contentProvider.setContent(targetUri.toString(), targetContent);
         contentProvider.setContent(sourceUri.toString(), sourceContent);
