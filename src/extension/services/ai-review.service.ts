@@ -142,10 +142,10 @@ export class AIReviewService {
   }
 
   private async runKiro(input: string): Promise<string> {
-    // kiro-cli chat takes input as argument, use --no-interactive for non-TTY
-    // For large diffs, pipe via stdin with a short prompt as argument
-    const args = ['chat', '--no-interactive', '--trust-all-tools'];
-    return this.spawnWithStdin('kiro-cli', args, input);
+    const args = ['chat', '--no-interactive', '--trust-all-tools', '--wrap=never'];
+    const raw = await this.spawnWithStdin('kiro-cli', args, input);
+    // Strip ANSI escape codes from output
+    return raw.replace(/\x1b\[[0-9;]*m/g, '');
   }
 
   private async runOpenAI(input: string, model: string): Promise<string> {
