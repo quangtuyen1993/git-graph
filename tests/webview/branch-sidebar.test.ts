@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import BranchSidebar from '../../src/webview/components/sidebar/BranchSidebar.svelte';
 
@@ -12,6 +12,14 @@ const branches = [
     ahead: 0,
     behind: 0,
   },
+];
+
+const groupedBranches = [
+  { ...branches[0], name: 'fix/abc/abcd', current: true },
+  { ...branches[0], name: 'fix/abc/abce', current: false },
+  { ...branches[0], name: 'fix/other/one', current: false },
+  { ...branches[0], name: 'feat/team/two', current: false },
+  { ...branches[0], name: 'origin/fix/abc/remote', current: false, remote: 'origin' },
 ];
 
 const tags = [{ name: 'v1.0.0', hash: 'b'.repeat(40), message: null, taggerDate: null }];
@@ -45,6 +53,7 @@ describe('BranchSidebar', () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     HTMLElement.prototype.getBoundingClientRect = originalRect;
   });
 
@@ -56,14 +65,116 @@ describe('BranchSidebar', () => {
     expect(getByRole('button', { name: /save work/ })).toBeEnabled();
   });
 
-  it.each(['Enter', ' '])('checks out a local branch when %s activates it', async (key) => {
+  it.each(['Enter', ' '])('filters by a local branch when %s activates it', async (key) => {
     const { component, getByRole } = render(BranchSidebar, { branches, tags, stashes, worktrees });
-    const onCheckout = vi.fn();
-    component.$on('checkout', onCheckout);
+    const onFilter = vi.fn();
+    component.$on('branchFilter', onFilter);
 
     await fireEvent.keyDown(getByRole('button', { name: 'main' }), { key });
 
+    expect(onFilter).toHaveBeenCalledWith(expect.objectContaining({ detail: { name: 'main' } }));
+  });
+
+  it('nests branch path segments and expands only the active branch ancestors', () => {
+    const { getByRole, queryByRole } = render(BranchSidebar, {
+      branches: groupedBranches,
+      tags,
+      stashes,
+      worktrees,
+    });
+
+    expect(getByRole('button', { name: 'Branch group fix' })).toHaveAttribute('aria-expanded', 'true');
+    expect(getByRole('button', { name: 'Branch group fix/abc' })).toHaveAttribute('aria-expanded', 'true');
+    const activeBranch = getByRole('button', { name: 'fix/abc/abcd' });
+    expect(activeBranch).toHaveAttribute('aria-current', 'true');
+    expect(activeBranch.querySelector('.branch-name')).toHaveTextContent(/^abcd$/);
+    expect(getByRole('button', { name: 'fix/abc/abce' })).toBeEnabled();
+    expect(getByRole('button', { name: 'Branch group fix/other' })).toHaveAttribute('aria-expanded', 'false');
+    expect(queryByRole('button', { name: 'fix/other/one' })).toBeNull();
+    expect(getByRole('button', { name: 'Branch group feat' })).toHaveAttribute('aria-expanded', 'false');
+    expect(queryByRole('button', { name: 'feat/team/two' })).toBeNull();
+    expect(getByRole('button', { name: 'Remote group origin' })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('nests remote branch paths after the collapsed remote group is opened', async () => {
+    const remoteOnly = groupedBranches.filter(branch => branch.remote);
+    const { getByRole, queryByRole } = render(BranchSidebar, {
+      branches: remoteOnly,
+      tags,
+      stashes,
+      worktrees,
+    });
+
+    await fireEvent.click(getByRole('button', { name: 'Remote group origin' }));
+    expect(getByRole('button', { name: 'Branch group fix' })).toHaveAttribute('aria-expanded', 'false');
+    expect(queryByRole('button', { name: 'origin/fix/abc/remote' })).toBeNull();
+
+    await fireEvent.click(getByRole('button', { name: 'Branch group fix' }));
+    await fireEvent.click(getByRole('button', { name: 'Branch group fix/abc' }));
+    expect(getByRole('button', { name: 'origin/fix/abc/remote' })).toHaveTextContent('remote');
+  });
+
+  it('keeps manual expand and collapse choices when the active branch changes', async () => {
+    const { component, getByRole, queryByRole } = render(BranchSidebar, {
+      branches: groupedBranches,
+      tags,
+      stashes,
+      worktrees,
+    });
+
+    await fireEvent.click(getByRole('button', { name: 'Branch group fix' }));
+    await fireEvent.click(getByRole('button', { name: 'Branch group feat' }));
+    await fireEvent.click(getByRole('button', { name: 'Branch group feat/team' }));
+
+    component.$set({
+      branches: groupedBranches.map(branch => ({
+        ...branch,
+        current: branch.name === 'feat/team/two',
+      })),
+    });
+
+    await waitFor(() => {
+      expect(getByRole('button', { name: 'Branch group fix' })).toHaveAttribute('aria-expanded', 'false');
+      expect(getByRole('button', { name: 'Branch group feat' })).toHaveAttribute('aria-expanded', 'true');
+      expect(getByRole('button', { name: 'Branch group feat/team' })).toHaveAttribute('aria-expanded', 'true');
+      expect(getByRole('button', { name: 'feat/team/two' })).toHaveAttribute('aria-current', 'true');
+      expect(queryByRole('button', { name: 'fix/abc/abcd' })).toBeNull();
+    });
+  });
+
+  it('filters on a single click and marks the selected branch', async () => {
+    vi.useFakeTimers();
+    const { component, getByRole } = render(BranchSidebar, {
+      branches,
+      tags,
+      stashes,
+      worktrees,
+      selectedBranch: 'main',
+    });
+    const onFilter = vi.fn();
+    component.$on('branchFilter', onFilter);
+    const row = getByRole('button', { name: 'main' });
+
+    expect(row).toHaveAttribute('aria-pressed', 'true');
+    await fireEvent.click(row);
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(onFilter).toHaveBeenCalledWith(expect.objectContaining({ detail: { name: 'main' } }));
+  });
+
+  it('keeps double-click checkout from also filtering', async () => {
+    vi.useFakeTimers();
+    const { component, getByRole } = render(BranchSidebar, { branches, tags, stashes, worktrees });
+    const onCheckout = vi.fn();
+    const onFilter = vi.fn();
+    component.$on('checkout', onCheckout);
+    component.$on('branchFilter', onFilter);
+
+    await fireEvent.dblClick(getByRole('button', { name: 'main' }));
+    await vi.advanceTimersByTimeAsync(250);
+
     expect(onCheckout).toHaveBeenCalledWith(expect.objectContaining({ detail: { name: 'main' } }));
+    expect(onFilter).not.toHaveBeenCalled();
   });
 
   it.each(['click', 'Enter', ' '])('dispatches tag checkout, stash apply, and non-main worktree open on %s', async (activation) => {

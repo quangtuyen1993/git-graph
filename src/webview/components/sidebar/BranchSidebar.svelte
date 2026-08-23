@@ -1,5 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
+  import BranchTreeList from './BranchTreeList.svelte';
+  import { activeBranchGroupPaths, buildBranchTree, type BranchTreeNode } from '../../lib/branch-tree';
 
   interface Branch {
     name: string;
@@ -46,19 +48,24 @@
   export let stashes: StashEntry[] = [];
   export let worktrees: WorktreeEntry[] = [];
   export let submodules: SubmoduleEntry[] = [];
+  export let selectedBranch: string | null = null;
 
   const dispatch = createEventDispatcher();
 
   $: localBranches = branches.filter(b => !b.remote);
   $: remoteBranches = branches.filter(b => !!b.remote);
+  $: localTree = buildBranchTree(localBranches);
 
   // Group remote branches by remote name
   $: remoteGroups = (() => {
-    const groups: Record<string, Branch[]> = {};
+    const groups: Record<string, { branches: Branch[]; tree: BranchTreeNode<Branch>[] }> = {};
     for (const b of remoteBranches) {
       const remote = b.name.split('/')[0] ?? 'origin';
-      if (!groups[remote]) groups[remote] = [];
-      groups[remote].push(b);
+      if (!groups[remote]) groups[remote] = { branches: [], tree: [] };
+      groups[remote].branches.push(b);
+    }
+    for (const group of Object.values(groups)) {
+      group.tree = buildBranchTree(group.branches, getShortName);
     }
     return groups;
   })();
@@ -70,19 +77,23 @@
   let worktreesExpanded = true;
   let submodulesExpanded = true;
   let expandedRemotes: Record<string, boolean> = {};
+  let expandedGroups: Record<string, boolean> = {};
+  let branchGroupsInitialized = false;
+
+  $: if (!branchGroupsInitialized && localBranches.length > 0) {
+    const activeBranch = localBranches.find(branch => branch.current)?.name;
+    expandedGroups = Object.fromEntries(
+      activeBranchGroupPaths(activeBranch ?? '').map(path => [`local:${path}`, true]),
+    );
+    branchGroupsInitialized = true;
+  }
 
   function toggleRemote(remote: string) {
-    expandedRemotes = { ...expandedRemotes, [remote]: !(expandedRemotes[remote] ?? true) };
+    expandedRemotes = { ...expandedRemotes, [remote]: !expandedRemotes[remote] };
   }
 
-  function handleBranchContextMenu(event: MouseEvent, branch: Branch) {
-    event.preventDefault();
-    event.stopPropagation();
-    dispatch('branchContextMenu', { event, branch });
-  }
-
-  function handleBranchDblClick(branch: Branch) {
-    dispatch('checkout', { name: branch.name });
+  function toggleBranchGroup(key: string) {
+    expandedGroups = { ...expandedGroups, [key]: !expandedGroups[key] };
   }
 
   function handleTagContextMenu(event: MouseEvent, tag: Tag) {
@@ -138,16 +149,6 @@
     });
   }
 
-  function handleBranchKeydown(event: KeyboardEvent, branch: Branch) {
-    if (isContextMenuShortcut(event)) {
-      event.preventDefault();
-      handleBranchContextMenu(keyboardContextMenuEvent(event), branch);
-    } else if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      handleBranchDblClick(branch);
-    }
-  }
-
   function handleTagKeydown(event: KeyboardEvent, tag: Tag) {
     if (isContextMenuShortcut(event)) {
       event.preventDefault();
@@ -201,31 +202,16 @@
     </button>
 
     {#if localExpanded}
-      <ul class="branch-list">
-        {#each localBranches as branch (branch.name)}
-          <li>
-            <button
-              type="button"
-              class="branch-item"
-              class:current={branch.current}
-              aria-current={branch.current ? 'true' : undefined}
-              aria-label={branch.name}
-              on:contextmenu={(e) => handleBranchContextMenu(e, branch)}
-              on:dblclick={() => handleBranchDblClick(branch)}
-              on:keydown={(e) => handleBranchKeydown(e, branch)}
-            >
-              <span class="branch-icon">{branch.current ? '●' : '○'}</span>
-              <span class="branch-name">{branch.name}</span>
-              {#if branch.ahead > 0 || branch.behind > 0}
-                <span class="ahead-behind">
-                  {#if branch.ahead > 0}<span class="ahead">↑{branch.ahead}</span>{/if}
-                  {#if branch.behind > 0}<span class="behind">↓{branch.behind}</span>{/if}
-                </span>
-              {/if}
-            </button>
-          </li>
-        {/each}
-      </ul>
+      <BranchTreeList
+        nodes={localTree}
+        {expandedGroups}
+        groupPrefix="local"
+        {selectedBranch}
+        on:groupToggle={(event) => toggleBranchGroup(event.detail.key)}
+        on:filter={(event) => dispatch('branchFilter', event.detail)}
+        on:checkout={(event) => dispatch('checkout', event.detail)}
+        on:contextMenu={(event) => dispatch('branchContextMenu', event.detail)}
+      />
     {/if}
   </div>
 
@@ -241,34 +227,31 @@
     </button>
 
     {#if remoteExpanded}
-      {#each Object.entries(remoteGroups) as [remote, rBranches] (remote)}
+      {#each Object.entries(remoteGroups) as [remote, group] (remote)}
         <div class="remote-group">
           <button
             class="remote-header"
+            aria-label={`Remote group ${remote}`}
+            aria-expanded={expandedRemotes[remote] === true}
             on:click={() => toggleRemote(remote)}
           >
-            <span class="chevron" class:collapsed={expandedRemotes[remote] === false}>▶</span>
+            <span class="chevron" class:collapsed={expandedRemotes[remote] !== true}>▶</span>
             <span class="remote-name">{remote}</span>
-            <span class="section-count">{rBranches.length}</span>
+            <span class="section-count">{group.branches.length}</span>
           </button>
 
-          {#if expandedRemotes[remote] !== false}
-            <ul class="branch-list nested">
-              {#each rBranches as branch (branch.name)}
-                <li>
-                  <button
-                    type="button"
-                    class="branch-item remote"
-                    aria-label={getShortName(branch)}
-                    on:contextmenu={(e) => handleBranchContextMenu(e, branch)}
-                    on:dblclick={() => handleBranchDblClick(branch)}
-                    on:keydown={(e) => handleBranchKeydown(e, branch)}
-                  >
-                    <span class="branch-name">{getShortName(branch)}</span>
-                  </button>
-                </li>
-              {/each}
-            </ul>
+          {#if expandedRemotes[remote] === true}
+            <BranchTreeList
+              nodes={group.tree}
+              {expandedGroups}
+              groupPrefix={`remote:${remote}`}
+              {selectedBranch}
+              depth={1}
+              on:groupToggle={(event) => toggleBranchGroup(event.detail.key)}
+              on:filter={(event) => dispatch('branchFilter', event.detail)}
+              on:checkout={(event) => dispatch('checkout', event.detail)}
+              on:contextMenu={(event) => dispatch('branchContextMenu', event.detail)}
+            />
           {/if}
         </div>
       {/each}
