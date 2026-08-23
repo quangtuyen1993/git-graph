@@ -47,6 +47,26 @@ export class AIReviewService {
       });
     }
 
+    // Check codex CLI
+    if (await this.isCommandAvailable('codex')) {
+      providers.push({
+        id: 'codex',
+        name: 'Codex (CLI)',
+        available: true,
+        models: ['o4-mini', 'o3', 'gpt-4.1'],
+      });
+    }
+
+    // Check kiro CLI
+    if (await this.isCommandAvailable('kiro')) {
+      providers.push({
+        id: 'kiro',
+        name: 'Kiro (CLI)',
+        available: true,
+        models: ['default'],
+      });
+    }
+
     // Check if deepseek API key is configured
     const config = vscode.workspace.getConfiguration('gitGraphPro.aiReview');
     const deepseekKey = config.get<string>('deepseekApiKey');
@@ -97,6 +117,14 @@ export class AIReviewService {
         model = model || 'sonnet';
         content = await this.runClaude(fullInput, model);
         break;
+      case 'codex':
+        model = model || 'o4-mini';
+        content = await this.runCodex(fullInput, model);
+        break;
+      case 'kiro':
+        model = model || 'default';
+        content = await this.runKiro(fullInput);
+        break;
       case 'openai':
         model = model || 'gpt-4o';
         content = await this.runOpenAI(fullInput, model);
@@ -120,6 +148,16 @@ export class AIReviewService {
   private async runClaude(input: string, model: string): Promise<string> {
     const args = ['--print', '--model', model];
     return this.spawnWithStdin('claude', args, input);
+  }
+
+  private async runCodex(input: string, model: string): Promise<string> {
+    const args = ['--quiet', '--model', model, '--prompt', input];
+    return this.spawnWithStdin('codex', args, '');
+  }
+
+  private async runKiro(input: string): Promise<string> {
+    const args = ['chat', '--print'];
+    return this.spawnWithStdin('kiro', args, input);
   }
 
   private async runOpenAI(input: string, model: string): Promise<string> {

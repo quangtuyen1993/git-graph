@@ -30,7 +30,7 @@
         },
         "gitGraphPro.aiReview.defaultProvider": {
           "type": "string",
-          "enum": ["auto", "claude", "openai", "deepseek"],
+          "enum": ["auto", "claude", "codex", "kiro", "openai", "deepseek"],
           "default": "auto",
           "description": "Default AI provider for code review. 'auto' detects available CLIs."
         },
