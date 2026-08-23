@@ -244,8 +244,28 @@
       contextMenuX = event.clientX;
       contextMenuY = event.clientY;
       const count = selectedHashes.size;
+
+      // Get hashes in display order
+      const hashes = graphWindow
+        ? graphWindow.nodes
+            .filter(n => selectedHashes.has(n.hash))
+            .map(n => n.hash)
+        : [...selectedHashes];
+
+      // Check if squash is possible (all commits on current branch, consecutive)
+      let canSquash = false;
+      try {
+        const result = await bridge.send('git.canSquash', { hashes }) as { ok: boolean; reason?: string };
+        canSquash = result.ok;
+      } catch {
+        canSquash = false;
+      }
+
       contextMenuItems = [
-        { label: `Squash ${count} commits...`, action: 'squash' },
+        ...(canSquash
+          ? [{ label: `Squash ${count} commits...`, action: 'squash' }]
+          : [{ label: `Squash (not available)`, action: '', disabled: true }]
+        ),
         { label: '', action: '', divider: true },
         { label: 'Copy SHAs', action: 'copyShas' },
       ];
@@ -257,17 +277,27 @@
     contextMenuTarget = { type: 'commit', value: hash };
     contextMenuX = event.clientX;
     contextMenuY = event.clientY;
+
+    // Check if commit is on current branch (needed for reset, revert, cherry-pick)
+    let onCurrentBranch = false;
+    try {
+      const result = await bridge.send('git.isOnCurrentBranch', { hash }) as { onBranch: boolean };
+      onCurrentBranch = result.onBranch;
+    } catch {
+      onCurrentBranch = false;
+    }
+
     contextMenuItems = [
       { label: 'Checkout this commit', action: 'checkout' },
       { label: 'Create branch here...', action: 'createBranch' },
       { label: 'Create tag here...', action: 'createTag' },
       { label: '', action: '', divider: true },
-      { label: 'Cherry-pick', action: 'cherryPick' },
-      { label: 'Revert', action: 'revert' },
+      { label: 'Cherry-pick', action: 'cherryPick', disabled: onCurrentBranch },
+      { label: 'Revert', action: 'revert', disabled: !onCurrentBranch },
       { label: '', action: '', divider: true },
-      { label: 'Reset soft to here', action: 'resetSoft' },
-      { label: 'Reset mixed to here', action: 'resetMixed' },
-      { label: 'Reset hard to here', action: 'resetHard', danger: true },
+      { label: 'Reset soft to here', action: 'resetSoft', disabled: !onCurrentBranch },
+      { label: 'Reset mixed to here', action: 'resetMixed', disabled: !onCurrentBranch },
+      { label: 'Reset hard to here', action: 'resetHard', danger: true, disabled: !onCurrentBranch },
       { label: '', action: '', divider: true },
       { label: 'Copy SHA', action: 'copySha' },
     ];

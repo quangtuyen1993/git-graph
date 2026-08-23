@@ -100,6 +100,10 @@ export function activate(context: vscode.ExtensionContext): void {
       case 'git.squash':
         await gitService.squash(p.hashes as string[], p.message as string);
         return { success: true };
+      case 'git.canSquash':
+        return gitService.canSquash(p.hashes as string[]);
+      case 'git.isOnCurrentBranch':
+        return { onBranch: await gitService.isOnCurrentBranch(p.hash as string) };
       default:
         throw new Error(`Unknown method: ${method}`);
     }

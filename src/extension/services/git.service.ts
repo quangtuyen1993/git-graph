@@ -240,6 +240,55 @@ export class GitService {
   }
 
   /**
+   * Check if commits can be squashed:
+   * - All must be on the current branch (ancestors of HEAD)
+   * - Must be consecutive in the branch history
+   */
+  public async canSquash(hashes: string[]): Promise<{ ok: boolean; reason?: string }> {
+    if (hashes.length < 2) {
+      return { ok: false, reason: 'Need at least 2 commits to squash' };
+    }
+
+    // Check all commits are ancestors of HEAD (on current branch)
+    for (const hash of hashes) {
+      try {
+        await this.cli.exec(['merge-base', '--is-ancestor', hash, 'HEAD']);
+      } catch {
+        return { ok: false, reason: `Commit ${hash.substring(0, 7)} is not on the current branch` };
+      }
+    }
+
+    // Check they are consecutive: the oldest's parent should not be one of the selected hashes,
+    // and there should be no gaps (no unselected commits between them)
+    // Get the rev-list between oldest and newest, verify count matches selection
+    const oldestHash = hashes[hashes.length - 1];
+    const newestHash = hashes[0];
+    try {
+      const output = await this.cli.exec(['rev-list', `${oldestHash}^..${newestHash}`]);
+      const commitsInRange = output.trim().split('\n').filter(Boolean);
+      if (commitsInRange.length !== hashes.length) {
+        return { ok: false, reason: 'Selected commits are not consecutive' };
+      }
+    } catch {
+      return { ok: false, reason: 'Could not verify commit range' };
+    }
+
+    return { ok: true };
+  }
+
+  /**
+   * Check if a commit is on the current branch (ancestor of HEAD).
+   */
+  public async isOnCurrentBranch(hash: string): Promise<boolean> {
+    try {
+      await this.cli.exec(['merge-base', '--is-ancestor', hash, 'HEAD']);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Squash consecutive commits into one.
    * Hashes should be in topological order (newest first).
    * Uses interactive rebase with automated sequence editor.
