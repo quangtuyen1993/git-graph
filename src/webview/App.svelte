@@ -523,7 +523,7 @@
         { label: '', action: '', divider: true },
         { label: 'Rename branch...', action: 'renameBranch' },
         { label: '', action: '', divider: true },
-        { label: '🤖 AI Review...', action: 'aiReview' },
+        { label: 'Compare with...', action: 'compareBranch' },
       ];
     } else {
       // Local branch menu
@@ -552,7 +552,7 @@
         { label: 'Delete branch', action: 'deleteBranch', danger: true },
         ...(hasUpstream ? [{ label: 'Delete branch + remote', action: 'deleteBranchAndRemote', danger: true }] : []),
         { label: '', action: '', divider: true },
-        { label: '🤖 AI Review...', action: 'aiReview' },
+        { label: 'Compare with...', action: 'compareBranch' },
       ];
     }
     contextMenuVisible = true;
@@ -997,14 +997,51 @@
             await bridge.send('ui.openFolder', { path: branchName });
             break;
           case 'aiReview':
-            openAIReviewPanel();
+            // Unused — replaced by compareBranch
             break;
+          case 'compareBranch': {
+            const target = await bridge.send('ui.pickBranch', {
+              exclude: branchName,
+              title: `Compare "${branchName}" with...`,
+              placeholder: 'Select target branch',
+            }) as string | null;
+            if (target) {
+              compareBranches(branchName, target);
+            }
+            break;
+          }
         }
       }
 
       return action !== 'copySha' && action !== 'copyShas';
     } finally {
       contextMenuTarget = null;
+    }
+  }
+
+  // Compare state
+  let compareSource = '';
+  let compareTarget = '';
+  let compareFiles: { path: string; oldPath: string | null; status: string; additions: number; deletions: number; binary: boolean }[] | null = null;
+  let compareLoading = false;
+
+  async function compareBranches(source: string, target: string) {
+    compareSource = source;
+    compareTarget = target;
+    compareFiles = null;
+    compareLoading = true;
+    rightPanelOpen = true;
+    rightPanelMode = 'review';
+    clampSidePanelWidths();
+    aiReviewResult = null;
+    aiReviewError = '';
+    try {
+      const result = await bridge.send('ai.compare', { sourceBranch: source, targetBranch: target }) as { files: typeof compareFiles };
+      compareFiles = result.files;
+    } catch (e) {
+      aiReviewError = e instanceof Error ? e.message : String(e);
+    } finally {
+      compareLoading = false;
     }
   }
 
@@ -1022,10 +1059,13 @@
     }
   }
 
-  function openAIReviewPanel(targetBranch?: string) {
-    rightPanelOpen = true;
-    rightPanelMode = 'review';
-    clampSidePanelWidths();
+  async function handleCompareOpenDiff(event: CustomEvent<{ sourceBranch: string; targetBranch: string; path: string; oldPath: string | null; status: string }>) {
+    const { sourceBranch, targetBranch, path, oldPath, status } = event.detail;
+    try {
+      await bridge.send('ui.compareDiff', { sourceBranch, targetBranch, path, oldPath, status });
+    } catch (e) {
+      aiReviewError = e instanceof Error ? e.message : String(e);
+    }
   }
 
   function formatRelativeTime(dateStr: string): string {
@@ -1214,17 +1254,21 @@
       />
       <aside class="right-panel" style="width: {rightPanelWidth}px;">
         <div class="right-panel-header">
-          <span class="right-panel-title">{rightPanelMode === 'review' ? 'AI REVIEW' : 'COMMIT'}</span>
+          <span class="right-panel-title">{rightPanelMode === 'review' ? 'COMPARE' : 'COMMIT'}</span>
           <button class="close-btn" on:click={closeRightPanel} title="Close panel">×</button>
         </div>
         {#if rightPanelMode === 'review'}
           <AIReviewPanel
             providers={aiProviders}
             branches={branches.map(b => ({ name: b.name, current: b.current }))}
-            result={aiReviewResult}
-            loading={aiReviewLoading}
+            {compareFiles}
+            {compareLoading}
+            reviewResult={aiReviewResult}
+            reviewLoading={aiReviewLoading}
             error={aiReviewError}
+            on:compare={(e) => compareBranches(e.detail.sourceBranch, e.detail.targetBranch)}
             on:review={handleAIReview}
+            on:openDiff={handleCompareOpenDiff}
           />
         {:else}
           <CommitDetail

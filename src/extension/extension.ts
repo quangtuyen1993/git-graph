@@ -159,6 +159,47 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await vscode.commands.executeCommand('vscode.openFolder', folderUri, { forceNewWindow: true });
         return { success: true };
       }
+      case 'ui.pickBranch': {
+        if (!gitService) throw new Error('No git repository found');
+        const branchList = await gitService.branches();
+        const exclude = p.exclude as string | undefined;
+        const items = branchList
+          .filter(b => b.name !== exclude)
+          .map(b => ({ label: b.name, description: b.current ? '(current)' : (b.remote ? 'remote' : '') }));
+        const picked = await vscode.window.showQuickPick(items, {
+          placeHolder: (p.placeholder as string) ?? 'Select a branch',
+          title: (p.title as string) ?? 'Compare with...',
+        });
+        return picked ? picked.label : null;
+      }
+      case 'ui.compareDiff': {
+        if (!gitService) throw new Error('No git repository found');
+        const filePath = p.path as string;
+        const oldPath = p.oldPath as string | null | undefined;
+        const sB = p.sourceBranch as string;
+        const tB = p.targetBranch as string;
+        const status = (p.status as string) ?? 'modified';
+
+        // Get file at target branch (base) and source branch (changed)
+        const targetContent = (status !== 'added')
+          ? await gitService.showFile(tB, oldPath ?? filePath) ?? ''
+          : '';
+        const sourceContent = (status !== 'deleted')
+          ? await gitService.showFile(sB, filePath) ?? ''
+          : '';
+
+        const fileName = filePath.split('/').pop() ?? filePath;
+
+        const targetUri = vscode.Uri.parse(`${GIT_GRAPH_SCHEME}:${oldPath ?? filePath}?ref=${tB}&ts=${Date.now()}`);
+        const sourceUri = vscode.Uri.parse(`${GIT_GRAPH_SCHEME}:${filePath}?ref=${sB}&ts=${Date.now()}`);
+
+        contentProvider.setContent(targetUri.toString(), targetContent);
+        contentProvider.setContent(sourceUri.toString(), sourceContent);
+
+        const title = `${fileName} (${tB} → ${sB})`;
+        await vscode.commands.executeCommand('vscode.diff', targetUri, sourceUri, title);
+        return { success: true };
+      }
       default:
         throw new Error(`Unknown method: ${method}`);
     }
@@ -178,6 +219,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     switch (method) {
       case 'ai.providers':
         return aiReview.detectProviders();
+      case 'ai.compare': {
+        if (!gitService) throw new Error('No git repository found');
+        const sourceBranch = p.sourceBranch as string;
+        const targetBranch = p.targetBranch as string;
+        const result = await gitService.diff(targetBranch, sourceBranch);
+        return { files: result.files };
+      }
       case 'ai.review': {
         if (!gitService) throw new Error('No git repository found');
         const sourceBranch = p.sourceBranch as string;

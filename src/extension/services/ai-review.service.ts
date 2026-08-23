@@ -5,7 +5,7 @@ export interface AIProvider {
   id: string;
   name: string;
   available: boolean;
-  models: string[];
+  group: 'cli' | 'api';
 }
 
 export interface ReviewRequest {
@@ -41,9 +41,9 @@ export class AIReviewService {
     if (await this.isCommandAvailable('claude')) {
       providers.push({
         id: 'claude',
-        name: 'Claude (CLI)',
+        name: 'Claude',
         available: true,
-        models: ['sonnet', 'opus', 'haiku'],
+        group: 'cli',
       });
     }
 
@@ -51,9 +51,9 @@ export class AIReviewService {
     if (await this.isCommandAvailable('codex')) {
       providers.push({
         id: 'codex',
-        name: 'Codex (CLI)',
+        name: 'Codex',
         available: true,
-        models: ['o4-mini', 'o3', 'gpt-4.1'],
+        group: 'cli',
       });
     }
 
@@ -61,41 +61,29 @@ export class AIReviewService {
     if (await this.isCommandAvailable('kiro')) {
       providers.push({
         id: 'kiro',
-        name: 'Kiro (CLI)',
+        name: 'Kiro',
         available: true,
-        models: ['default'],
+        group: 'cli',
       });
     }
 
     // Check if deepseek API key is configured
     const config = vscode.workspace.getConfiguration('gitGraphPro.aiReview');
     const deepseekKey = config.get<string>('deepseekApiKey');
-    if (deepseekKey) {
-      providers.push({
-        id: 'deepseek',
-        name: 'DeepSeek (API)',
-        available: true,
-        models: ['deepseek-chat', 'deepseek-coder'],
-      });
-    }
+    providers.push({
+      id: 'deepseek',
+      name: 'DeepSeek',
+      available: !!deepseekKey,
+      group: 'api',
+    });
 
-    // Check openai CLI
+    // Check openai CLI (also api-based)
     if (await this.isCommandAvailable('openai')) {
       providers.push({
         id: 'openai',
-        name: 'OpenAI (CLI)',
+        name: 'OpenAI',
         available: true,
-        models: ['gpt-4o', 'gpt-4o-mini', 'o1'],
-      });
-    }
-
-    // Always offer deepseek as option (user can add key later)
-    if (!providers.find(p => p.id === 'deepseek')) {
-      providers.push({
-        id: 'deepseek',
-        name: 'DeepSeek (API)',
-        available: false,
-        models: ['deepseek-chat', 'deepseek-coder'],
+        group: 'api',
       });
     }
 
@@ -114,23 +102,18 @@ export class AIReviewService {
 
     switch (request.provider) {
       case 'claude':
-        model = model || 'sonnet';
         content = await this.runClaude(fullInput, model);
         break;
       case 'codex':
-        model = model || 'o4-mini';
         content = await this.runCodex(fullInput, model);
         break;
       case 'kiro':
-        model = model || 'default';
         content = await this.runKiro(fullInput);
         break;
       case 'openai':
-        model = model || 'gpt-4o';
         content = await this.runOpenAI(fullInput, model);
         break;
       case 'deepseek':
-        model = model || 'deepseek-chat';
         content = await this.runDeepSeek(fullInput, model);
         break;
       default:
@@ -146,12 +129,15 @@ export class AIReviewService {
   }
 
   private async runClaude(input: string, model: string): Promise<string> {
-    const args = ['--print', '--model', model];
+    const args = ['--print'];
+    if (model && model !== 'default') args.push('--model', model);
     return this.spawnWithStdin('claude', args, input);
   }
 
   private async runCodex(input: string, model: string): Promise<string> {
-    const args = ['--quiet', '--model', model, '--prompt', input];
+    const args = ['--quiet'];
+    if (model && model !== 'default') args.push('--model', model);
+    args.push('--prompt', input);
     return this.spawnWithStdin('codex', args, '');
   }
 
@@ -161,7 +147,8 @@ export class AIReviewService {
   }
 
   private async runOpenAI(input: string, model: string): Promise<string> {
-    const args = ['api', 'chat.completions.create', '-m', model, '-g', 'user', input];
+    const m = (model && model !== 'default') ? model : 'gpt-4o';
+    const args = ['api', 'chat.completions.create', '-m', m, '-g', 'user', input];
     return this.spawnWithStdin('openai', args, '');
   }
 
@@ -172,9 +159,10 @@ export class AIReviewService {
       throw new Error('DeepSeek API key not configured. Set gitGraphPro.aiReview.deepseekApiKey in settings.');
     }
 
-    // Use curl to call DeepSeek API
+    const m = (model && model !== 'default') ? model : 'deepseek-chat';
+
     const body = JSON.stringify({
-      model,
+      model: m,
       messages: [{ role: 'user', content: input }],
       temperature: 0.3,
       max_tokens: 4096,
