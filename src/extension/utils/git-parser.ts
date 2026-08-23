@@ -256,37 +256,148 @@ export function parseStatus(output: string): GitStatus {
 }
 
 /**
- * Parse output from `git diff --numstat` into typed FileChange objects.
- * Each line: "additions\tdeletions\tpath" or "additions\tdeletions\toldPath\tnewPath" for renames.
- * Binary files show as "-\t-\tpath".
+ * Parse NUL-delimited `git diff --numstat -z -M -C` and
+ * `git diff --name-status -z -M -C` output into typed file changes.
  */
-export function parseFileChanges(output: string): FileChange[] {
-  if (!output.trim()) return [];
+export function parseFileChanges(numstatOutput: string, nameStatusOutput: string): FileChange[] {
+  const numstatRecords = parseNumstatRecords(numstatOutput);
+  const statusRecords = parseNameStatusRecords(nameStatusOutput);
 
-  const lines = output.trim().split('\n').filter(line => line.includes('\t'));
-  return lines.map(line => {
-    const parts = line.split('\t');
-    const rawAdditions = parts[0] ?? '0';
-    const rawDeletions = parts[1] ?? '0';
-    const binary = rawAdditions === '-' && rawDeletions === '-';
-    const additions = binary ? 0 : parseInt(rawAdditions, 10);
-    const deletions = binary ? 0 : parseInt(rawDeletions, 10);
+  if (numstatRecords.length !== statusRecords.length) {
+    throw new Error(
+      `Unable to reconcile file change streams: ${numstatRecords.length} numstat records and ${statusRecords.length} name-status records`,
+    );
+  }
 
-    let path: string;
-    let oldPath: string | null = null;
-    let status: FileChange['status'] = 'modified';
+  const statsByPath = new Map(numstatRecords.map(record => [fileChangeIdentity(record), record]));
+  const changes = statusRecords.map(statusRecord => {
+    const identity = fileChangeIdentity(statusRecord);
+    const statRecord = statsByPath.get(identity);
+    if (!statRecord) {
+      throw new Error(`Unable to reconcile file change streams: missing numstat record for ${describeFileChange(statusRecord)}`);
+    }
+    statsByPath.delete(identity);
+    return { ...statusRecord, ...statRecord };
+  });
 
-    if (parts.length >= 4) {
-      // Renamed: "additions\tdeletions\toldPath\tnewPath"
-      oldPath = parts[2] ?? null;
-      path = parts[3] ?? '';
-      status = 'renamed';
-    } else {
-      path = parts[2] ?? '';
+  if (statsByPath.size > 0) {
+    const [record] = statsByPath.values();
+    throw new Error(`Unable to reconcile file change streams: missing name-status record for ${describeFileChange(record)}`);
+  }
+
+  return changes;
+}
+
+type FileChangeIdentity = Pick<FileChange, 'path' | 'oldPath'>;
+type FileChangeStats = FileChangeIdentity & Pick<FileChange, 'additions' | 'deletions' | 'binary'>;
+type FileChangeStatus = FileChangeIdentity & Pick<FileChange, 'status'>;
+
+function parseNumstatRecords(output: string): FileChangeStats[] {
+  if (!output) return [];
+
+  const fields = output.split('\0');
+  if (fields.at(-1) === '') fields.pop();
+  const records: FileChangeStats[] = [];
+
+  for (let index = 0; index < fields.length; index++) {
+    const statField = fields[index] ?? '';
+    const firstTab = statField.indexOf('\t');
+    const secondTab = statField.indexOf('\t', firstTab + 1);
+    if (firstTab < 0 || secondTab < 0) {
+      if (isCommitHeader(statField)) continue;
+      throw new Error(`Unable to parse numstat record: ${JSON.stringify(statField)}`);
     }
 
-    return { path, oldPath, status, additions, deletions, binary };
-  });
+    const additionsField = statField.slice(0, firstTab);
+    const deletionsField = statField.slice(firstTab + 1, secondTab);
+    const inlinePath = statField.slice(secondTab + 1);
+    const binary = additionsField === '-' && deletionsField === '-';
+
+    let oldPath: string | null = null;
+    let path = inlinePath;
+    if (inlinePath === '') {
+      oldPath = fields[++index] ?? null;
+      path = fields[++index] ?? '';
+      if (oldPath === null || path === '') {
+        throw new Error('Unable to parse numstat rename or copy record');
+      }
+    }
+
+    records.push({
+      path,
+      oldPath,
+      additions: binary ? 0 : parseFileChangeCount(additionsField, 'additions'),
+      deletions: binary ? 0 : parseFileChangeCount(deletionsField, 'deletions'),
+      binary,
+    });
+  }
+
+  return records;
+}
+
+function parseNameStatusRecords(output: string): FileChangeStatus[] {
+  if (!output) return [];
+
+  const fields = output.split('\0');
+  if (fields.at(-1) === '') fields.pop();
+  const records: FileChangeStatus[] = [];
+
+  for (let index = 0; index < fields.length; index++) {
+    const statusField = fields[index] ?? '';
+    if (isCommitHeader(statusField)) continue;
+    const status = statusCodeToFileChangeStatus(statusField[0] ?? '');
+    if (!status) {
+      throw new Error(`Unable to parse name-status record: ${JSON.stringify(statusField)}`);
+    }
+
+    if (status === 'renamed' || status === 'copied') {
+      const oldPath = fields[++index] ?? '';
+      const path = fields[++index] ?? '';
+      if (!oldPath || !path) {
+        throw new Error(`Unable to parse ${status} name-status record`);
+      }
+      records.push({ path, oldPath, status });
+    } else {
+      const path = fields[++index] ?? '';
+      if (!path) {
+        throw new Error(`Unable to parse ${status} name-status record`);
+      }
+      records.push({ path, oldPath: null, status });
+    }
+  }
+
+  return records;
+}
+
+function parseFileChangeCount(value: string, label: string): number {
+  const count = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(count) || count < 0) {
+    throw new Error(`Unable to parse numstat ${label}: ${JSON.stringify(value)}`);
+  }
+  return count;
+}
+
+function fileChangeIdentity({ oldPath, path }: FileChangeIdentity): string {
+  return `${oldPath ?? ''}\0${path}`;
+}
+
+function describeFileChange({ oldPath, path }: FileChangeIdentity): string {
+  return oldPath ? `${JSON.stringify(oldPath)} -> ${JSON.stringify(path)}` : JSON.stringify(path);
+}
+
+function statusCodeToFileChangeStatus(code: string): FileChange['status'] | null {
+  switch (code) {
+    case 'A': return 'added';
+    case 'M': return 'modified';
+    case 'D': return 'deleted';
+    case 'R': return 'renamed';
+    case 'C': return 'copied';
+    default: return null;
+  }
+}
+
+function isCommitHeader(value: string): boolean {
+  return /^[0-9a-f]{40,64}$/i.test(value);
 }
 
 // --- Internal helpers ---

@@ -93,8 +93,11 @@ export class GitService {
     }
 
     // Get file changes
-    const filesOutput = await this.cli.exec(['diff-tree', '--numstat', '-r', '--root', hash]);
-    const files = parseFileChanges(filesOutput);
+    const [numstatOutput, nameStatusOutput] = await Promise.all([
+      this.cli.exec(['diff-tree', '--numstat', '-z', '-M', '-C', '-r', '--root', hash]),
+      this.cli.exec(['diff-tree', '--name-status', '-z', '-M', '-C', '-r', '--root', hash]),
+    ]);
+    const files = parseFileChanges(numstatOutput, nameStatusOutput);
 
     return { commit: commits[0], files };
   }
@@ -105,13 +108,14 @@ export class GitService {
   }
 
   public async diff(ref1: string, ref2: string): Promise<DiffResult> {
-    const [numstatOutput, rawOutput] = await Promise.all([
-      this.cli.exec(['diff', '--numstat', `${ref1}...${ref2}`]),
-      this.cli.exec(['diff', `${ref1}...${ref2}`])
+    const [numstatOutput, nameStatusOutput, rawOutput] = await Promise.all([
+      this.cli.exec(['diff', '--numstat', '-z', '-M', '-C', `${ref1}...${ref2}`]),
+      this.cli.exec(['diff', '--name-status', '-z', '-M', '-C', `${ref1}...${ref2}`]),
+      this.cli.exec(['diff', '-M', '-C', `${ref1}...${ref2}`])
     ]);
 
     return {
-      files: parseFileChanges(numstatOutput),
+      files: parseFileChanges(numstatOutput, nameStatusOutput),
       raw: rawOutput
     };
   }

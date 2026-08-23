@@ -159,6 +159,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       case 'ui.openDiff': {
         if (!gitService) throw new Error('No git repository found');
         const filePath = p.path as string;
+        const oldPath = p.oldPath as string | null | undefined;
         const hash = p.hash as string;
         const status = (p.status as string) ?? 'modified';
 
@@ -172,14 +173,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // Get file content at parent commit (empty for added files)
         let parentContent = '';
         if (parentHash && status !== 'added') {
-          parentContent = await gitService.showFile(parentHash, filePath) ?? '';
+          parentContent = await gitService.showFile(parentHash, oldPath ?? filePath) ?? '';
         }
 
         const shortHash = hash.substring(0, 7);
         const fileName = filePath.split('/').pop() ?? filePath;
 
         // Create URIs for the virtual documents
-        const parentUri = vscode.Uri.parse(`${GIT_GRAPH_SCHEME}:${filePath}?ref=${parentHash ?? 'empty'}&ts=${Date.now()}`);
+        const parentUri = vscode.Uri.parse(`${GIT_GRAPH_SCHEME}:${oldPath ?? filePath}?ref=${parentHash ?? 'empty'}&ts=${Date.now()}`);
         const currentUri = vscode.Uri.parse(`${GIT_GRAPH_SCHEME}:${filePath}?ref=${hash}&ts=${Date.now()}`);
 
         // Set content for the content provider

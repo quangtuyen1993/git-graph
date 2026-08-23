@@ -57,6 +57,7 @@
       case 'added': return 'A';
       case 'deleted': return 'D';
       case 'renamed': return 'R';
+      case 'copied': return 'C';
       case 'modified': default: return 'M';
     }
   }
@@ -134,7 +135,7 @@
         {#each filteredFiles as file}
           <button
             class="file-entry"
-            on:click={() => dispatch('openFile', { path: file.path, hash: commit.hash, status: file.status })}
+            on:click={() => dispatch('openFile', { path: file.path, oldPath: file.oldPath, hash: commit.hash, status: file.status })}
             type="button"
           >
             <span class="file-status file-status-{file.status}">{getStatusLetter(file.status)}</span>
