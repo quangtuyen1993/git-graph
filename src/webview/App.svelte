@@ -55,6 +55,8 @@
   let maxLane = 0;
   let graphWindow: GraphWindow | null = null;
   let selectedHash: string | null = null;
+  let selectedHashes: Set<string> = new Set();
+  let lastClickedHash: string | null = null;
   let hasWorkingChanges = false;
 
   // Virtual scroll state
@@ -160,8 +162,32 @@
     }
   }
 
-  function handleRowClick(hash: string) {
-    selectedHash = hash;
+  function handleRowClick(hash: string, event?: MouseEvent) {
+    if (event?.shiftKey && lastClickedHash && graphWindow) {
+      // Shift+click: range select between lastClickedHash and this hash
+      const allNodes = graphWindow.nodes;
+      const lastIdx = allNodes.findIndex(n => n.hash === lastClickedHash);
+      const currIdx = allNodes.findIndex(n => n.hash === hash);
+
+      if (lastIdx !== -1 && currIdx !== -1) {
+        const start = Math.min(lastIdx, currIdx);
+        const end = Math.max(lastIdx, currIdx);
+        selectedHashes = new Set(allNodes.slice(start, end + 1).map(n => n.hash));
+        selectedHash = hash;
+        // Don't fetch detail for multi-select
+        if (selectedHashes.size > 1) {
+          detailCommit = null;
+          detailFiles = null;
+          return;
+        }
+      }
+    } else {
+      // Normal click: single select
+      selectedHashes = new Set(hash !== 'WORKING' ? [hash] : []);
+      lastClickedHash = hash !== 'WORKING' ? hash : null;
+      selectedHash = hash;
+    }
+
     if (hash && hash !== 'WORKING') {
       fetchCommitDetail(hash);
     } else {
@@ -211,6 +237,23 @@
     event.preventDefault();
     contextMenuVisible = false;
     await tick();
+
+    // If right-clicking a hash that's part of multi-selection, show multi-commit menu
+    if (selectedHashes.size > 1 && selectedHashes.has(hash)) {
+      contextMenuTarget = { type: 'commit', value: hash };
+      contextMenuX = event.clientX;
+      contextMenuY = event.clientY;
+      const count = selectedHashes.size;
+      contextMenuItems = [
+        { label: `Squash ${count} commits...`, action: 'squash' },
+        { label: '', action: '', divider: true },
+        { label: 'Copy SHAs', action: 'copyShas' },
+      ];
+      contextMenuVisible = true;
+      return;
+    }
+
+    // Single commit context menu
     contextMenuTarget = { type: 'commit', value: hash };
     contextMenuX = event.clientX;
     contextMenuY = event.clientY;
@@ -274,6 +317,40 @@
           case 'copySha':
             await navigator.clipboard.writeText(hash);
             break;
+          case 'squash': {
+            // Get hashes in topological order (newest first as displayed)
+            const hashes = graphWindow
+              ? graphWindow.nodes
+                  .filter(n => selectedHashes.has(n.hash))
+                  .map(n => n.hash)
+              : [...selectedHashes];
+
+            // Default message: oldest commit's subject
+            const oldestHash = hashes[hashes.length - 1];
+            const defaultMsg = graphWindow?.nodes.find(n => n.hash === oldestHash)?.subject ?? '';
+
+            const message = await bridge.send('ui.inputBox', {
+              prompt: `Squash ${hashes.length} commits into one. Enter commit message:`,
+              placeholder: defaultMsg,
+              value: defaultMsg
+            }) as string | null;
+
+            if (message) {
+              await bridge.send('git.squash', { hashes, message });
+              selectedHashes = new Set();
+              selectedHash = null;
+            }
+            break;
+          }
+          case 'copyShas': {
+            const shas = graphWindow
+              ? graphWindow.nodes
+                  .filter(n => selectedHashes.has(n.hash))
+                  .map(n => n.hash)
+              : [...selectedHashes];
+            await navigator.clipboard.writeText(shas.join('\n'));
+            break;
+          }
         }
       } else if (contextMenuTarget.type === 'branch') {
         const branchName = contextMenuTarget.value;
@@ -457,8 +534,8 @@
               <div
                 class="commit-row"
                 style="top: {(node.row - graphWindow.startRow + currentStartRow) * ROW_HEIGHT + (hasWorkingChanges ? ROW_HEIGHT : 0)}px; --graph-col-width: {graphColWidth}px"
-                class:selected={selectedHash === node.hash}
-                on:click={() => handleRowClick(node.hash)}
+                class:selected={selectedHash === node.hash || selectedHashes.has(node.hash)}
+                on:click={(e) => handleRowClick(node.hash, e)}
                 on:keydown={(e) => { if (e.key === 'Enter') handleRowClick(node.hash); }}
                 on:contextmenu={(e) => handleRowContextMenu(e, node.hash)}
                 role="row"

@@ -97,6 +97,9 @@ export function activate(context: vscode.ExtensionContext): void {
       case 'git.abortRebase':
         await gitService.abortRebase();
         return { success: true };
+      case 'git.squash':
+        await gitService.squash(p.hashes as string[], p.message as string);
+        return { success: true };
       default:
         throw new Error(`Unknown method: ${method}`);
     }

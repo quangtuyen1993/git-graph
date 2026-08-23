@@ -239,6 +239,61 @@ export class GitService {
     return output.trim().split('\n').filter(Boolean);
   }
 
+  /**
+   * Squash consecutive commits into one.
+   * Hashes should be in topological order (newest first).
+   * Uses interactive rebase with automated sequence editor.
+   */
+  public async squash(hashes: string[], message: string): Promise<void> {
+    if (hashes.length < 2) {
+      throw new Error('Need at least 2 commits to squash');
+    }
+
+    // The oldest commit (last in array) is the base for rebase
+    const oldestHash = hashes[hashes.length - 1];
+    const baseRef = `${oldestHash}^`;
+
+    // Build the rebase todo: "pick" the oldest, "squash" the rest
+    // Rebase shows commits oldest-first, so we reverse our array
+    const reversed = [...hashes].reverse();
+    const todoLines = reversed.map((hash, i) => {
+      const action = i === 0 ? 'pick' : 'squash';
+      return `${action} ${hash}`;
+    });
+    const todo = todoLines.join('\n') + '\n';
+
+    // Write temp files for the sequence editor and commit message editor scripts
+    const os = await import('os');
+    const fs = await import('fs/promises');
+    const path = await import('path');
+
+    const tmpDir = os.tmpdir();
+    const todoFile = path.join(tmpDir, `git-graph-todo-${Date.now()}.txt`);
+    const msgFile = path.join(tmpDir, `git-graph-msg-${Date.now()}.txt`);
+
+    await fs.writeFile(todoFile, todo, 'utf8');
+    await fs.writeFile(msgFile, message, 'utf8');
+
+    try {
+      // GIT_SEQUENCE_EDITOR: copies our todo into the rebase-todo file
+      // GIT_EDITOR: copies our message into the commit message file
+      await this.cli.exec(
+        ['rebase', '-i', baseRef],
+        {
+          timeout: 30000,
+          env: {
+            GIT_SEQUENCE_EDITOR: `cp "${todoFile}"`,
+            GIT_EDITOR: `cp "${msgFile}"`,
+          }
+        }
+      );
+    } finally {
+      // Cleanup temp files
+      await fs.unlink(todoFile).catch(() => {});
+      await fs.unlink(msgFile).catch(() => {});
+    }
+  }
+
   public static async findRepo(startPath: string): Promise<string | null> {
     try {
       const cli = new GitCLI(startPath);

@@ -5,6 +5,7 @@ export interface GitCLIOptions {
   timeout?: number;    // ms, default 30000
   stdin?: string;      // input to pipe to git process
   cwd?: string;        // override repo path for this call
+  env?: Record<string, string>;  // additional env vars
 }
 
 export class GitCLIError extends Error {
@@ -50,7 +51,7 @@ export class GitCLI {
     return new Promise((resolve, reject) => {
       const proc = spawn('git', args, {
         cwd,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...(options.env ?? {}) },
         stdio: ['pipe', 'pipe', 'pipe']
       });
 
