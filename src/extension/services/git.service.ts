@@ -1,9 +1,45 @@
+import { mkdtemp, rm, writeFile } from 'fs/promises';
+import os from 'os';
+import path from 'path';
 import { GitCLI } from './git-cli';
 import {
   parseLog, parseBranches, parseTags, parseStatus, parseFileChanges,
   LOG_FORMAT, BRANCH_FORMAT, TAG_FORMAT
 } from '../utils/git-parser';
+import { transformRebaseTodo, type RebaseTodoPlan } from '../utils/rebase-todo';
 import type { Commit, Branch, Tag, FileChange, GitStatus, GitLogOptions, DiffResult, StashEntry, WorktreeEntry } from '../types/git.types';
+
+const REBASE_TIMEOUT_MS = 120000;
+const REBASE_TEMP_PREFIX = path.join(os.tmpdir(), 'git-graph-rebase-');
+
+function quoteEditorArgument(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function sequenceEditorSource(): string {
+  return [
+    "'use strict';",
+    "const fs = require('fs');",
+    "const path = require('path');",
+    `const transformRebaseTodo = ${transformRebaseTodo.toString()};`,
+    "const todoPath = process.argv[2];",
+    "const plan = JSON.parse(fs.readFileSync(path.join(__dirname, 'rewrite-plan.json'), 'utf8'));",
+    "const todo = fs.readFileSync(todoPath, 'utf8');",
+    "fs.writeFileSync(todoPath, transformRebaseTodo(todo, plan), 'utf8');",
+    '',
+  ].join('\n');
+}
+
+function messageEditorSource(): string {
+  return [
+    "'use strict';",
+    "const fs = require('fs');",
+    "const path = require('path');",
+    "const message = fs.readFileSync(path.join(__dirname, 'message.txt'), 'utf8');",
+    "fs.writeFileSync(process.argv[2], message, 'utf8');",
+    '',
+  ].join('\n');
+}
 
 export class GitService {
   private cli: GitCLI;
@@ -344,7 +380,10 @@ export class GitService {
     const oldestHash = hashes[hashes.length - 1];
     const newestHash = hashes[0];
     try {
-      const output = await this.cli.exec(['rev-list', `${oldestHash}^..${newestHash}`]);
+      const oldestParent = await this.cli.exec(['rev-parse', '--verify', `${oldestHash}^`])
+        .catch(() => '');
+      const range = oldestParent.trim() ? `${oldestHash}^..${newestHash}` : newestHash;
+      const output = await this.cli.exec(['rev-list', range]);
       const commitsInRange = output.trim().split('\n').filter(Boolean);
       if (commitsInRange.length !== hashes.length) {
         return { ok: false, reason: 'Selected commits are not consecutive' };
@@ -369,40 +408,23 @@ export class GitService {
   }
 
   /**
+   * Check if a commit is reachable from the current branch's upstream.
+   */
+  public async isPublished(hash: string): Promise<boolean> {
+    try {
+      await this.cli.exec(['merge-base', '--is-ancestor', hash, '@{upstream}']);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Reword a commit message using interactive rebase.
    * Only works for commits on the current branch.
    */
   public async reword(hash: string, newMessage: string): Promise<void> {
-    const baseRef = `${hash}^`;
-
-    const todo = `reword ${hash}\n`;
-
-    const os = await import('os');
-    const fs = await import('fs/promises');
-    const path = await import('path');
-
-    const tmpDir = os.tmpdir();
-    const todoFile = path.join(tmpDir, `git-graph-todo-${Date.now()}.txt`);
-    const msgFile = path.join(tmpDir, `git-graph-msg-${Date.now()}.txt`);
-
-    await fs.writeFile(todoFile, todo, 'utf8');
-    await fs.writeFile(msgFile, newMessage, 'utf8');
-
-    try {
-      await this.cli.exec(
-        ['rebase', '-i', baseRef],
-        {
-          timeout: 30000,
-          env: {
-            GIT_SEQUENCE_EDITOR: `cp "${todoFile}"`,
-            GIT_EDITOR: `cp "${msgFile}"`,
-          }
-        }
-      );
-    } finally {
-      await fs.unlink(todoFile).catch(() => {});
-      await fs.unlink(msgFile).catch(() => {});
-    }
+    await this.runHistoryRewrite(hash, { kind: 'reword', hash }, newMessage);
   }
 
   /**
@@ -415,48 +437,44 @@ export class GitService {
       throw new Error('Need at least 2 commits to squash');
     }
 
-    // The oldest commit (last in array) is the base for rebase
     const oldestHash = hashes[hashes.length - 1];
-    const baseRef = `${oldestHash}^`;
+    await this.runHistoryRewrite(oldestHash, { kind: 'squash', hashes }, message);
+  }
 
-    // Build the rebase todo: "pick" the oldest, "squash" the rest
-    // Rebase shows commits oldest-first, so we reverse our array
-    const reversed = [...hashes].reverse();
-    const todoLines = reversed.map((hash, i) => {
-      const action = i === 0 ? 'pick' : 'squash';
-      return `${action} ${hash}`;
-    });
-    const todo = todoLines.join('\n') + '\n';
-
-    // Write temp files for the sequence editor and commit message editor scripts
-    const os = await import('os');
-    const fs = await import('fs/promises');
-    const path = await import('path');
-
-    const tmpDir = os.tmpdir();
-    const todoFile = path.join(tmpDir, `git-graph-todo-${Date.now()}.txt`);
-    const msgFile = path.join(tmpDir, `git-graph-msg-${Date.now()}.txt`);
-
-    await fs.writeFile(todoFile, todo, 'utf8');
-    await fs.writeFile(msgFile, message, 'utf8');
+  private async runHistoryRewrite(
+    oldestHash: string,
+    plan: RebaseTodoPlan,
+    message: string,
+  ): Promise<void> {
+    const oldestParent = await this.cli.exec(['rev-parse', '--verify', `${oldestHash}^`])
+      .catch(() => '');
+    const rebaseArgs = oldestParent.trim()
+      ? ['rebase', '-i', `${oldestHash}^`]
+      : ['rebase', '-i', '--root'];
+    const tempDir = await mkdtemp(REBASE_TEMP_PREFIX);
 
     try {
-      // GIT_SEQUENCE_EDITOR: copies our todo into the rebase-todo file
-      // GIT_EDITOR: copies our message into the commit message file
-      await this.cli.exec(
-        ['rebase', '-i', baseRef],
-        {
-          timeout: 30000,
-          env: {
-            GIT_SEQUENCE_EDITOR: `cp "${todoFile}"`,
-            GIT_EDITOR: `cp "${msgFile}"`,
-          }
-        }
-      );
+      const sequenceEditorPath = path.join(tempDir, 'sequence-editor.cjs');
+      const messageEditorPath = path.join(tempDir, 'message-editor.cjs');
+      await Promise.all([
+        writeFile(sequenceEditorPath, sequenceEditorSource(), 'utf8'),
+        writeFile(messageEditorPath, messageEditorSource(), 'utf8'),
+        writeFile(path.join(tempDir, 'rewrite-plan.json'), JSON.stringify(plan), 'utf8'),
+        writeFile(path.join(tempDir, 'message.txt'), message, 'utf8'),
+      ]);
+
+      await this.cli.exec(rebaseArgs, {
+        timeout: REBASE_TIMEOUT_MS,
+        env: {
+          GIT_SEQUENCE_EDITOR: `${quoteEditorArgument(process.execPath)} ${quoteEditorArgument(sequenceEditorPath)}`,
+          GIT_EDITOR: `${quoteEditorArgument(process.execPath)} ${quoteEditorArgument(messageEditorPath)}`,
+        },
+      });
     } finally {
-      // Cleanup temp files
-      await fs.unlink(todoFile).catch(() => {});
-      await fs.unlink(msgFile).catch(() => {});
+      if (!tempDir.startsWith(REBASE_TEMP_PREFIX)) {
+        throw new Error(`Refusing to remove unsafe rebase path: ${tempDir}`);
+      }
+      await rm(tempDir, { recursive: true, force: true });
     }
   }
 
