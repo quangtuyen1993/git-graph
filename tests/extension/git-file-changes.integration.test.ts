@@ -56,6 +56,23 @@ describe('GitService file changes', () => {
       { path: 'image.bin', oldPath: null, status: 'added', additions: 0, deletions: 0, binary: true },
     ]));
   });
+
+  it('reconciles GitService.diff numstat and name-status streams', async () => {
+    await writeFiles(repo.path, { 'base.txt': 'one\n' });
+    await repo.execGit(['add', '.']);
+    await repo.execGit(['commit', '-m', 'base']);
+    await writeFiles(repo.path, { 'base.txt': 'one\ntwo\n', 'new.txt': 'new\n' });
+    await repo.execGit(['add', '.']);
+    await repo.execGit(['commit', '-m', 'change']);
+    const head = (await repo.execGit(['rev-parse', 'HEAD'])).trim();
+    const parent = (await repo.execGit(['rev-parse', `${head}^`])).trim();
+    const result = await new GitService(repo.path).diff(parent, head);
+    expect(result.raw).toContain('base.txt');
+    expect(result.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'base.txt', status: 'modified', additions: 1, deletions: 0 }),
+      expect.objectContaining({ path: 'new.txt', status: 'added', additions: 1, deletions: 0 }),
+    ]));
+  });
 });
 
 async function writeFiles(repoPath: string, files: Record<string, string>): Promise<void> {

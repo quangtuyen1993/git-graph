@@ -1,6 +1,10 @@
 .vscode/**
 src/**
 node_modules/**
+.superpowers/**
+coverage/**
+tests/**
+vitest.config.ts
 docs/**
 tsconfig.json
 svelte.config.js
