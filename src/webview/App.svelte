@@ -7,7 +7,7 @@
   import type { MenuItem } from './types/menu.types';
   import { getGravatarUrl } from './lib/gravatar';
   import { hasWorkingTreeChanges, type WorkingTreeStatus } from './lib/git-status';
-  import { LatestRequestGate } from './lib/latest-request';
+  import { handleLatestWindowIntent, LatestRequestGate } from './lib/latest-request';
   import { MutationGate, runMutationWithProgress } from './lib/mutation-gate';
   import CommitDetail from './components/detail/CommitDetail.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
@@ -181,26 +181,30 @@
     maxLane = result.maxLane;
 
     const range = calculateVisibleRange({ scrollTop, viewportHeight, totalRows });
-    await fetchWindow(range.startRow);
+    await updateGraphWindow(range, null);
 
     status = `${branches.length} branches, ${totalRows} commits`;
   }
 
-  async function fetchWindow(startRow: number) {
-    const requestToken = graphWindowRequestGate.issue();
-    loading = true;
-    try {
-      const count = Math.ceil(viewportHeight / ROW_HEIGHT) + BUFFER_ROWS * 2;
-      const requestedWindow = await bridge.send('graph.getWindow', { startRow, count }) as GraphWindow;
-      if (graphWindowRequestGate.isLatest(requestToken)) {
+  async function updateGraphWindow(
+    desiredRange: { startRow: number; endRow: number },
+    cachedWindow: GraphWindow | null,
+  ) {
+    const count = Math.ceil(viewportHeight / ROW_HEIGHT) + BUFFER_ROWS * 2;
+    await handleLatestWindowIntent({
+      gate: graphWindowRequestGate,
+      currentWindow: cachedWindow,
+      desiredRange,
+      request: () => bridge.send('graph.getWindow', {
+        startRow: desiredRange.startRow,
+        count,
+      }) as Promise<GraphWindow>,
+      apply: (requestedWindow) => {
         graphWindow = requestedWindow;
-        currentStartRow = startRow;
-      }
-    } finally {
-      if (graphWindowRequestGate.isLatest(requestToken)) {
-        loading = false;
-      }
-    }
+        currentStartRow = requestedWindow.startRow;
+      },
+      setLoading: (value) => { loading = value; },
+    });
   }
 
   function handleScroll() {
@@ -210,15 +214,7 @@
 
     const range = calculateVisibleRange({ scrollTop, viewportHeight, totalRows });
 
-    if (graphWindow) {
-      const needsFetch =
-        range.startRow < graphWindow.startRow ||
-        range.endRow > graphWindow.endRow;
-
-      if (needsFetch) {
-        fetchWindow(range.startRow);
-      }
-    }
+    updateGraphWindow(range, graphWindow);
   }
 
   function handleRowClick(hash: string, event?: MouseEvent) {
