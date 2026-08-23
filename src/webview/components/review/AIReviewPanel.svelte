@@ -23,6 +23,8 @@
   export let compareLoading = false;
   export let initialSource = '';
   export let initialTarget = '';
+  export let initialProvider = '';
+  export let initialModel = '';
   export let reviewResult: { content: string; provider: string; model: string; timestamp: string } | null = null;
   export let reviewLoading = false;
   export let error = '';
@@ -50,8 +52,22 @@
   $: cliProviders = providers.filter(p => p.group === 'cli');
   $: apiProviders = providers.filter(p => p.group === 'api');
   $: availableProviders = providers.filter(p => p.available);
-  $: if (availableProviders.length > 0 && !selectedProvider) {
-    selectedProvider = availableProviders[0].id;
+
+  // Restore saved provider/model once
+  let restoredSettings = false;
+  $: if (!restoredSettings && providers.length > 0) {
+    restoredSettings = true;
+    if (initialProvider && providers.some(p => p.id === initialProvider && p.available)) {
+      selectedProvider = initialProvider;
+    } else if (availableProviders.length > 0) {
+      selectedProvider = availableProviders[0].id;
+    }
+    if (initialModel) modelInput = initialModel;
+  }
+
+  // Notify parent when settings change
+  function notifySettingsChange() {
+    dispatch('settingsChange', { provider: selectedProvider, model: modelInput });
   }
 
   $: filteredFiles = compareFiles?.filter(f =>
@@ -197,7 +213,7 @@
     <div class="ai-config-body">
       <div class="config-row">
         <label class="config-label" for="ai-prov">Provider</label>
-        <select id="ai-prov" class="config-select" bind:value={selectedProvider}>
+        <select id="ai-prov" class="config-select" bind:value={selectedProvider} on:change={notifySettingsChange}>
           {#if cliProviders.length > 0}
             <optgroup label="CLI (subscription)">
               {#each cliProviders as p}
@@ -221,6 +237,7 @@
           type="text"
           class="config-input"
           bind:value={modelInput}
+          on:change={notifySettingsChange}
           placeholder="default (leave empty for CLI default)"
         />
       </div>

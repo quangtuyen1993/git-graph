@@ -93,6 +93,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   router.register('ui', async (method: string, params: unknown) => {
     const p = (params ?? {}) as Record<string, unknown>;
     switch (method) {
+      case 'ui.getState': {
+        const key = p.key as string;
+        return context.globalState.get(key) ?? null;
+      }
+      case 'ui.setState': {
+        const key = p.key as string;
+        await context.globalState.update(key, p.value);
+        return { success: true };
+      }
       case 'ui.inputBox': {
         const result = await vscode.window.showInputBox({
           prompt: p.prompt as string,

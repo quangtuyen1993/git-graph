@@ -128,6 +128,8 @@
 
   // AI Review state
   let aiProviders: { id: string; name: string; available: boolean; group: 'cli' | 'api' }[] = [];
+  let savedProvider = '';
+  let savedModel = '';
   let aiReviewResult: { content: string; provider: string; model: string; timestamp: string } | null = null;
   let aiReviewLoading = false;
   let aiReviewError = '';
@@ -155,6 +157,9 @@
       await refreshGraph();
       // Load AI providers
       aiProviders = await bridge.send('ai.providers') as typeof aiProviders;
+      // Restore cached provider/model selection
+      savedProvider = await bridge.send('ui.getState', { key: 'aiReview.provider' }) as string | null ?? '';
+      savedModel = await bridge.send('ui.getState', { key: 'aiReview.model' }) as string | null ?? '';
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       status = 'Error';
@@ -1274,12 +1279,20 @@
             {compareLoading}
             initialSource={compareSource}
             initialTarget={compareTarget}
+            initialProvider={savedProvider}
+            initialModel={savedModel}
             reviewResult={aiReviewResult}
             reviewLoading={aiReviewLoading}
             error={aiReviewError}
             on:compare={(e) => compareBranches(e.detail.sourceBranch, e.detail.targetBranch)}
             on:review={handleAIReview}
             on:openDiff={handleCompareOpenDiff}
+            on:settingsChange={(e) => {
+              savedProvider = e.detail.provider;
+              savedModel = e.detail.model;
+              bridge.send('ui.setState', { key: 'aiReview.provider', value: e.detail.provider });
+              bridge.send('ui.setState', { key: 'aiReview.model', value: e.detail.model });
+            }}
           />
         {:else}
           <CommitDetail
