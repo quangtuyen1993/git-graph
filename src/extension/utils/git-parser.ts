@@ -74,7 +74,7 @@ export const LOG_FORMAT = [
  * Use with `git branch -a --format=BRANCH_FORMAT`
  */
 export const BRANCH_FORMAT =
-  `%(HEAD)%(refname:short)${FIELD_SEP}%(objectname:short)${FIELD_SEP}%(upstream:short)${FIELD_SEP}%(committerdate:iso8601-strict)${FIELD_SEP}%(refname)${FIELD_SEP}%(upstream:track,nobracket)`;
+  `%(HEAD)%(refname:short)${FIELD_SEP}%(objectname)${FIELD_SEP}%(upstream:short)${FIELD_SEP}%(committerdate:iso8601-strict)${FIELD_SEP}%(refname)${FIELD_SEP}%(upstream:track,nobracket)`;
 
 /**
  * git tag --format string.
