@@ -20,6 +20,10 @@ const worktrees = [
   { path: '/repo', head: 'd'.repeat(40), branch: 'main', bare: false, isMain: true },
   { path: '/repo/feature', head: 'e'.repeat(40), branch: 'feature', bare: false, isMain: false },
 ];
+const submodules = [
+  { name: 'sdk', path: 'packages/sdk', absolutePath: '/repo/packages/sdk', head: 'f'.repeat(40), state: 'initialized' as const },
+  { name: 'legacy', path: 'vendor/legacy', absolutePath: '/repo/vendor/legacy', head: null, state: 'uninitialized' as const },
+];
 
 describe('BranchSidebar', () => {
   const originalRect = HTMLElement.prototype.getBoundingClientRect;
@@ -95,6 +99,26 @@ describe('BranchSidebar', () => {
     await fireEvent.click(getByRole('button', { name: /worktree main/i }));
 
     expect(onWorktreeOpen).not.toHaveBeenCalled();
+  });
+
+  it.each(['click', 'Enter', ' '])('requests a submodule tab on %s', async (activation) => {
+    const { component, getByRole } = render(BranchSidebar, { branches, tags, stashes, worktrees, submodules });
+    const open = vi.fn();
+    component.$on('submoduleOpen', open);
+    const row = getByRole('button', { name: /submodule sdk.*packages\/sdk.*initialized/i });
+    if (activation === 'click') await fireEvent.click(row);
+    else await fireEvent.keyDown(row, { key: activation });
+
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ detail: { path: 'packages/sdk' } }));
+  });
+
+  it('shows the submodule count, can collapse rows, and labels uninitialized entries', async () => {
+    const { getByRole, queryByRole } = render(BranchSidebar, { branches, tags, stashes, worktrees, submodules });
+    const header = getByRole('button', { name: /submodules.*2/i });
+
+    expect(getByRole('button', { name: /submodule legacy.*vendor\/legacy.*uninitialized/i })).toBeEnabled();
+    await fireEvent.click(header);
+    expect(queryByRole('button', { name: /submodule sdk.*packages\/sdk.*initialized/i })).toBeNull();
   });
 
   it('opens context menus from Shift+F10 at the focused entry bounding box', async () => {
