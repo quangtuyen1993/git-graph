@@ -21,6 +21,8 @@
   export let branches: { name: string; current: boolean }[] = [];
   export let compareFiles: FileChange[] | null = null;
   export let compareLoading = false;
+  export let initialSource = '';
+  export let initialTarget = '';
   export let reviewResult: { content: string; provider: string; model: string; timestamp: string } | null = null;
   export let reviewLoading = false;
   export let error = '';
@@ -33,12 +35,16 @@
   let modelInput = '';
   let filterText = '';
 
+  // Sync initial source/target from parent (right-click context)
+  $: if (initialSource && initialSource !== sourceBranch) {
+    sourceBranch = initialSource;
+  }
+  $: if (initialTarget && initialTarget !== targetBranch) {
+    targetBranch = initialTarget;
+  }
+
   $: cliProviders = providers.filter(p => p.group === 'cli');
   $: apiProviders = providers.filter(p => p.group === 'api');
-  $: currentBranch = branches.find(b => b.current);
-  $: if (currentBranch && !sourceBranch) {
-    sourceBranch = currentBranch.name;
-  }
   $: availableProviders = providers.filter(p => p.available);
   $: if (availableProviders.length > 0 && !selectedProvider) {
     selectedProvider = availableProviders[0].id;

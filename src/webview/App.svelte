@@ -163,6 +163,14 @@
     bridge.on('graph.invalidated', () => {
       refreshGraph();
     });
+
+    // Listen for streaming AI review chunks
+    bridge.on('ai.reviewChunk', (data: { chunk: string }) => {
+      if (!aiReviewResult) {
+        aiReviewResult = { content: '', provider: '', model: '', timestamp: new Date().toISOString() };
+      }
+      aiReviewResult = { ...aiReviewResult, content: aiReviewResult.content + data.chunk };
+    });
   });
 
   onMount(() => {
@@ -1263,6 +1271,8 @@
             branches={branches.map(b => ({ name: b.name, current: b.current }))}
             {compareFiles}
             {compareLoading}
+            initialSource={compareSource}
+            initialTarget={compareTarget}
             reviewResult={aiReviewResult}
             reviewLoading={aiReviewLoading}
             error={aiReviewError}

@@ -236,7 +236,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // Get diff between branches
         const diff = await gitService.getDiff(sourceBranch, targetBranch);
         if (!diff.trim()) {
-          return { content: 'No differences found between branches.', provider, model: model ?? '', timestamp: new Date().toISOString() };
+          return { content: 'No differences found between branches.', provider, model: model ?? 'default', timestamp: new Date().toISOString() };
         }
 
         // Truncate if too large (most LLMs have context limits)
@@ -245,7 +245,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           ? diff.substring(0, maxChars) + `\n\n... (truncated, ${diff.length - maxChars} chars omitted)`
           : diff;
 
-        return aiReview.review({ diff: truncatedDiff, provider, model });
+        // Use streaming — send chunks to webview as they arrive
+        const result = await aiReview.reviewStreaming(
+          { diff: truncatedDiff, provider, model },
+          (chunk) => { router.sendEvent('ai.reviewChunk', { chunk }); }
+        );
+        return result;
       }
       case 'ai.reviewDiff': {
         // Review a raw diff string directly

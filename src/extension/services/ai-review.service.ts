@@ -128,6 +128,93 @@ export class AIReviewService {
     };
   }
 
+  /**
+   * Run AI review with streaming — sends chunks via onChunk callback.
+   */
+  public reviewStreaming(request: ReviewRequest, onChunk: (text: string) => void): Promise<ReviewResult> {
+    const prompt = request.customPrompt || DEFAULT_PROMPT;
+    const fullInput = `${prompt}\n\n---\n\n${request.diff}`;
+    const model = request.model || '';
+
+    return new Promise((resolve, reject) => {
+      let args: string[];
+      let command: string;
+
+      switch (request.provider) {
+        case 'claude':
+          command = 'claude';
+          args = ['--print'];
+          if (model && model !== 'default') args.push('--model', model);
+          break;
+        case 'codex':
+          command = 'codex';
+          args = ['exec'];
+          if (model && model !== 'default') args.push('-c', `model="${model}"`);
+          break;
+        case 'kiro':
+          command = 'kiro-cli';
+          args = ['chat', '--no-interactive', '--trust-all-tools', '--wrap=never'];
+          break;
+        case 'openai':
+          command = 'openai';
+          const m = (model && model !== 'default') ? model : 'gpt-4o';
+          args = ['api', 'chat.completions.create', '-m', m, '-g', 'user', fullInput];
+          // OpenAI CLI doesn't use stdin well for streaming, fall back to non-streaming
+          this.review(request).then(resolve).catch(reject);
+          return;
+        case 'deepseek':
+          // DeepSeek uses curl, fall back to non-streaming
+          this.review(request).then(resolve).catch(reject);
+          return;
+        default:
+          reject(new Error(`Unknown provider: ${request.provider}`));
+          return;
+      }
+
+      const proc = spawn(command, args, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env },
+      });
+
+      let fullOutput = '';
+
+      proc.stdout.on('data', (data: Buffer) => {
+        const chunk = data.toString().replace(/\x1b\[[0-9;]*m/g, '');
+        fullOutput += chunk;
+        onChunk(chunk);
+      });
+
+      proc.stderr.on('data', () => { /* ignore stderr */ });
+
+      proc.stdin.write(fullInput);
+      proc.stdin.end();
+
+      const timeout = setTimeout(() => {
+        proc.kill('SIGTERM');
+        reject(new Error('AI review timed out after 120 seconds'));
+      }, 120_000);
+
+      proc.on('close', (code) => {
+        clearTimeout(timeout);
+        if (code === 0) {
+          resolve({
+            content: fullOutput,
+            provider: request.provider,
+            model: model || 'default',
+            timestamp: new Date().toISOString(),
+          });
+        } else {
+          reject(new Error(`${command} failed (exit ${code})`));
+        }
+      });
+
+      proc.on('error', (err) => {
+        clearTimeout(timeout);
+        reject(new Error(`Failed to run ${command}: ${err.message}`));
+      });
+    });
+  }
+
   private async runClaude(input: string, model: string): Promise<string> {
     const args = ['--print'];
     if (model && model !== 'default') args.push('--model', model);
@@ -135,10 +222,12 @@ export class AIReviewService {
   }
 
   private async runCodex(input: string, model: string): Promise<string> {
-    const args = ['--quiet'];
-    if (model && model !== 'default') args.push('--model', model);
-    args.push('--prompt', input);
-    return this.spawnWithStdin('codex', args, '');
+    // Use codex exec with stdin for review prompt
+    const args = ['exec'];
+    if (model && model !== 'default') args.push('-c', `model="${model}"`);
+    const raw = await this.spawnWithStdin('codex', args, input);
+    // Strip ANSI escape codes
+    return raw.replace(/\x1b\[[0-9;]*m/g, '');
   }
 
   private async runKiro(input: string): Promise<string> {
