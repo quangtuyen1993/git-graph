@@ -3,7 +3,7 @@ import {
   parseLog, parseBranches, parseTags, parseStatus, parseFileChanges,
   LOG_FORMAT, BRANCH_FORMAT, TAG_FORMAT
 } from '../utils/git-parser';
-import type { Commit, Branch, Tag, FileChange, GitStatus, GitLogOptions, DiffResult } from '../types/git.types';
+import type { Commit, Branch, Tag, FileChange, GitStatus, GitLogOptions, DiffResult, StashEntry, WorktreeEntry } from '../types/git.types';
 
 export class GitService {
   private cli: GitCLI;
@@ -241,6 +241,82 @@ export class GitService {
   public async getParents(hash: string): Promise<string[]> {
     const output = await this.cli.exec(['rev-parse', `${hash}^`]).catch(() => '');
     return output.trim().split('\n').filter(Boolean);
+  }
+
+  // --- Stash Operations ---
+
+  public async stashList(): Promise<StashEntry[]> {
+    const output = await this.cli.exec([
+      'stash', 'list',
+      '--format=%gd%x1f%gs%x1f%ai%x1f%H'
+    ]);
+    if (!output.trim()) return [];
+
+    return output.trim().split('\n').filter(Boolean).map(line => {
+      const [ref, message, date, hash] = line.split('\x1f');
+      const indexMatch = ref?.match(/\{(\d+)\}/);
+      const branchMatch = message?.match(/on (.+?):/);
+      return {
+        index: indexMatch ? parseInt(indexMatch[1], 10) : 0,
+        message: message?.replace(/^[^:]+:\s*/, '') ?? '',
+        date: date ?? '',
+        branch: branchMatch?.[1] ?? '',
+        hash: hash ?? '',
+      };
+    });
+  }
+
+  public async stashApply(index?: number): Promise<void> {
+    const args = ['stash', 'apply'];
+    if (index !== undefined) args.push(`stash@{${index}}`);
+    await this.cli.exec(args);
+  }
+
+  // --- Worktree Operations ---
+
+  public async worktreeList(): Promise<WorktreeEntry[]> {
+    const output = await this.cli.exec(['worktree', 'list', '--porcelain']);
+    if (!output.trim()) return [];
+
+    const entries: WorktreeEntry[] = [];
+    let current: Partial<WorktreeEntry> = {};
+
+    for (const line of output.split('\n')) {
+      if (line.startsWith('worktree ')) {
+        if (current.path) entries.push(current as WorktreeEntry);
+        current = { path: line.slice(9), bare: false, isMain: entries.length === 0 };
+      } else if (line.startsWith('HEAD ')) {
+        current.head = line.slice(5);
+      } else if (line.startsWith('branch ')) {
+        current.branch = line.slice(7).replace('refs/heads/', '');
+      } else if (line === 'bare') {
+        current.bare = true;
+      } else if (line === 'detached') {
+        current.branch = null;
+      }
+    }
+    if (current.path) entries.push(current as WorktreeEntry);
+
+    return entries;
+  }
+
+  public async worktreeAdd(path: string, branch?: string, newBranch?: string): Promise<void> {
+    const args = ['worktree', 'add'];
+    if (newBranch) {
+      args.push('-b', newBranch, path);
+    } else if (branch) {
+      args.push(path, branch);
+    } else {
+      args.push(path);
+    }
+    await this.cli.exec(args);
+  }
+
+  public async worktreeRemove(path: string, force?: boolean): Promise<void> {
+    const args = ['worktree', 'remove'];
+    if (force) args.push('--force');
+    args.push(path);
+    await this.cli.exec(args);
   }
 
   /**

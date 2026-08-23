@@ -53,6 +53,8 @@
   let status = 'Loading...';
   let branches: Branch[] = [];
   let tags: { name: string; hash: string; message: string | null; taggerDate: string | null }[] = [];
+  let stashes: { index: number; message: string; date: string; branch: string; hash: string }[] = [];
+  let worktrees: { path: string; head: string; branch: string | null; bare: boolean; isMain: boolean }[] = [];
   let error = '';
 
   // Multi-repo state
@@ -156,6 +158,8 @@
   async function refreshGraph() {
     branches = await bridge.send('git.branches') as Branch[];
     tags = await bridge.send('git.tags') as typeof tags;
+    stashes = await bridge.send('git.stashList') as typeof stashes;
+    worktrees = await bridge.send('git.worktreeList') as typeof worktrees;
 
     try {
       const st = await bridge.send('git.status') as { files?: unknown[] };
@@ -410,6 +414,47 @@
     contextMenuVisible = true;
   }
 
+  async function handleStashContextMenu(event: CustomEvent<{ event: MouseEvent; stash: { index: number; message: string } }>) {
+    const { event: mouseEvent, stash } = event.detail;
+    contextMenuVisible = false;
+    await tick();
+
+    contextMenuTarget = { type: 'branch', value: String(stash.index) };
+    contextMenuX = mouseEvent.clientX;
+    contextMenuY = mouseEvent.clientY;
+    contextMenuItems = [
+      { label: 'Apply', action: 'stashApply' },
+      { label: 'Pop (apply + delete)', action: 'stashPop' },
+      { label: '', action: '', divider: true },
+      { label: 'Drop', action: 'stashDrop', danger: true },
+    ];
+    contextMenuVisible = true;
+  }
+
+  async function handleWorktreeContextMenu(event: CustomEvent<{ event: MouseEvent; worktree: { path: string; isMain: boolean; branch: string | null } }>) {
+    const { event: mouseEvent, worktree } = event.detail;
+    contextMenuVisible = false;
+    await tick();
+
+    contextMenuTarget = { type: 'branch', value: worktree.path };
+    contextMenuX = mouseEvent.clientX;
+    contextMenuY = mouseEvent.clientY;
+
+    if (worktree.isMain) {
+      contextMenuItems = [
+        { label: 'Add new worktree...', action: 'worktreeAdd' },
+      ];
+    } else {
+      contextMenuItems = [
+        { label: 'Open in new window', action: 'worktreeOpen' },
+        { label: '', action: '', divider: true },
+        { label: 'Add new worktree...', action: 'worktreeAdd' },
+        { label: 'Remove worktree', action: 'worktreeRemove', danger: true },
+      ];
+    }
+    contextMenuVisible = true;
+  }
+
   async function handleBranchCheckout(event: CustomEvent<{ name: string }>) {
     try {
       await bridge.send('git.checkout', { ref: event.detail.name });
@@ -582,6 +627,39 @@
             }
             break;
           }
+          // Stash actions
+          case 'stashApply':
+            await bridge.send('git.stashApply', { index: parseInt(branchName) });
+            break;
+          case 'stashPop':
+            await bridge.send('git.stashPop', { index: parseInt(branchName) });
+            break;
+          case 'stashDrop': {
+            const confirmed = await bridge.send('ui.confirm', { message: `Drop stash@{${branchName}}?` }) as boolean;
+            if (confirmed) {
+              await bridge.send('git.stashDrop', { index: parseInt(branchName) });
+            }
+            break;
+          }
+          // Worktree actions
+          case 'worktreeAdd': {
+            const wtPath = await bridge.send('ui.inputBox', { prompt: 'Worktree path:', placeholder: '../my-worktree' }) as string | null;
+            if (wtPath) {
+              const wtBranch = await bridge.send('ui.inputBox', { prompt: 'New branch name (leave empty for detached):', placeholder: '' }) as string | null;
+              await bridge.send('git.worktreeAdd', { path: wtPath, newBranch: wtBranch || undefined });
+            }
+            break;
+          }
+          case 'worktreeRemove': {
+            const confirmed = await bridge.send('ui.confirm', { message: `Remove worktree at "${branchName}"?` }) as boolean;
+            if (confirmed) {
+              await bridge.send('git.worktreeRemove', { path: branchName });
+            }
+            break;
+          }
+          case 'worktreeOpen':
+            await bridge.send('ui.openFolder', { path: branchName });
+            break;
         }
       }
 
@@ -660,8 +738,12 @@
         <BranchSidebar
           {branches}
           {tags}
+          {stashes}
+          {worktrees}
           on:branchContextMenu={handleBranchContextMenu}
           on:tagContextMenu={handleTagContextMenu}
+          on:stashContextMenu={handleStashContextMenu}
+          on:worktreeContextMenu={handleWorktreeContextMenu}
           on:checkout={handleBranchCheckout}
         />
       </aside>

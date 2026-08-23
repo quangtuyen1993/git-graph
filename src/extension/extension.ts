@@ -103,6 +103,32 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           p.action as 'push' | 'pop' | 'drop' | 'list',
           p.options as { message?: string; index?: number } | undefined
         );
+      case 'git.stashList':
+        return gitService.stashList();
+      case 'git.stashApply':
+        await gitService.stashApply(p.index as number | undefined);
+        return { success: true };
+      case 'git.stashPop':
+        await gitService.stash('pop', { index: p.index as number | undefined });
+        return { success: true };
+      case 'git.stashDrop':
+        await gitService.stash('drop', { index: p.index as number | undefined });
+        return { success: true };
+      case 'git.stashPush':
+        await gitService.stash('push', { message: p.message as string | undefined });
+        return { success: true };
+      case 'git.worktreeList':
+        return gitService.worktreeList();
+      case 'git.worktreeAdd':
+        await gitService.worktreeAdd(
+          p.path as string,
+          p.branch as string | undefined,
+          p.newBranch as string | undefined
+        );
+        return { success: true };
+      case 'git.worktreeRemove':
+        await gitService.worktreeRemove(p.path as string, p.force as boolean | undefined);
+        return { success: true };
       case 'git.push':
         await gitService.push(
           p.remote as string | undefined,
@@ -283,6 +309,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
         // Open VS Code diff editor
         await vscode.commands.executeCommand('vscode.diff', parentUri, currentUri, title);
+        return { success: true };
+      }
+      case 'ui.openFolder': {
+        const folderUri = vscode.Uri.file(p.path as string);
+        await vscode.commands.executeCommand('vscode.openFolder', folderUri, { forceNewWindow: true });
         return { success: true };
       }
       default:

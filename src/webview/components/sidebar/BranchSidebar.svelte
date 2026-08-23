@@ -16,8 +16,26 @@
     taggerDate: string | null;
   }
 
+  interface StashEntry {
+    index: number;
+    message: string;
+    date: string;
+    branch: string;
+    hash: string;
+  }
+
+  interface WorktreeEntry {
+    path: string;
+    head: string;
+    branch: string | null;
+    bare: boolean;
+    isMain: boolean;
+  }
+
   export let branches: Branch[] = [];
   export let tags: Tag[] = [];
+  export let stashes: StashEntry[] = [];
+  export let worktrees: WorktreeEntry[] = [];
 
   const dispatch = createEventDispatcher();
 
@@ -38,6 +56,8 @@
   let localExpanded = true;
   let remoteExpanded = true;
   let tagsExpanded = true;
+  let stashesExpanded = true;
+  let worktreesExpanded = true;
   let expandedRemotes: Record<string, boolean> = {};
 
   function isRemoteExpanded(remote: string): boolean {
@@ -63,6 +83,18 @@
     event.preventDefault();
     event.stopPropagation();
     dispatch('tagContextMenu', { event, tag });
+  }
+
+  function handleStashContextMenu(event: MouseEvent, stash: StashEntry) {
+    event.preventDefault();
+    event.stopPropagation();
+    dispatch('stashContextMenu', { event, stash });
+  }
+
+  function handleWorktreeContextMenu(event: MouseEvent, worktree: WorktreeEntry) {
+    event.preventDefault();
+    event.stopPropagation();
+    dispatch('worktreeContextMenu', { event, worktree });
   }
 
   function getShortName(branch: Branch): string {
@@ -172,6 +204,67 @@
           >
             <span class="branch-icon">🏷</span>
             <span class="branch-name">{tag.name}</span>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </div>
+
+  <!-- STASHES section -->
+  <div class="section">
+    <button
+      class="section-header"
+      on:click={() => { stashesExpanded = !stashesExpanded; }}
+    >
+      <span class="chevron" class:collapsed={!stashesExpanded}>▶</span>
+      <span class="section-title">STASHES</span>
+      <span class="section-count">{stashes.length}</span>
+    </button>
+
+    {#if stashesExpanded}
+      <ul class="branch-list">
+        {#each stashes as stash (stash.index)}
+          <li
+            class="branch-item stash"
+            on:contextmenu={(e) => handleStashContextMenu(e, stash)}
+            role="treeitem"
+            aria-selected={false}
+          >
+            <span class="branch-icon">📦</span>
+            <span class="branch-name" title={stash.message}>
+              {stash.message || `stash@{${stash.index}}`}
+            </span>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </div>
+
+  <!-- WORKTREES section -->
+  <div class="section">
+    <button
+      class="section-header"
+      on:click={() => { worktreesExpanded = !worktreesExpanded; }}
+    >
+      <span class="chevron" class:collapsed={!worktreesExpanded}>▶</span>
+      <span class="section-title">WORKTREES</span>
+      <span class="section-count">{worktrees.length}</span>
+    </button>
+
+    {#if worktreesExpanded}
+      <ul class="branch-list">
+        {#each worktrees as wt (wt.path)}
+          <li
+            class="branch-item worktree"
+            class:main={wt.isMain}
+            on:contextmenu={(e) => handleWorktreeContextMenu(e, wt)}
+            role="treeitem"
+            aria-selected={wt.isMain}
+          >
+            <span class="branch-icon">{wt.isMain ? '🏠' : '📂'}</span>
+            <span class="branch-name" title={wt.path}>
+              {wt.branch ?? wt.head?.substring(0, 7) ?? '???'}
+            </span>
           </li>
         {/each}
       </ul>
@@ -309,5 +402,18 @@
 
   .branch-item.tag .branch-name {
     color: var(--vscode-editorWarning-foreground, #d7ba7d);
+  }
+
+  .branch-item.stash .branch-name {
+    color: var(--vscode-descriptionForeground, #aaaaaa);
+    font-style: italic;
+  }
+
+  .branch-item.worktree .branch-name {
+    color: var(--vscode-textLink-foreground, #4fc1ff);
+  }
+
+  .branch-item.worktree.main .branch-name {
+    font-weight: 600;
   }
 </style>

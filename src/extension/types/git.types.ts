@@ -92,3 +92,20 @@ export enum GitErrorCode {
   GIT_NOT_FOUND = 12,
   UNKNOWN = 99
 }
+
+
+export interface StashEntry {
+  index: number;
+  message: string;
+  date: string;       // ISO 8601
+  branch: string;     // branch where stash was created
+  hash: string;       // stash commit hash
+}
+
+export interface WorktreeEntry {
+  path: string;
+  head: string;       // commit hash HEAD points to
+  branch: string | null; // null if detached HEAD
+  bare: boolean;
+  isMain: boolean;    // true for the main worktree
+}
