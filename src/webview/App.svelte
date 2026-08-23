@@ -88,6 +88,7 @@
   let maxLane = 0;
   let layoutVersion: number | null = null;
   let graphWindow: GraphWindow | null = null;
+  let selectedBranchFilter: string | null = null;
   let selectedHash: string | null = null;
   let selectedHashes: Set<string> = new Set();
   let lastClickedHash: string | null = null;
@@ -228,8 +229,10 @@
     loading = false;
     try {
       const result = await bridge.send('repo.switch', { path }) as { name: string };
+      branches = [];
       activeRepoName = result.name;
       repos = repos.map(r => ({ ...r, active: r.path === path }));
+      selectedBranchFilter = null;
       selectedHash = null;
       selectedHashes = new Set();
       rightPanelOpen = false;
@@ -244,6 +247,7 @@
 
   async function refreshGraph() {
     const refreshToken = graphRefreshGate.issue();
+    const branchFilter = selectedBranchFilter;
     graphWindowRequestGate.issue();
     loading = false;
 
@@ -255,7 +259,9 @@
         bridge.send('git.worktreeList') as Promise<typeof worktrees>,
         bridge.send('git.submoduleList') as Promise<SubmoduleEntry[]>,
         bridge.send('git.status').catch(() => null) as Promise<WorkingTreeStatus | null>,
-        bridge.send('graph.build', { all: true }) as Promise<{
+        bridge.send('graph.build', branchFilter
+          ? { branch: branchFilter, all: false }
+          : { all: true }) as Promise<{
           totalRows: number;
           maxLane: number;
           layoutVersion: number;
@@ -290,7 +296,9 @@
       graphWindow = nextWindow;
       currentStartRow = nextWindow.startRow;
       loading = false;
-      status = `${nextBranches.length} branches, ${build.totalRows} commits`;
+      status = branchFilter
+        ? `${build.totalRows} commits on ${branchFilter}`
+        : `${nextBranches.length} branches, ${build.totalRows} commits`;
     } catch (refreshError) {
       if (!graphRefreshGate.isLatest(refreshToken)) return;
       throw refreshError;
@@ -655,6 +663,27 @@
         ref = ref.replace(/^[^/]+\//, '');
       }
       await runDirectMutation('Checking out…', () => bridge.send('git.checkout', { ref }) as Promise<void>);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      setTimeout(() => { error = ''; }, 5000);
+    }
+  }
+
+  async function handleBranchFilter(event: CustomEvent<{ name: string }>) {
+    selectedBranchFilter = selectedBranchFilter === event.detail.name
+      ? null
+      : event.detail.name;
+    selectedHash = null;
+    selectedHashes = new Set();
+    lastClickedHash = null;
+    rightPanelOpen = false;
+    detailCommit = null;
+    detailFiles = null;
+    scrollTop = 0;
+    if (scrollContainer) scrollContainer.scrollTop = 0;
+
+    try {
+      await refreshGraph();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       setTimeout(() => { error = ''; }, 5000);
@@ -1165,21 +1194,25 @@
     <!-- Left sidebar: Branches -->
     {#if leftSidebarOpen}
       <aside class="left-sidebar" style="width: {leftSidebarWidth}px;">
-        <BranchSidebar
-          {branches}
-          {tags}
-          {stashes}
-          {worktrees}
-          {submodules}
-          on:branchContextMenu={handleBranchContextMenu}
-          on:tagContextMenu={handleTagContextMenu}
-          on:stashContextMenu={handleStashContextMenu}
-          on:worktreeContextMenu={handleWorktreeContextMenu}
-          on:checkout={handleBranchCheckout}
-          on:stashApply={handleSidebarStashApply}
-          on:worktreeOpen={handleSidebarWorktreeOpen}
-          on:submoduleOpen={handleSidebarSubmoduleOpen}
-        />
+        {#key activeRepoName}
+          <BranchSidebar
+            {branches}
+            {tags}
+            {stashes}
+            {worktrees}
+            {submodules}
+            selectedBranch={selectedBranchFilter}
+            on:branchFilter={handleBranchFilter}
+            on:branchContextMenu={handleBranchContextMenu}
+            on:tagContextMenu={handleTagContextMenu}
+            on:stashContextMenu={handleStashContextMenu}
+            on:worktreeContextMenu={handleWorktreeContextMenu}
+            on:checkout={handleBranchCheckout}
+            on:stashApply={handleSidebarStashApply}
+            on:worktreeOpen={handleSidebarWorktreeOpen}
+            on:submoduleOpen={handleSidebarSubmoduleOpen}
+          />
+        {/key}
       </aside>
       <ResizeHandle
         side="left"

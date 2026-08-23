@@ -21,12 +21,16 @@ describe('App sidebar primary actions', () => {
     on.mockClear();
   });
 
-  async function renderApp() {
+  async function renderApp(repos = [{ name: 'repo', path: '/repo', active: true }]) {
     vi.stubGlobal('acquireVsCodeApi', () => ({ postMessage: vi.fn(), getState: () => null, setState: vi.fn() }));
-    send.mockImplementation(async (method: string) => {
+    send.mockImplementation(async (method: string, params?: unknown) => {
       switch (method) {
         case 'ping.hello': return { ok: true };
-        case 'repo.list': return { repos: [{ name: 'repo', path: '/repo', active: true }] };
+        case 'repo.list': return { repos };
+        case 'repo.switch': {
+          const path = (params as { path: string }).path;
+          return { name: repos.find(repo => repo.path === path)?.name ?? '' };
+        }
         case 'git.branches': return [branch];
         case 'git.tags': return [{ name: 'v1.0.0', hash: 'b'.repeat(40), message: null, taggerDate: null }];
         case 'git.stashList': return [{ index: 2, message: 'save work', date: '2026-08-23', branch: 'main', hash: 'c'.repeat(40) }];
@@ -66,5 +70,53 @@ describe('App sidebar primary actions', () => {
 
     await fireEvent.click(getByRole('button', { name: /submodule sdk.*packages\/sdk.*initialized/i }));
     await waitFor(() => expect(send).toHaveBeenCalledWith('ui.openSubmodule', { path: 'packages/sdk' }));
+  });
+
+  it('filters the graph by a clicked branch and clears the filter when clicked again', async () => {
+    const { getByRole } = await renderApp();
+    const branchRow = getByRole('button', { name: 'main' });
+
+    expect(send).toHaveBeenCalledWith('graph.build', { all: true });
+
+    await fireEvent.click(branchRow);
+    await waitFor(() => {
+      expect(send).toHaveBeenCalledWith('graph.build', { branch: 'main', all: false });
+      expect(getByRole('button', { name: 'main' })).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    const buildCountAfterFiltering = send.mock.calls.filter(([method]) => method === 'graph.build').length;
+    await fireEvent.click(getByRole('button', { name: 'main' }));
+
+    await waitFor(() => {
+      const buildCalls = send.mock.calls.filter(([method]) => method === 'graph.build');
+      expect(buildCalls.length).toBeGreaterThan(buildCountAfterFiltering);
+      expect(buildCalls.at(-1)).toEqual(['graph.build', { all: true }]);
+      expect(getByRole('button', { name: 'main' })).toHaveAttribute('aria-pressed', 'false');
+    });
+  });
+
+  it('clears the branch filter when switching repositories', async () => {
+    const repos = [
+      { name: 'repo', path: '/repo', active: true },
+      { name: 'repo-two', path: '/repo-two', active: false },
+    ];
+    const { getByRole } = await renderApp(repos);
+
+    await fireEvent.click(getByRole('button', { name: 'main' }));
+    await waitFor(() => expect(send).toHaveBeenCalledWith(
+      'graph.build',
+      { branch: 'main', all: false },
+    ));
+
+    const buildCount = send.mock.calls.filter(([method]) => method === 'graph.build').length;
+    await fireEvent.change(getByRole('combobox'), { target: { value: '/repo-two' } });
+
+    await waitFor(() => {
+      const buildCalls = send.mock.calls.filter(([method]) => method === 'graph.build');
+      expect(send).toHaveBeenCalledWith('repo.switch', { path: '/repo-two' });
+      expect(buildCalls.length).toBeGreaterThan(buildCount);
+      expect(buildCalls.at(-1)).toEqual(['graph.build', { all: true }]);
+      expect(getByRole('button', { name: 'main' })).toHaveAttribute('aria-pressed', 'false');
+    });
   });
 });
