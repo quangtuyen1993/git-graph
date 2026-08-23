@@ -632,10 +632,9 @@
       <div class="table-header" style="--graph-col-width: {graphColWidth}px">
         <div class="col-graph">&#160;</div>
         <div class="col-message">MESSAGE</div>
-        <div class="col-files">&#160;</div>
         <div class="col-date">DATE</div>
         <div class="col-sha">SHA</div>
-        <div class="col-avatar">&#160;</div>
+        <div class="col-author">AUTHOR</div>
       </div>
 
       <section class="scroll-area" bind:this={scrollContainer} on:scroll={handleScroll}>
@@ -669,10 +668,9 @@
               <div class="col-message">
                 <span class="working-label">● Working Changes</span>
               </div>
-              <div class="col-files"></div>
               <div class="col-date"></div>
               <div class="col-sha"></div>
-              <div class="col-avatar"></div>
+              <div class="col-author"></div>
             </div>
           {/if}
 
@@ -695,22 +693,18 @@
                   {/each}
                   <span class="commit-subject">{node.subject}</span>
                 </div>
-                <div class="col-files">
-                  {#if node.filesChanged > 0}
-                    <span class="files-badge" title="{node.filesChanged} files changed">{node.filesChanged}</span>
-                  {/if}
-                </div>
                 <div class="col-date">{formatRelativeTime(node.authorDate)}</div>
                 <div class="col-sha">{node.abbreviatedHash}</div>
-                <div class="col-avatar">
+                <div class="col-author">
                   <img
                     src={getGravatarUrl(node.authorEmail || '')}
                     alt={node.author}
                     title={node.author}
                     class="avatar"
-                    width="20"
-                    height="20"
+                    width="18"
+                    height="18"
                   />
+                  <span class="author-name">{node.author}</span>
                 </div>
               </div>
             {/each}
@@ -927,11 +921,6 @@
     padding-left: 8px;
   }
 
-  .table-header .col-files {
-    width: 36px;
-    min-width: 36px;
-  }
-
   .table-header .col-date {
     width: 80px;
     min-width: 80px;
@@ -944,9 +933,11 @@
     padding-left: 8px;
   }
 
-  .table-header .col-avatar {
-    width: 32px;
-    min-width: 32px;
+  .table-header .col-author {
+    width: 140px;
+    min-width: 140px;
+    padding-left: 8px;
+    padding-right: 8px;
   }
 
   /* Scroll area */
@@ -1010,14 +1001,6 @@
     gap: 6px;
   }
 
-  .commit-row .col-files {
-    width: 36px;
-    min-width: 36px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
   .commit-row .col-date {
     width: 80px;
     min-width: 80px;
@@ -1037,27 +1020,29 @@
     white-space: nowrap;
   }
 
-  .commit-row .col-avatar {
-    width: 32px;
-    min-width: 32px;
+  .commit-row .col-author {
+    width: 140px;
+    min-width: 140px;
+    padding-left: 8px;
+    padding-right: 8px;
     display: flex;
     align-items: center;
-    justify-content: center;
-    padding-right: 4px;
+    gap: 6px;
+    overflow: hidden;
   }
 
   .avatar {
     border-radius: 50%;
     opacity: 0.85;
+    flex-shrink: 0;
   }
 
-  .files-badge {
-    background: var(--vscode-badge-background, #4d4d4d);
-    color: var(--vscode-badge-foreground, #ffffff);
-    padding: 1px 5px;
-    border-radius: 8px;
-    font-size: 10px;
-    font-weight: 600;
+  .author-name {
+    font-size: 11px;
+    opacity: 0.7;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .working-changes .working-label {

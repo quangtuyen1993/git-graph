@@ -247,7 +247,7 @@ export function parseStatus(output: string): GitStatus {
 export function parseFileChanges(output: string): FileChange[] {
   if (!output.trim()) return [];
 
-  const lines = output.trim().split('\n').filter(Boolean);
+  const lines = output.trim().split('\n').filter(line => line.includes('\t'));
   return lines.map(line => {
     const parts = line.split('\t');
     const rawAdditions = parts[0] ?? '0';
