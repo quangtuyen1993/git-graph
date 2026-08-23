@@ -97,6 +97,28 @@ describe('ContextMenu', () => {
     trigger.remove();
   });
 
+  it('does not steal focus from an outside control that dismisses the menu with a mouse click', async () => {
+    const trigger = document.createElement('button');
+    const outsideControl = document.createElement('button');
+    document.body.append(trigger, outsideControl);
+    trigger.focus();
+    const result = render(ContextMenu, { items, visible: true });
+    let closeTransition: Promise<void> | undefined;
+    result.component.$on('close', () => {
+      closeTransition = Promise.resolve().then(() => result.rerender({ visible: false }));
+    });
+    outsideControl.addEventListener('mousedown', () => outsideControl.focus());
+
+    await tick();
+    await fireEvent.mouseDown(outsideControl);
+    expect(closeTransition).toBeDefined();
+    await closeTransition!;
+
+    expect(document.activeElement).toBe(outsideControl);
+    trigger.remove();
+    outsideControl.remove();
+  });
+
   it('clamps its visible coordinates after measuring its size', async () => {
     const { getByRole } = render(ContextMenu, { items, visible: true, x: 790, y: 590 });
 

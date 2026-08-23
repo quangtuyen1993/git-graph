@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount, onDestroy, tick } from 'svelte';
+  import { createEventDispatcher, tick } from 'svelte';
   import type { MenuItem } from '../../types/menu.types';
   import { clampMenuPosition } from '../../lib/context-menu-position';
 
@@ -14,8 +14,10 @@
   let positionedY = y;
   let wasVisible = false;
   let previouslyFocusedElement: HTMLElement | null = null;
+  let restoreFocusOnClose = false;
 
-  function close() {
+  function close({ restoreFocus = false }: { restoreFocus?: boolean } = {}) {
+    restoreFocusOnClose = restoreFocus;
     dispatch('close');
   }
 
@@ -103,7 +105,7 @@
         break;
       case 'Escape':
         event.preventDefault();
-        close();
+        close({ restoreFocus: true });
         break;
     }
   }
@@ -115,24 +117,20 @@
     }
   }
 
-  onMount(() => {
-    document.addEventListener('mousedown', handleClickOutside, true);
-    document.addEventListener('contextmenu', handleContextMenu, true);
-  });
-
-  onDestroy(() => {
-    document.removeEventListener('mousedown', handleClickOutside, true);
-    document.removeEventListener('contextmenu', handleContextMenu, true);
-  });
-
   $: if (visible && !wasVisible) {
     wasVisible = true;
     void openMenu();
   } else if (!visible && wasVisible) {
     wasVisible = false;
-    restoreFocus();
+    if (restoreFocusOnClose) restoreFocus();
+    restoreFocusOnClose = false;
   }
 </script>
+
+<svelte:window
+  on:mousedown|capture={handleClickOutside}
+  on:contextmenu|capture={handleContextMenu}
+/>
 
 {#if visible}
   <div

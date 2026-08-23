@@ -9,7 +9,7 @@
   import { hasWorkingTreeChanges, type WorkingTreeStatus } from './lib/git-status';
   import { handleLatestWindowIntent, LatestRequestGate } from './lib/latest-request';
   import { MutationGate, runMutationWithProgress } from './lib/mutation-gate';
-  import { clampPanelWidths } from './lib/context-menu-position';
+  import { calculatePanelLayout, resizePanel, type PanelLayout, type PanelSide } from './lib/panel-layout';
   import CommitDetail from './components/detail/CommitDetail.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
   import ResizeHandle from './components/layout/ResizeHandle.svelte';
@@ -115,6 +115,10 @@
   let rightPanelOpen = false;
   let leftSidebarWidth = 200;
   let rightPanelWidth = 340;
+  let leftPanelMinWidth = 0;
+  let leftPanelMaxWidth = 400;
+  let rightPanelMinWidth = 0;
+  let rightPanelMaxWidth = 600;
 
   // Context menu state
   let contextMenuVisible = false;
@@ -157,17 +161,32 @@
   });
 
   function clampSidePanelWidths() {
-    const handleWidth = 4;
-    const activeHandleWidth = (leftSidebarOpen ? handleWidth : 0) + (rightPanelOpen ? handleWidth : 0);
-    const widths = clampPanelWidths({
+    applyPanelLayout(calculatePanelLayout({
       leftWidth: leftSidebarWidth,
       rightWidth: rightPanelWidth,
-      viewportWidth: Math.max(0, window.innerWidth - activeHandleWidth),
+      viewportWidth: window.innerWidth,
       leftOpen: leftSidebarOpen,
       rightOpen: rightPanelOpen,
-    });
-    leftSidebarWidth = widths.leftWidth;
-    rightPanelWidth = widths.rightWidth;
+    }));
+  }
+
+  function applyPanelLayout(layout: PanelLayout) {
+    leftSidebarWidth = layout.left.width;
+    rightPanelWidth = layout.right.width;
+    leftPanelMinWidth = layout.left.minWidth;
+    leftPanelMaxWidth = layout.left.maxWidth;
+    rightPanelMinWidth = layout.right.minWidth;
+    rightPanelMaxWidth = layout.right.maxWidth;
+  }
+
+  function handlePanelResize(side: PanelSide, event: CustomEvent<{ width: number }>) {
+    applyPanelLayout(resizePanel({
+      leftWidth: leftSidebarWidth,
+      rightWidth: rightPanelWidth,
+      viewportWidth: window.innerWidth,
+      leftOpen: leftSidebarOpen,
+      rightOpen: rightPanelOpen,
+    }, side, event.detail.width));
   }
 
   function toggleLeftSidebar() {
@@ -896,9 +915,10 @@
       </aside>
       <ResizeHandle
         side="left"
-        bind:currentWidth={leftSidebarWidth}
-        minWidth={150}
-        maxWidth={400}
+        currentWidth={leftSidebarWidth}
+        minWidth={leftPanelMinWidth}
+        maxWidth={leftPanelMaxWidth}
+        on:resize={(event) => handlePanelResize('left', event)}
       />
     {/if}
 
@@ -994,9 +1014,10 @@
     {#if rightPanelOpen}
       <ResizeHandle
         side="right"
-        bind:currentWidth={rightPanelWidth}
-        minWidth={280}
-        maxWidth={600}
+        currentWidth={rightPanelWidth}
+        minWidth={rightPanelMinWidth}
+        maxWidth={rightPanelMaxWidth}
+        on:resize={(event) => handlePanelResize('right', event)}
       />
       <aside class="right-panel" style="width: {rightPanelWidth}px;">
         <div class="right-panel-header">
