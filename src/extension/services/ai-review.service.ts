@@ -58,7 +58,7 @@ export class AIReviewService {
     }
 
     // Check kiro CLI
-    if (await this.isCommandAvailable('kiro')) {
+    if (await this.isCommandAvailable('kiro-cli')) {
       providers.push({
         id: 'kiro',
         name: 'Kiro',
@@ -143,7 +143,7 @@ export class AIReviewService {
 
   private async runKiro(input: string): Promise<string> {
     const args = ['chat', '--print'];
-    return this.spawnWithStdin('kiro', args, input);
+    return this.spawnWithStdin('kiro-cli', args, input);
   }
 
   private async runOpenAI(input: string, model: string): Promise<string> {
