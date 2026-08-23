@@ -222,19 +222,27 @@ export class AIReviewService {
   }
 
   private async runCodex(input: string, model: string): Promise<string> {
-    // codex exec reads prompt from stdin when piped
     const args = ['exec'];
     if (model && model !== 'default') args.push('-c', `model="${model}"`);
     const raw = await this.spawnWithStdin('codex', args, input);
-    // Strip ANSI escape codes and codex header lines
-    return raw
-      .replace(/\x1b\[[0-9;]*m/g, '')
+    // Strip ANSI escape codes
+    const clean = raw.replace(/\x1b\[[0-9;]*m/g, '');
+    // Extract content between "codex\n" and "tokens used\n"
+    const codexIdx = clean.indexOf('\ncodex\n');
+    const tokensIdx = clean.indexOf('\ntokens used\n');
+    if (codexIdx !== -1 && tokensIdx !== -1) {
+      return clean.substring(codexIdx + 7, tokensIdx).trim();
+    }
+    // Fallback: strip known header patterns
+    return clean
+      .replace(/^Reading prompt from stdin\.\.\.\n/m, '')
       .replace(/^OpenAI Codex.*\n/m, '')
       .replace(/^-+\n/m, '')
       .replace(/^(workdir|model|provider|approval|sandbox|reasoning.*|session id):.*\n/gm, '')
+      .replace(/^-+\n/m, '')
       .replace(/^user\n/m, '')
-      .replace(/^codex\n/m, '')
-      .replace(/^tokens used\n[\d,]+\n/m, '')
+      .replace(/[\s\S]*?\ncodex\n/m, '')
+      .replace(/\ntokens used\n[\d,]+\n[\s\S]*$/m, '')
       .trim();
   }
 
