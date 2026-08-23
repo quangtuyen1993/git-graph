@@ -6,6 +6,7 @@ import { calculateVisibleRange, getTotalHeight } from '../src/webview/lib/virtua
 import { calculatePanelLayout, resizePanel } from '../src/webview/lib/panel-layout';
 import { GitService } from '../src/extension/services/git.service';
 import type { Commit } from '../src/extension/types/git.types';
+import { BRANCH_FORMAT, TAG_FORMAT, LOG_FORMAT } from '../src/extension/utils/git-parser';
 
 const commit = (hash: string, parents: string[] = []): Commit => ({
   hash, abbreviatedHash: hash.slice(0, 7), parents, author: 'A', authorEmail: 'a@example.com',
@@ -46,18 +47,48 @@ describe('coverage closure helpers', () => {
   it('covers GitService command construction and defensive branches', async () => {
     const service = new GitService('/repo');
     const calls: string[][] = [];
-    (service as any).cli = { getRepoPath: () => '/repo', setRepoPath: vi.fn(), exec: vi.fn(async (args: string[]) => { calls.push(args); return ''; }) };
-    await service.log({ maxCount: 2, skip: 1, author: 'A', grep: 'x', after: 'y', before: 'z', all: true, branch: 'main' });
-    await service.branches(); await service.tags(); await service.status();
-    await service.checkout('main'); await service.createBranch('b'); await service.createBranch('c', 'HEAD');
-    await service.deleteBranch('b'); await service.deleteBranch('b', true); await service.renameBranch('b', 'c');
-    await service.merge('b', { noFF: true, message: 'm' }); await service.rebase('main'); await service.cherryPick('h'); await service.revert('h');
-    await service.stash('push', { message: 'save' }); await service.stash('pop', { index: 2 }); await service.stash('drop');
-    await service.push('origin', 'main', { force: true, setUpstream: true }); await service.pull('origin', 'main', { rebase: true }); await service.fetch();
-    await service.reset('hard', 'HEAD'); await service.createTag('v'); await service.createTag('w', 'HEAD', 'tag'); await service.deleteTag('v'); await service.abortMerge(); await service.abortRebase();
-    await service.getShortStats(); await service.showFile('h', 'missing'); await service.getParents('h'); await service.stashApply();
-    await service.worktreeList(); await service.worktreeAdd('/tmp/w'); await service.worktreeAdd('/tmp/w', 'main'); await service.worktreeAdd('/tmp/w', undefined, 'new'); await service.worktreeRemove('/tmp/w', true);
-    expect(calls.length).toBeGreaterThan(30);
+    const exec = vi.fn(async (args: string[]) => { calls.push(args); return ''; });
+    (service as any).cli = { getRepoPath: () => '/repo', setRepoPath: vi.fn(), exec };
+    const cases: Array<{ name: string; expected: string[]; run: () => Promise<unknown> }> = [
+      { name: 'log options', expected: ['log', `--format=${LOG_FORMAT}`, '--max-count=2', '--skip=1', '--author=A', '--grep=x', '--after=y', '--before=z', '--all', 'main'], run: () => service.log({ maxCount: 2, skip: 1, author: 'A', grep: 'x', after: 'y', before: 'z', all: true, branch: 'main' }) },
+      { name: 'branches', expected: ['branch', '-a', `--format=${BRANCH_FORMAT}`], run: () => service.branches() },
+      { name: 'tags', expected: ['tag', '-l', `--format=${TAG_FORMAT}`], run: () => service.tags() },
+      { name: 'status', expected: ['status', '--porcelain=v2', '--branch', '-z'], run: () => service.status() },
+      { name: 'checkout', expected: ['checkout', 'main'], run: () => service.checkout('main') },
+      { name: 'branch', expected: ['branch', 'b'], run: () => service.createBranch('b') },
+      { name: 'branch start', expected: ['branch', 'c', 'HEAD'], run: () => service.createBranch('c', 'HEAD') },
+      { name: 'delete', expected: ['branch', '-d', 'b'], run: () => service.deleteBranch('b') },
+      { name: 'delete force', expected: ['branch', '-D', 'b'], run: () => service.deleteBranch('b', true) },
+      { name: 'rename', expected: ['branch', '-m', 'b', 'c'], run: () => service.renameBranch('b', 'c') },
+      { name: 'merge', expected: ['merge', 'b', '--no-ff', '-m', 'm'], run: () => service.merge('b', { noFF: true, message: 'm' }) },
+      { name: 'rebase', expected: ['rebase', 'main'], run: () => service.rebase('main') },
+      { name: 'cherry-pick', expected: ['cherry-pick', 'h'], run: () => service.cherryPick('h') },
+      { name: 'revert', expected: ['revert', '--no-edit', 'h'], run: () => service.revert('h') },
+      { name: 'stash push', expected: ['stash', 'push', '-m', 'save'], run: () => service.stash('push', { message: 'save' }) },
+      { name: 'stash pop', expected: ['stash', 'pop', 'stash@{2}'], run: () => service.stash('pop', { index: 2 }) },
+      { name: 'stash drop', expected: ['stash', 'drop'], run: () => service.stash('drop') },
+      { name: 'stash apply', expected: ['stash', 'apply'], run: () => service.stashApply() },
+      { name: 'push', expected: ['push', '--force-with-lease', '-u', 'origin', 'main'], run: () => service.push('origin', 'main', { force: true, setUpstream: true }) },
+      { name: 'pull', expected: ['pull', '--rebase', 'origin', 'main'], run: () => service.pull('origin', 'main', { rebase: true }) },
+      { name: 'fetch all', expected: ['fetch', '--all'], run: () => service.fetch() },
+      { name: 'reset', expected: ['reset', '--hard', 'HEAD'], run: () => service.reset('hard', 'HEAD') },
+      { name: 'annotated tag', expected: ['tag', '-a', 'w', '-m', 'tag', 'HEAD'], run: () => service.createTag('w', 'HEAD', 'tag') },
+      { name: 'tag', expected: ['tag', 'v'], run: () => service.createTag('v') },
+      { name: 'delete tag', expected: ['tag', '-d', 'v'], run: () => service.deleteTag('v') },
+      { name: 'abort merge', expected: ['merge', '--abort'], run: () => service.abortMerge() },
+      { name: 'abort rebase', expected: ['rebase', '--abort'], run: () => service.abortRebase() },
+      { name: 'short stats', expected: ['log', '--shortstat', '--format=%H', '--all', '--max-count=500'], run: () => service.getShortStats() },
+      { name: 'show file', expected: ['show', 'h:missing'], run: () => service.showFile('h', 'missing') },
+      { name: 'parents', expected: ['rev-parse', 'h^'], run: () => service.getParents('h') },
+      { name: 'worktrees', expected: ['worktree', 'list', '--porcelain'], run: () => service.worktreeList() },
+      { name: 'worktree new branch', expected: ['worktree', 'add', '-b', 'new', '/tmp/w'], run: () => service.worktreeAdd('/tmp/w', undefined, 'new') },
+      { name: 'worktree remove', expected: ['worktree', 'remove', '--force', '/tmp/w'], run: () => service.worktreeRemove('/tmp/w', true) },
+    ];
+    for (const testCase of cases) {
+      calls.length = 0;
+      await testCase.run();
+      expect(calls).toEqual([testCase.expected]);
+    }
     (service as any).cli.exec = vi.fn(async (args: string[]) => { if (args[0] === 'merge-base') throw new Error('no'); if (args[0] === 'rev-parse') throw new Error('no'); return ''; });
     await expect(service.canSquash(['a'])).resolves.toMatchObject({ ok: false });
     await expect(service.canSquash(['a', 'b'])).resolves.toMatchObject({ ok: false });

@@ -1,6 +1,5 @@
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/svelte';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import App from '../../src/webview/App.svelte';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { send, on } = vi.hoisted(() => ({ send: vi.fn(), on: vi.fn(() => vi.fn()) }));
 vi.mock('../../src/webview/lib/message-bridge', () => ({ bridge: { send, on } }));
@@ -12,7 +11,7 @@ describe('App published-history confirmation flow', () => {
     on.mockClear();
   });
 
-  it.skip('cancels rewording of a published commit when confirmation is declined', async () => {
+  async function renderApp(confirmed: boolean) {
     vi.stubGlobal('acquireVsCodeApi', () => ({ postMessage: vi.fn(), getState: () => null, setState: vi.fn() }));
     send.mockImplementation(async (method: string) => {
       switch (method) {
@@ -26,17 +25,37 @@ describe('App published-history confirmation flow', () => {
         case 'git.show': return { commit: { message: 'old', subject: 'old' }, files: [] };
         case 'ui.inputBox': return 'new message';
         case 'git.isPublished': return { published: true };
-        case 'ui.confirm': return false;
+        case 'ui.confirm': return confirmed;
         default: return undefined;
       }
     });
-    const { container, getByRole } = render(App);
+    vi.resetModules();
+    const { default: App } = await import('../../src/webview/App.svelte');
+    const rendered = render(App);
+    const { container, getByRole } = rendered;
     await waitFor(() => expect(send).toHaveBeenCalledWith('graph.getWindow', expect.anything()));
     await waitFor(() => expect(container.querySelector('.commit-row')).toBeTruthy(), { timeout: 5000 });
     await fireEvent.contextMenu(container.querySelector('.commit-row')!, { clientX: 10, clientY: 10 });
     await waitFor(() => expect(getByRole('menuitem', { name: 'Reword message...' })).toBeEnabled());
     await fireEvent.click(getByRole('menuitem', { name: 'Reword message...' }));
     await waitFor(() => expect(send).toHaveBeenCalledWith('ui.confirm', expect.anything()));
+    return rendered;
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal('acquireVsCodeApi', () => ({ postMessage: vi.fn(), getState: () => null, setState: vi.fn() }));
+  });
+
+  it('cancels rewording of a published commit when confirmation is declined', async () => {
+    await renderApp(false);
     expect(send).not.toHaveBeenCalledWith('git.reword', expect.anything());
+  });
+
+  it('dispatches reword for a published commit when confirmation is accepted', async () => {
+    await renderApp(true);
+    await waitFor(() => expect(send).toHaveBeenCalledWith('git.reword', {
+      hash: 'a'.repeat(40),
+      message: 'new message',
+    }));
   });
 });

@@ -58,10 +58,14 @@ describe('GitService file changes', () => {
   });
 
   it('reconciles GitService.diff numstat and name-status streams', async () => {
-    await writeFiles(repo.path, { 'base.txt': 'one\n' });
+    const copyBase = Array.from({ length: 10 }, (_, index) => `line-${index}`).join('\n') + '\n';
+    const copyChanged = copyBase + 'updated\n';
+    await writeFiles(repo.path, { 'base.txt': 'one\n', 'rename-me.txt': 'rename\n', 'copy-source.txt': copyBase });
     await repo.execGit(['add', '.']);
     await repo.execGit(['commit', '-m', 'base']);
-    await writeFiles(repo.path, { 'base.txt': 'one\ntwo\n', 'new.txt': 'new\n' });
+    await rename(path.join(repo.path, 'rename-me.txt'), path.join(repo.path, 'renamed.txt'));
+    await writeFiles(repo.path, { 'base.txt': 'one\ntwo\n', 'new.txt': 'new\n', 'copy-source.txt': copyChanged, 'copy.txt': copyChanged });
+    await writeFile(path.join(repo.path, 'image.bin'), Buffer.from([0, 1, 2, 3]));
     await repo.execGit(['add', '.']);
     await repo.execGit(['commit', '-m', 'change']);
     const head = (await repo.execGit(['rev-parse', 'HEAD'])).trim();
@@ -71,6 +75,9 @@ describe('GitService file changes', () => {
     expect(result.files).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: 'base.txt', status: 'modified', additions: 1, deletions: 0 }),
       expect.objectContaining({ path: 'new.txt', status: 'added', additions: 1, deletions: 0 }),
+      expect.objectContaining({ path: 'renamed.txt', oldPath: 'rename-me.txt', status: 'renamed' }),
+      expect.objectContaining({ path: 'copy.txt', oldPath: 'copy-source.txt', status: 'copied' }),
+      expect.objectContaining({ path: 'image.bin', status: 'added', binary: true, additions: 0, deletions: 0 }),
     ]));
   });
 });
