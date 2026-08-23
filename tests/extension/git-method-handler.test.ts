@@ -9,6 +9,7 @@ const fakeGitService = {
   branches: async () => [],
   tags: async () => [],
   status: async () => ({ branch: '', ahead: 0, behind: 0, staged: [], unstaged: [], untracked: [] }),
+  submoduleList: async () => [],
   show: async () => ({ commit: {}, files: [] }),
   diff: async () => ({ files: [], raw: '' }),
   checkout: async () => undefined,
@@ -41,6 +42,11 @@ const fakeGitService = {
 } satisfies Partial<GitService>;
 
 describe('handleGitMethod', () => {
+  it('returns discovered submodules', async () => {
+    await expect(handleGitMethod(fakeGitService as GitService, 'git.submoduleList', {}))
+      .resolves.toEqual([]);
+  });
+
   it('handles every Git RPC the webview can send', async () => {
     const appSource = await readFile(path.resolve('src/webview/App.svelte'), 'utf8');
     const webviewMethods = [...appSource.matchAll(/bridge\.send\('(git\.[^']+)'/g)].map((match) => match[1]);

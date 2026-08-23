@@ -54,6 +54,7 @@ describe('coverage closure helpers', () => {
       { name: 'branches', expected: ['branch', '-a', `--format=${BRANCH_FORMAT}`], run: () => service.branches() },
       { name: 'tags', expected: ['tag', '-l', `--format=${TAG_FORMAT}`], run: () => service.tags() },
       { name: 'status', expected: ['status', '--porcelain=v2', '--branch', '-z'], run: () => service.status() },
+      { name: 'git directory', expected: ['rev-parse', '--absolute-git-dir'], run: () => service.gitDirectory() },
       { name: 'checkout', expected: ['checkout', 'main'], run: () => service.checkout('main') },
       { name: 'branch', expected: ['branch', 'b'], run: () => service.createBranch('b') },
       { name: 'branch start', expected: ['branch', 'c', 'HEAD'], run: () => service.createBranch('c', 'HEAD') },
@@ -89,6 +90,12 @@ describe('coverage closure helpers', () => {
       await testCase.run();
       expect(calls).toEqual([testCase.expected]);
     }
+    calls.length = 0;
+    await service.submoduleList();
+    expect(calls).toEqual([
+      ['submodule', 'status'],
+      ['config', '--file', '.gitmodules', '--get-regexp', '^submodule\\..*\\.path$'],
+    ]);
     (service as any).cli.exec = vi.fn(async (args: string[]) => { if (args[0] === 'merge-base') throw new Error('no'); if (args[0] === 'rev-parse') throw new Error('no'); return ''; });
     await expect(service.canSquash(['a'])).resolves.toMatchObject({ ok: false });
     await expect(service.canSquash(['a', 'b'])).resolves.toMatchObject({ ok: false });

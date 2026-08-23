@@ -1,13 +1,13 @@
-import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { mkdtemp, realpath, rm, writeFile } from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { GitCLI } from './git-cli';
 import {
-  parseLog, parseBranches, parseTags, parseStatus, parseFileChanges,
+  parseLog, parseBranches, parseTags, parseStatus, parseFileChanges, parseSubmoduleConfig, parseSubmoduleStatus,
   LOG_FORMAT, BRANCH_FORMAT, TAG_FORMAT
 } from '../utils/git-parser';
 import { transformRebaseTodo, type RebaseTodoPlan } from '../utils/rebase-todo';
-import type { Commit, Branch, Tag, FileChange, GitStatus, GitLogOptions, DiffResult, StashEntry, WorktreeEntry } from '../types/git.types';
+import type { Commit, Branch, Tag, FileChange, GitStatus, GitLogOptions, DiffResult, StashEntry, SubmoduleEntry, WorktreeEntry } from '../types/git.types';
 
 const REBASE_TIMEOUT_MS = 120000;
 const REBASE_TEMP_PREFIX = path.join(os.tmpdir(), 'git-graph-rebase-');
@@ -135,6 +135,32 @@ export class GitService {
   public async status(): Promise<GitStatus> {
     const output = await this.cli.exec(['status', '--porcelain=v2', '--branch', '-z']);
     return parseStatus(output);
+  }
+
+  public async submoduleList(): Promise<SubmoduleEntry[]> {
+    const [statusOutput, configOutput] = await Promise.all([
+      this.cli.exec(['submodule', 'status']),
+      this.cli.exec(['config', '--file', '.gitmodules', '--get-regexp', '^submodule\\..*\\.path$']).catch(() => ''),
+    ]);
+    return parseSubmoduleStatus(statusOutput, this.getRepoPath(), parseSubmoduleConfig(configOutput));
+  }
+
+  public async resolveSubmodule(relativePath: string): Promise<SubmoduleEntry> {
+    const entry = (await this.submoduleList()).find(submodule => submodule.path === relativePath);
+    if (!entry) throw new Error(`Submodule not found: ${relativePath}`);
+    if (entry.state === 'uninitialized') throw new Error(`Submodule is not initialized: ${relativePath}`);
+
+    const configuredPath = await realpath(entry.absolutePath);
+    const repoPath = await GitService.findRepo(configuredPath);
+    if (!repoPath) throw new Error(`Submodule not found: ${relativePath}`);
+    const canonicalRepoPath = await realpath(repoPath);
+    if (configuredPath !== canonicalRepoPath) throw new Error(`Submodule not found: ${relativePath}`);
+
+    return { ...entry, absolutePath: configuredPath };
+  }
+
+  public async gitDirectory(): Promise<string> {
+    return (await this.cli.exec(['rev-parse', '--absolute-git-dir'])).trim();
   }
 
   public async diff(ref1: string, ref2: string): Promise<DiffResult> {

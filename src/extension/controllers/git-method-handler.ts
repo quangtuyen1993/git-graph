@@ -17,6 +17,8 @@ export async function handleGitMethod(
       return gitService.tags();
     case 'git.status':
       return gitService.status();
+    case 'git.submoduleList':
+      return gitService.submoduleList();
     case 'git.show':
       return gitService.show(p.hash as string);
     case 'git.diff':
