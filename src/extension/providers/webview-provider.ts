@@ -60,7 +60,7 @@ export class GitGraphWebviewProvider {
       default-src 'none';
       script-src 'nonce-${nonce}';
       style-src ${webview.cspSource} 'unsafe-inline';
-      img-src ${webview.cspSource} data:;
+      img-src ${webview.cspSource} data: https://www.gravatar.com;
       font-src ${webview.cspSource};
     ">
     <link rel="stylesheet" href="${styleUri}">

@@ -92,12 +92,16 @@ export class GraphService {
         abbreviatedHash: commit.abbreviatedHash,
         subject: commit.subject,
         author: commit.author,
+        authorEmail: commit.authorEmail,
         authorDate: commit.authorDate,
         refs: commit.refs,
         parents: commit.parents,
         lane,
         row,
         color,
+        filesChanged: 0,
+        additions: 0,
+        deletions: 0,
       });
     }
 

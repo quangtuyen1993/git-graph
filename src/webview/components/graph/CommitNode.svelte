@@ -14,6 +14,7 @@
 
   const dispatch = createEventDispatcher();
   const NODE_RADIUS = 5;
+  const HIT_RADIUS = 14; // larger invisible hit target
 
   $: cx = paddingLeft + lane * laneWidth;
   $: cy = (row - startRow) * rowHeight + rowHeight / 2;
@@ -21,7 +22,23 @@
   $: isMerge = parents.length > 1;
 </script>
 
-<g class="commit-node" on:click={() => dispatch('select', { hash })} role="button" tabindex="0">
+<g
+  class="commit-node"
+  on:click={() => dispatch('select', { hash })}
+  on:contextmenu|preventDefault={(e) => dispatch('contextmenu', { hash, x: e.clientX, y: e.clientY })}
+  on:keydown={(e) => { if (e.key === 'Enter') dispatch('select', { hash }); }}
+  role="button"
+  tabindex="0"
+>
+  <!-- Invisible larger hit area for easier clicking -->
+  <circle
+    {cx}
+    {cy}
+    r={HIT_RADIUS}
+    fill="transparent"
+    stroke="none"
+  />
+  <!-- Visible node -->
   <circle
     {cx}
     {cy}
@@ -29,6 +46,7 @@
     fill={isMerge ? 'var(--vscode-editor-background, #1e1e1e)' : fillColor}
     stroke={fillColor}
     stroke-width={isMerge ? 2 : 0}
+    class="node-circle"
   />
 </g>
 
@@ -36,7 +54,7 @@
   .commit-node {
     cursor: pointer;
   }
-  .commit-node:hover circle {
+  .commit-node:hover .node-circle {
     filter: brightness(1.3);
   }
 </style>
