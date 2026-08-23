@@ -6,6 +6,8 @@
   import ContextMenu from './components/actions/ContextMenu.svelte';
   import type { MenuItem } from './types/menu.types';
   import { getGravatarUrl } from './lib/gravatar';
+  import { hasWorkingTreeChanges, type WorkingTreeStatus } from './lib/git-status';
+  import { MutationGate } from './lib/mutation-gate';
   import CommitDetail from './components/detail/CommitDetail.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
   import ResizeHandle from './components/layout/ResizeHandle.svelte';
@@ -116,7 +118,9 @@
   let contextMenuX = 0;
   let contextMenuY = 0;
   let contextMenuItems: MenuItem[] = [];
-  let contextMenuTarget: { type: 'commit' | 'branch'; value: string } | null = null;
+  let contextMenuTarget: { type: 'commit' | 'branch' | 'working'; value: string } | null = null;
+  const mutationGate = new MutationGate();
+  let mutationProgress: string | null = null;
 
   // Computed graph column width
   $: graphColWidth = (maxLane + 1) * 16 + 24;
@@ -164,8 +168,8 @@
     worktrees = await bridge.send('git.worktreeList') as typeof worktrees;
 
     try {
-      const st = await bridge.send('git.status') as { files?: unknown[] };
-      hasWorkingChanges = Array.isArray(st?.files) && st.files.length > 0;
+      const workingTreeStatus = await bridge.send('git.status') as WorkingTreeStatus;
+      hasWorkingChanges = hasWorkingTreeChanges(workingTreeStatus);
     } catch {
       hasWorkingChanges = false;
     }
@@ -290,6 +294,18 @@
     event.preventDefault();
     contextMenuVisible = false;
     await tick();
+
+    if (hash === 'WORKING') {
+      contextMenuTarget = { type: 'working', value: hash };
+      contextMenuX = event.clientX;
+      contextMenuY = event.clientY;
+      contextMenuItems = [
+        { label: 'Stash tracked changes', action: 'stashTracked' },
+        { label: 'Refresh', action: 'refresh' },
+      ];
+      contextMenuVisible = true;
+      return;
+    }
 
     if (selectedHashes.size > 1 && selectedHashes.has(hash)) {
       contextMenuTarget = { type: 'commit', value: hash };
@@ -469,7 +485,59 @@
     }
   }
 
+  const mutationLabels: Record<string, string> = {
+    checkout: 'Checking out…',
+    createBranch: 'Creating branch…',
+    createTag: 'Creating tag…',
+    cherryPick: 'Cherry-picking…',
+    revert: 'Reverting…',
+    reword: 'Rewording commit…',
+    resetSoft: 'Resetting…',
+    resetMixed: 'Resetting…',
+    resetHard: 'Resetting…',
+    squash: 'Squashing commits…',
+    merge: 'Merging…',
+    rebase: 'Rebasing…',
+    push: 'Pushing…',
+    publish: 'Publishing…',
+    pull: 'Pulling…',
+    fetch: 'Fetching…',
+    renameBranch: 'Renaming branch…',
+    deleteBranch: 'Deleting branch…',
+    deleteBranchAndRemote: 'Deleting branch…',
+    deleteRemoteBranch: 'Deleting remote branch…',
+    createBranchFromTag: 'Creating branch…',
+    pushTag: 'Pushing tag…',
+    deleteTag: 'Deleting tag…',
+    deleteTagAndRemote: 'Deleting tag…',
+    stashTracked: 'Stashing changes…',
+    stashApply: 'Applying stash…',
+    stashPop: 'Popping stash…',
+    stashDrop: 'Dropping stash…',
+    worktreeAdd: 'Adding worktree…',
+    worktreeRemove: 'Removing worktree…',
+  };
+
   async function handleContextMenuAction(event: CustomEvent<{ action: string }>) {
+    const label = mutationLabels[event.detail.action];
+    if (!label) {
+      await performContextMenuAction(event);
+      return;
+    }
+
+    try {
+      const operation = mutationGate.run(label, () => performContextMenuAction(event));
+      mutationProgress = mutationGate.activeLabel;
+      await operation;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      setTimeout(() => { error = ''; }, 5000);
+    } finally {
+      mutationProgress = mutationGate.activeLabel;
+    }
+  }
+
+  async function performContextMenuAction(event: CustomEvent<{ action: string }>) {
     const action = event.detail.action;
     if (!contextMenuTarget) return;
 
@@ -573,6 +641,14 @@
             await navigator.clipboard.writeText(shas.join('\n'));
             break;
           }
+        }
+      } else if (contextMenuTarget.type === 'working') {
+        switch (action) {
+          case 'stashTracked':
+            await bridge.send('git.stashPush');
+            break;
+          case 'refresh':
+            break;
         }
       } else if (contextMenuTarget.type === 'branch') {
         const branchName = contextMenuTarget.value;
@@ -730,6 +806,9 @@
 </script>
 
 <div class="container">
+  {#if mutationProgress}
+    <div class="mutation-progress" aria-live="polite">{mutationProgress}</div>
+  {/if}
   <header class="toolbar">
     <button
       class="toolbar-icon-btn"
