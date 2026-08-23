@@ -1,26 +1,63 @@
 import * as vscode from 'vscode';
-import { MessageRouter } from '../controllers/message-router';
+import { realpath } from 'fs/promises';
+
+export type PanelRequest =
+  | { kind: 'root' }
+  | { kind: 'repository'; repoPath: string; repoName: string };
+
+export type CreatePanelSession = (panel: vscode.WebviewPanel, request: PanelRequest) => void;
 
 export class GitGraphWebviewProvider {
-  private panel: vscode.WebviewPanel | undefined;
-  private router: MessageRouter;
+  private rootPanel: vscode.WebviewPanel | undefined;
+  private readonly repositoryPanels = new Map<string, vscode.WebviewPanel>();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
-    router: MessageRouter
-  ) {
-    this.router = router;
-  }
+    private readonly createPanelSession: CreatePanelSession,
+    private readonly canonicalizePath: (repoPath: string) => Promise<string> = realpath,
+  ) {}
 
   public openPanel(): vscode.WebviewPanel {
-    if (this.panel) {
-      this.panel.reveal();
-      return this.panel;
+    if (this.rootPanel) {
+      this.rootPanel.reveal();
+      return this.rootPanel;
     }
 
-    this.panel = vscode.window.createWebviewPanel(
+    const panel = this.createPanel('Git Graph Pro');
+    this.rootPanel = panel;
+    this.createPanelSession(panel, { kind: 'root' });
+
+    panel.onDidDispose(() => {
+      if (this.rootPanel === panel) this.rootPanel = undefined;
+    });
+
+    return panel;
+  }
+
+  public async openRepositoryPanel(repoPath: string, repoName: string): Promise<vscode.WebviewPanel> {
+    const canonicalPath = await this.canonicalizePath(repoPath);
+    const existing = this.repositoryPanels.get(canonicalPath);
+    if (existing) {
+      existing.reveal();
+      return existing;
+    }
+
+    const panel = this.createPanel(`Git Graph: ${repoName}`);
+    this.repositoryPanels.set(canonicalPath, panel);
+    this.createPanelSession(panel, { kind: 'repository', repoPath: canonicalPath, repoName });
+    panel.onDidDispose(() => {
+      if (this.repositoryPanels.get(canonicalPath) === panel) {
+        this.repositoryPanels.delete(canonicalPath);
+      }
+    });
+
+    return panel;
+  }
+
+  private createPanel(title: string): vscode.WebviewPanel {
+    const panel = vscode.window.createWebviewPanel(
       'gitGraphPro',
-      'Git Graph Pro',
+      title,
       vscode.ViewColumn.One,
       {
         enableScripts: true,
@@ -31,14 +68,8 @@ export class GitGraphWebviewProvider {
       }
     );
 
-    this.panel.webview.html = this.getHtmlContent(this.panel.webview);
-    this.router.setPanel(this.panel);
-
-    this.panel.onDidDispose(() => {
-      this.panel = undefined;
-    });
-
-    return this.panel;
+    panel.webview.html = this.getHtmlContent(panel.webview);
+    return panel;
   }
 
   private getHtmlContent(webview: vscode.Webview): string {
