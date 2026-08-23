@@ -31,7 +31,7 @@ describe('loadAllCommits', () => {
       .mockResolvedValueOnce(commits.slice(1000));
 
     const result = await loadAllCommits(
-      { log },
+      { log, snapshotLogOptions: async (options) => options },
       { author: 'Ada', branch: 'main', all: false },
     );
 
@@ -47,7 +47,10 @@ describe('loadAllCommits', () => {
     const log = vi.fn<(options: GitLogOptions) => Promise<Commit[]>>()
       .mockResolvedValue([]);
 
-    await expect(loadAllCommits({ log }, { branch: 'main' })).resolves.toEqual([]);
+    await expect(loadAllCommits(
+      { log, snapshotLogOptions: async (options) => options },
+      { branch: 'main' },
+    )).resolves.toEqual([]);
     expect(log).toHaveBeenCalledTimes(1);
     expect(log).toHaveBeenCalledWith({ branch: 'main', maxCount: 500, skip: 0 });
   });
@@ -68,9 +71,40 @@ describe('loadAllCommits integration', () => {
 
       expect(commits.map(({ hash }) => hash)).toEqual(hashes.reverse());
       expect(logSpy.mock.calls).toEqual([
-        [{ maxCount: 500, skip: 0 }],
-        [{ maxCount: 500, skip: 500 }],
+        [expect.objectContaining({ maxCount: 500, skip: 0 })],
+        [expect.objectContaining({ maxCount: 500, skip: 500 })],
       ]);
+      const firstSnapshot = logSpy.mock.calls[0][0].revisions;
+      expect(firstSnapshot).toHaveLength(1);
+      expect(logSpy.mock.calls[1][0].revisions).toEqual(firstSnapshot);
+    } finally {
+      await repo.cleanup();
+    }
+  }, 30_000);
+
+  it('uses one revision snapshot when refs change between batches', async () => {
+    const repo = await TempGitRepo.create();
+
+    try {
+      const originalHashes = await repo.commitSeries(
+        Array.from({ length: 501 }, (_, index) => `Original ${index + 1}`),
+      );
+      const service = new GitService(repo.path);
+      const realLog = service.log.bind(service);
+      let batchCount = 0;
+      vi.spyOn(service, 'log').mockImplementation(async (options) => {
+        const batch = await realLog(options);
+        batchCount += 1;
+        if (batchCount === 1) {
+          await repo.commitSeries(['Added while loading']);
+        }
+        return batch;
+      });
+
+      const commits = await loadAllCommits(service, {});
+
+      expect(commits.map(({ hash }) => hash)).toEqual([...originalHashes].reverse());
+      expect(batchCount).toBe(2);
     } finally {
       await repo.cleanup();
     }

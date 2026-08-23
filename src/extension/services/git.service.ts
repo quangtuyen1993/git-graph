@@ -65,11 +65,40 @@ export class GitService {
     if (options.grep) args.push(`--grep=${options.grep}`);
     if (options.after) args.push(`--after=${options.after}`);
     if (options.before) args.push(`--before=${options.before}`);
-    if (options.all) args.push('--all');
-    if (options.branch) args.push(options.branch);
+    if (options.revisions?.length) {
+      args.push(...options.revisions);
+    } else {
+      if (options.all) args.push('--all');
+      if (options.branch) args.push(options.branch);
+    }
 
     const output = await this.cli.exec(args);
     return parseLog(output);
+  }
+
+  public async snapshotLogOptions(
+    options: Omit<GitLogOptions, 'maxCount' | 'skip'>,
+  ): Promise<Omit<GitLogOptions, 'maxCount' | 'skip'>> {
+    let revisions: string[];
+
+    if (options.branch) {
+      const revision = await this.cli.exec(['rev-parse', '--verify', options.branch]);
+      revisions = [revision.trim()];
+    } else if (options.all) {
+      const refs = await this.cli.exec(['for-each-ref', '--format=%(objectname)']);
+      const head = await this.cli.exec(['rev-parse', '--verify', 'HEAD']).catch(() => '');
+      revisions = [...new Set([...refs.split('\n'), head.trim()].filter(Boolean))];
+    } else {
+      const head = await this.cli.exec(['rev-parse', '--verify', 'HEAD']);
+      revisions = [head.trim()];
+    }
+
+    return {
+      ...options,
+      branch: undefined,
+      all: false,
+      revisions,
+    };
   }
 
   public async branches(): Promise<Branch[]> {

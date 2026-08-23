@@ -10,11 +10,29 @@ declare function acquireVsCodeApi(): VsCodeApi;
 
 type EventHandler = (data: unknown) => void;
 
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const LONG_RUNNING_REQUEST_TIMEOUT_MS = 130_000;
+const UNBOUNDED_REQUEST_METHODS = new Set(['graph.build']);
+const LONG_RUNNING_REQUEST_METHODS = new Set([
+  'git.fetch',
+  'git.pull',
+  'git.push',
+  'git.reword',
+  'git.squash',
+]);
+
+function requestTimeout(method: string): number | null {
+  if (UNBOUNDED_REQUEST_METHODS.has(method)) return null;
+  if (LONG_RUNNING_REQUEST_METHODS.has(method)) return LONG_RUNNING_REQUEST_TIMEOUT_MS;
+  return DEFAULT_REQUEST_TIMEOUT_MS;
+}
+
 export class MessageBridge {
   private vscode: VsCodeApi;
   private pendingRequests = new Map<string, {
     resolve: (value: unknown) => void;
     reject: (error: Error) => void;
+    timeoutId?: ReturnType<typeof setTimeout>;
   }>();
   private eventHandlers = new Map<string, Set<EventHandler>>();
   private requestId = 0;
@@ -33,16 +51,23 @@ export class MessageBridge {
     const request: Request = { id, type: 'request', method, params };
 
     return new Promise((resolve, reject) => {
-      this.pendingRequests.set(id, { resolve, reject });
+      const pending: {
+        resolve: (value: unknown) => void;
+        reject: (error: Error) => void;
+        timeoutId?: ReturnType<typeof setTimeout>;
+      } = { resolve, reject };
+      this.pendingRequests.set(id, pending);
       this.vscode.postMessage(request);
 
-      // Timeout after 30s
-      setTimeout(() => {
-        if (this.pendingRequests.has(id)) {
-          this.pendingRequests.delete(id);
-          reject(new Error(`Request ${method} timed out`));
-        }
-      }, 30000);
+      const timeout = requestTimeout(method);
+      if (timeout !== null) {
+        pending.timeoutId = setTimeout(() => {
+          if (this.pendingRequests.has(id)) {
+            this.pendingRequests.delete(id);
+            reject(new Error(`Request ${method} timed out`));
+          }
+        }, timeout);
+      }
     });
   }
 
@@ -63,6 +88,9 @@ export class MessageBridge {
       const pending = this.pendingRequests.get(message.id);
       if (pending) {
         this.pendingRequests.delete(message.id);
+        if (pending.timeoutId !== undefined) {
+          clearTimeout(pending.timeoutId);
+        }
         if (message.error) {
           pending.reject(new Error(message.error.message));
         } else {

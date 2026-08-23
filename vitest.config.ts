@@ -14,7 +14,10 @@ export default defineConfig({
       reporter: ['text', 'json-summary', 'lcov'],
       include: [
         'src/extension/services/git.service.ts',
+        'src/extension/services/edge-range-index.ts',
+        'src/extension/services/graph-loader.ts',
         'src/extension/services/graph.service.ts',
+        'src/extension/controllers/graph-method-handler.ts',
         'src/extension/controllers/git-method-handler.ts',
         'src/extension/utils/git-parser.ts',
         'src/extension/utils/rebase-todo.ts',

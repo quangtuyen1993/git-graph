@@ -2,11 +2,9 @@ import * as vscode from 'vscode';
 import { GitGraphWebviewProvider } from './providers/webview-provider';
 import { MessageRouter } from './controllers/message-router';
 import { handleGitMethod } from './controllers/git-method-handler';
+import { GraphMethodHandler } from './controllers/graph-method-handler';
 import { GitService } from './services/git.service';
-import { loadAllCommits } from './services/graph-loader';
 import { GraphService } from './services/graph.service';
-import type { GitLogOptions } from './types/git.types';
-import type { GraphOptions } from './types/graph.types';
 
 let webviewProvider: GitGraphWebviewProvider;
 
@@ -17,6 +15,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const workspaceFolders = vscode.workspace.workspaceFolders;
   let gitService: GitService | null = null;
   const graphService = new GraphService();
+  const graphMethodHandler = new GraphMethodHandler(graphService, () => gitService);
 
   // Multi-repo support
   interface RepoInfo {
@@ -50,6 +49,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const targetPath = p.path as string;
         const repo = repos.find(r => r.path === targetPath);
         if (!repo) throw new Error(`Repo not found: ${targetPath}`);
+        graphMethodHandler.invalidate();
         gitService = new GitService(repo.path);
         return { success: true, name: repo.name, path: repo.path };
       }
@@ -67,55 +67,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
 
   // Register graph namespace handler
-  router.register('graph', async (method: string, params: unknown) => {
-    if (!gitService) {
-      throw new Error('No git repository found in workspace');
-    }
-
-    const p = (params ?? {}) as Record<string, unknown>;
-
-    switch (method) {
-      case 'graph.build': {
-        const options = p as GraphOptions;
-        const logOptions: Omit<GitLogOptions, 'maxCount' | 'skip'> = {
-          branch: options.branch,
-          all: options.all ?? true
-        };
-        const commits = await loadAllCommits(gitService, logOptions);
-        const layout = graphService.buildLayout(commits);
-
-        // Fetch shortstat and merge into nodes
-        try {
-          const stats = await gitService.getShortStats(500, logOptions.all ?? true);
-          for (const node of layout.nodes) {
-            const stat = stats.get(node.hash);
-            if (stat) {
-              node.filesChanged = stat.filesChanged;
-              node.additions = stat.additions;
-              node.deletions = stat.deletions;
-            }
-          }
-        } catch {
-          // Stats are optional — don't fail the build if this errors
-        }
-
-        return { totalRows: layout.totalRows, maxLane: layout.maxLane };
-      }
-      case 'graph.getWindow': {
-        const startRow = (p.startRow as number) ?? 0;
-        const count = (p.count as number) ?? 50;
-        return graphService.getWindow(startRow, count);
-      }
-      case 'graph.getLayout': {
-        return {
-          totalRows: graphService.getTotalRows(),
-          maxLane: graphService.getMaxLane()
-        };
-      }
-      default:
-        throw new Error(`Unknown method: ${method}`);
-    }
-  });
+  router.register('graph', (method: string, params: unknown) => (
+    graphMethodHandler.handle(method, params)
+  ));
 
   // Register a content provider for showing git file content in diff editor
   const GIT_GRAPH_SCHEME = 'git-graph';
@@ -237,6 +191,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return () => {
         if (timer) clearTimeout(timer);
         timer = setTimeout(() => {
+          graphMethodHandler.invalidate();
           router.sendEvent('git.refsChanged');
           router.sendEvent('graph.invalidated');
         }, 500);

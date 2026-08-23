@@ -66,6 +66,7 @@ export interface GitLogOptions {
   after?: string;           // date string
   before?: string;          // date string
   all?: boolean;            // --all (all branches)
+  revisions?: string[];     // resolved commit OIDs for a stable history snapshot
 }
 
 export interface DiffResult {

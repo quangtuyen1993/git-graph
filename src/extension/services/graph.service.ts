@@ -1,10 +1,13 @@
 import type { Commit } from '../types/git.types';
 import type { GraphNode, GraphEdge, GraphLayout, GraphWindow } from '../types/graph.types';
+import { EdgeRangeIndex } from './edge-range-index';
 
 const BRANCH_COLORS = 10; // number of colors in the palette
 
 export class GraphService {
   private layout: GraphLayout | null = null;
+  private layoutVersion = 0;
+  private edgeRangeIndex: EdgeRangeIndex | null = null;
 
   /**
    * Build a full graph layout from commits sorted newest-first (git log order).
@@ -16,9 +19,14 @@ export class GraphService {
    * - Free lanes are reused when branches merge back.
    */
   public buildLayout(commits: Commit[]): GraphLayout {
+    const layout = this.createLayout(commits);
+    this.publishLayout(layout, this.layoutVersion + 1);
+    return layout;
+  }
+
+  public createLayout(commits: Commit[]): GraphLayout {
     if (commits.length === 0) {
-      this.layout = { nodes: [], edges: [], totalRows: 0, maxLane: 0 };
-      return this.layout;
+      return { nodes: [], edges: [], totalRows: 0, maxLane: 0 };
     }
 
     const nodes: GraphNode[] = [];
@@ -131,8 +139,19 @@ export class GraphService {
 
     const maxLane = nodes.reduce((max, n) => Math.max(max, n.lane), 0);
 
-    this.layout = { nodes, edges, totalRows: nodes.length, maxLane };
-    return this.layout;
+    return { nodes, edges, totalRows: nodes.length, maxLane };
+  }
+
+  public publishLayout(layout: GraphLayout, layoutVersion: number): void {
+    this.layout = layout;
+    this.layoutVersion = layoutVersion;
+    this.edgeRangeIndex = new EdgeRangeIndex(layout.edges);
+  }
+
+  public invalidateLayout(layoutVersion: number): void {
+    this.layout = null;
+    this.layoutVersion = layoutVersion;
+    this.edgeRangeIndex = null;
   }
 
   /**
@@ -140,7 +159,11 @@ export class GraphService {
    * Includes all nodes in [startRow, startRow+count) and all edges
    * that are visible within or cross through that range.
    */
-  public getWindow(startRow: number, count: number): GraphWindow {
+  public getWindow(startRow: number, count: number, layoutVersion?: number): GraphWindow {
+    if (layoutVersion !== undefined && layoutVersion !== this.layoutVersion) {
+      throw new Error(`Graph layout version mismatch: expected ${this.layoutVersion}, received ${layoutVersion}`);
+    }
+
     if (!this.layout) {
       return { nodes: [], edges: [], startRow: 0, endRow: 0, totalRows: 0, maxLane: 0 };
     }
@@ -152,11 +175,7 @@ export class GraphService {
     const nodes = this.layout.nodes.slice(actualStart, endRow);
 
     // Edges visible in the window: either endpoint in range, or crossing through
-    const edges = this.layout.edges.filter((edge) => {
-      const minRow = Math.min(edge.fromRow, edge.toRow);
-      const maxRow = Math.max(edge.fromRow, edge.toRow);
-      return maxRow >= actualStart && minRow < endRow;
-    });
+    const edges = this.edgeRangeIndex?.query(actualStart, endRow).edges ?? [];
 
     return {
       nodes,
@@ -176,6 +195,10 @@ export class GraphService {
   /** Maximum lane index (width of the graph). */
   public getMaxLane(): number {
     return this.layout?.maxLane ?? 0;
+  }
+
+  public getLayoutVersion(): number {
+    return this.layoutVersion;
   }
 
   /** Find the first free (null) lane, or expand the array. */

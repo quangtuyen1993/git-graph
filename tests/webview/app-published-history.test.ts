@@ -19,7 +19,7 @@ describe('App published-history confirmation flow', () => {
         case 'repo.list': return { repos: [{ name: 'repo', path: '/repo', active: true }] };
         case 'git.branches': case 'git.tags': case 'git.stashList': case 'git.worktreeList': return [];
         case 'git.status': return { staged: [], unstaged: [], untracked: [], conflicted: [] };
-        case 'graph.build': return { totalRows: 1, maxLane: 0 };
+        case 'graph.build': return { totalRows: 1, maxLane: 0, layoutVersion: 1 };
         case 'graph.getWindow': return { nodes: [{ hash: 'a'.repeat(40), abbreviatedHash: 'aaaaaaa', subject: 'old', author: 'A', authorEmail: 'a@e', authorDate: new Date().toISOString(), refs: [], parents: [], lane: 0, row: 0, color: 0 }], edges: [], startRow: 0, endRow: 1, totalRows: 1, maxLane: 0 };
         case 'git.isOnCurrentBranch': return { onBranch: true };
         case 'git.show': return { commit: { message: 'old', subject: 'old' }, files: [] };
@@ -33,7 +33,7 @@ describe('App published-history confirmation flow', () => {
     const { default: App } = await import('../../src/webview/App.svelte');
     const rendered = render(App);
     const { container, getByRole } = rendered;
-    await waitFor(() => expect(send).toHaveBeenCalledWith('graph.getWindow', expect.anything()));
+    await waitFor(() => expect(send).toHaveBeenCalledWith('graph.getWindow', expect.objectContaining({ layoutVersion: 1 })));
     await waitFor(() => expect(container.querySelector('.commit-row')).toBeTruthy(), { timeout: 5000 });
     await fireEvent.contextMenu(container.querySelector('.commit-row')!, { clientX: 10, clientY: 10 });
     await waitFor(() => expect(getByRole('menuitem', { name: 'Reword message...' })).toBeEnabled());
