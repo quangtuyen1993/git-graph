@@ -112,3 +112,15 @@ export interface WorktreeEntry {
   bare: boolean;
   isMain: boolean;    // true for the main worktree
 }
+
+export type SubmoduleState = 'initialized' | 'uninitialized' | 'modified' | 'conflicted';
+
+export interface SubmoduleEntry {
+  name: string;
+  path: string;
+  absolutePath: string;
+  head: string | null;
+  state: SubmoduleState;
+}
+
+export type SubmoduleListEntry = Omit<SubmoduleEntry, 'absolutePath'>;

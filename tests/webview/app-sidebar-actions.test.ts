@@ -34,6 +34,9 @@ describe('App sidebar primary actions', () => {
           { path: '/repo', head: 'd'.repeat(40), branch: 'main', bare: false, isMain: true },
           { path: '/repo/feature', head: 'e'.repeat(40), branch: 'feature', bare: false, isMain: false },
         ];
+        case 'git.submoduleList': return [
+          { name: 'sdk', path: 'packages/sdk', head: 'f'.repeat(40), state: 'initialized' },
+        ];
         case 'git.status': return { staged: [], unstaged: [], untracked: [], conflicted: [] };
         case 'graph.build': return { totalRows: 1, maxLane: 0, layoutVersion: 1 };
         case 'graph.getWindow': return { nodes: [], edges: [], startRow: 0, endRow: 0, totalRows: 1, maxLane: 0 };
@@ -47,7 +50,7 @@ describe('App sidebar primary actions', () => {
     return rendered;
   }
 
-  it('routes tag checkout, stash apply, and non-main worktree opening through their established RPCs', async () => {
+  it('routes tag checkout, stash apply, worktree opening, and submodule opening through their established RPCs', async () => {
     const { container, getByRole } = await renderApp();
 
     await fireEvent.click(getByRole('button', { name: /v1\.0\.0/ }));
@@ -60,5 +63,8 @@ describe('App sidebar primary actions', () => {
 
     await fireEvent.click(getByRole('button', { name: /worktree feature/i }));
     await waitFor(() => expect(send).toHaveBeenCalledWith('ui.openFolder', { path: '/repo/feature' }));
+
+    await fireEvent.click(getByRole('button', { name: /submodule sdk.*packages\/sdk.*initialized/i }));
+    await waitFor(() => expect(send).toHaveBeenCalledWith('ui.openSubmodule', { path: 'packages/sdk' }));
   });
 });

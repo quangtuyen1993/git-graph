@@ -34,10 +34,18 @@
     isMain: boolean;
   }
 
+  interface SubmoduleEntry {
+    name: string;
+    path: string;
+    head: string | null;
+    state: 'initialized' | 'uninitialized' | 'modified' | 'conflicted';
+  }
+
   export let branches: Branch[] = [];
   export let tags: Tag[] = [];
   export let stashes: StashEntry[] = [];
   export let worktrees: WorktreeEntry[] = [];
+  export let submodules: SubmoduleEntry[] = [];
 
   const dispatch = createEventDispatcher();
 
@@ -60,6 +68,7 @@
   let tagsExpanded = true;
   let stashesExpanded = true;
   let worktreesExpanded = true;
+  let submodulesExpanded = true;
   let expandedRemotes: Record<string, boolean> = {};
 
   function toggleRemote(remote: string) {
@@ -105,6 +114,13 @@
   function handleWorktreeActivate(worktree: WorktreeEntry) {
     if (!worktree.isMain) {
       dispatch('worktreeOpen', { path: worktree.path });
+    }
+  }
+
+  function handleSubmoduleKeydown(event: KeyboardEvent, submodule: SubmoduleEntry) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      dispatch('submoduleOpen', { path: submodule.path });
     }
   }
 
@@ -359,6 +375,41 @@
       </ul>
     {/if}
   </div>
+
+  <!-- SUBMODULES section -->
+  <div class="section">
+    <button
+      class="section-header"
+      on:click={() => { submodulesExpanded = !submodulesExpanded; }}
+    >
+      <span class="chevron" class:collapsed={!submodulesExpanded}>▶</span>
+      <span class="section-title">SUBMODULES</span>
+      <span class="section-count">{submodules.length}</span>
+    </button>
+
+    {#if submodulesExpanded}
+      <ul class="branch-list">
+        {#each submodules as submodule (submodule.path)}
+          <li>
+            <button
+              type="button"
+              class="branch-item submodule {submodule.state}"
+              aria-label={`Submodule ${submodule.name}, ${submodule.path}, ${submodule.head ? `${submodule.head.substring(0, 7)}, ` : ''}${submodule.state}`}
+              title={submodule.path}
+              on:click={() => dispatch('submoduleOpen', { path: submodule.path })}
+              on:keydown={(event) => handleSubmoduleKeydown(event, submodule)}
+            >
+              <span class="branch-icon">{submodule.state === 'initialized' ? '◈' : '◇'}</span>
+              <span class="branch-name">{submodule.name}</span>
+              {#if submodule.head}
+                <span class="submodule-head">{submodule.head.substring(0, 7)}</span>
+              {/if}
+            </button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </div>
 </div>
 
 <style>
@@ -521,6 +572,27 @@
 
   .branch-item.worktree.main .branch-name {
     font-weight: 600;
+  }
+
+  .branch-item.submodule.uninitialized .branch-name {
+    color: var(--vscode-descriptionForeground, #aaaaaa);
+  }
+
+  .branch-item.submodule.modified .branch-name {
+    color: var(--vscode-editorWarning-foreground, #d7ba7d);
+  }
+
+  .branch-item.submodule.conflicted .branch-name {
+    color: var(--vscode-editorError-foreground, #f14c4c);
+  }
+
+  .submodule-head {
+    margin-left: auto;
+    padding-right: 8px;
+    flex-shrink: 0;
+    color: var(--vscode-descriptionForeground, #aaaaaa);
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 10px;
   }
 
   .ahead-behind {

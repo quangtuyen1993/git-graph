@@ -17,7 +17,7 @@ describe('App published-history confirmation flow', () => {
       switch (method) {
         case 'ping.hello': return { ok: true };
         case 'repo.list': return { repos: [{ name: 'repo', path: '/repo', active: true }] };
-        case 'git.branches': case 'git.tags': case 'git.stashList': case 'git.worktreeList': return [];
+        case 'git.branches': case 'git.tags': case 'git.stashList': case 'git.worktreeList': case 'git.submoduleList': return [];
         case 'git.status': return { staged: [], unstaged: [], untracked: [], conflicted: [] };
         case 'graph.build': return { totalRows: 1, maxLane: 0, layoutVersion: 1 };
         case 'graph.getWindow': return { nodes: [{ hash: 'a'.repeat(40), abbreviatedHash: 'aaaaaaa', subject: 'old', author: 'A', authorEmail: 'a@e', authorDate: new Date().toISOString(), refs: [], parents: [], lane: 0, row: 0, color: 0 }], edges: [], startRow: 0, endRow: 1, totalRows: 1, maxLane: 0 };

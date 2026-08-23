@@ -6,11 +6,13 @@ export type MethodHandler = (method: string, params: unknown) => Promise<unknown
 export class MessageRouter {
   private handlers = new Map<string, MethodHandler>();
   private panel: vscode.WebviewPanel | undefined;
+  private receiveSubscription: vscode.Disposable | undefined;
 
   public setPanel(panel: vscode.WebviewPanel): void {
+    this.receiveSubscription?.dispose();
     this.panel = panel;
 
-    panel.webview.onDidReceiveMessage((message: Request) => {
+    this.receiveSubscription = panel.webview.onDidReceiveMessage((message: Request) => {
       if (message.type === 'request') {
         this.handleMessage(message);
       }
@@ -26,6 +28,13 @@ export class MessageRouter {
       const msg: Event = { type: 'event', event, data };
       this.panel.webview.postMessage(msg);
     }
+  }
+
+  public dispose(): void {
+    this.receiveSubscription?.dispose();
+    this.receiveSubscription = undefined;
+    this.handlers.clear();
+    this.panel = undefined;
   }
 
   private async handleMessage(request: Request): Promise<void> {

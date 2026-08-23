@@ -1,5 +1,37 @@
 import { describe, expect, it } from 'vitest';
-import { parseFileChanges } from '../../src/extension/utils/git-parser';
+import { parseFileChanges, parseSubmoduleConfig, parseSubmoduleStatus } from '../../src/extension/utils/git-parser';
+
+describe('submodule parsers', () => {
+  it('parses configured names and all direct submodule states', () => {
+    const names = parseSubmoduleConfig([
+      'submodule.sdk.path packages/sdk',
+      'submodule.ui-kit.path packages/ui kit',
+    ].join('\n'));
+    const output = [
+      ` ${'a'.repeat(40)} packages/sdk (heads/main)`,
+      `-${'b'.repeat(40)} packages/uninitialized`,
+      `+${'c'.repeat(40)} packages/ui kit (v2.0.0-1-gabc)`,
+      `U${'d'.repeat(40)} packages/conflicted`,
+    ].join('\n');
+
+    expect(parseSubmoduleStatus(output, '/repo', names)).toEqual([
+      expect.objectContaining({ name: 'sdk', path: 'packages/sdk', absolutePath: '/repo/packages/sdk', head: 'a'.repeat(40), state: 'initialized' }),
+      expect.objectContaining({ name: 'uninitialized', path: 'packages/uninitialized', head: null, state: 'uninitialized' }),
+      expect.objectContaining({ name: 'ui-kit', path: 'packages/ui kit', head: 'c'.repeat(40), state: 'modified' }),
+      expect.objectContaining({ name: 'conflicted', path: 'packages/conflicted', state: 'conflicted' }),
+    ]);
+  });
+
+  it('returns an empty list for an empty status', () => {
+    expect(parseSubmoduleStatus('', '/repo', new Map())).toEqual([]);
+  });
+
+  it('rejects malformed non-empty status lines', () => {
+    expect(() => parseSubmoduleStatus('not a submodule status', '/repo', new Map())).toThrow(
+      'Unable to parse submodule status: not a submodule status',
+    );
+  });
+});
 
 describe('parseFileChanges', () => {
   const cases = [

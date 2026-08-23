@@ -32,7 +32,7 @@ describe('App mutation progress', () => {
         case 'git.branches':
           branchRequests += 1;
           return branchRequests > 1 ? postMutationBranches.promise : Promise.resolve([]);
-        case 'git.tags': case 'git.stashList': case 'git.worktreeList': return Promise.resolve([]);
+        case 'git.tags': case 'git.stashList': case 'git.worktreeList': case 'git.submoduleList': return Promise.resolve([]);
         case 'git.status': return Promise.resolve({ staged: [], unstaged: [], untracked: [], conflicted: [] });
         case 'graph.build': return Promise.resolve({ totalRows: 1, maxLane: 0, layoutVersion: 1 });
         case 'graph.getWindow': return Promise.resolve({

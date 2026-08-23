@@ -1,8 +1,54 @@
-import type { Commit, Branch, Tag, FileChange, GitStatus, FileStatusEntry } from '../types/git.types';
+import path from 'path';
+import type { Commit, Branch, Tag, FileChange, GitStatus, FileStatusEntry, SubmoduleEntry, SubmoduleState } from '../types/git.types';
 
 // Delimiter that won't appear in commit messages
 const FIELD_SEP = '\x1f'; // ASCII Unit Separator
 const RECORD_SEP = '\x1e'; // ASCII Record Separator
+
+const SUBMODULE_STATES: Record<string, SubmoduleState> = {
+  ' ': 'initialized',
+  '-': 'uninitialized',
+  '+': 'modified',
+  U: 'conflicted',
+};
+
+export function parseSubmoduleConfig(output: string): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const line of output.split('\n').filter(Boolean)) {
+    const separator = line.search(/\s/);
+    if (separator < 0) continue;
+    const key = line.slice(0, separator);
+    const relativePath = line.slice(separator).trim();
+    const match = key.match(/^submodule\.(.+)\.path$/);
+    if (match && relativePath) names.set(relativePath, match[1]);
+  }
+  return names;
+}
+
+export function parseSubmoduleStatus(
+  output: string,
+  repoPath: string,
+  namesByPath: Map<string, string>,
+): SubmoduleEntry[] {
+  if (!output.trim()) return [];
+
+  return output.split('\n').filter(Boolean).map(line => {
+    const match = line.match(/^([ +\-U])([0-9a-f]{40})\s+(.+?)(?:\s+\([^)]*\))?$/);
+    if (!match) throw new Error(`Unable to parse submodule status: ${line}`);
+
+    const [, prefix, hash, relativePath] = match;
+    const state = SUBMODULE_STATES[prefix];
+    if (!state) throw new Error(`Unable to parse submodule status: ${line}`);
+
+    return {
+      name: namesByPath.get(relativePath) ?? path.basename(relativePath),
+      path: relativePath,
+      absolutePath: path.join(repoPath, relativePath),
+      head: state === 'uninitialized' ? null : hash,
+      state,
+    };
+  });
+}
 
 /**
  * git log --format string that produces parseable output.

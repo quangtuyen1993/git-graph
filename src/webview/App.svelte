@@ -26,6 +26,13 @@
     behind: number;
   }
 
+  interface SubmoduleEntry {
+    name: string;
+    path: string;
+    head: string | null;
+    state: 'initialized' | 'uninitialized' | 'modified' | 'conflicted';
+  }
+
   interface GraphNode {
     hash: string;
     abbreviatedHash: string;
@@ -64,6 +71,7 @@
   let tags: { name: string; hash: string; message: string | null; taggerDate: string | null }[] = [];
   let stashes: { index: number; message: string; date: string; branch: string; hash: string }[] = [];
   let worktrees: { path: string; head: string; branch: string | null; bare: boolean; isMain: boolean }[] = [];
+  let submodules: SubmoduleEntry[] = [];
   let error = '';
 
   // Multi-repo state
@@ -240,11 +248,12 @@
     loading = false;
 
     try {
-      const [nextBranches, nextTags, nextStashes, nextWorktrees, workingTreeStatus, build] = await Promise.all([
+      const [nextBranches, nextTags, nextStashes, nextWorktrees, nextSubmodules, workingTreeStatus, build] = await Promise.all([
         bridge.send('git.branches') as Promise<Branch[]>,
         bridge.send('git.tags') as Promise<typeof tags>,
         bridge.send('git.stashList') as Promise<typeof stashes>,
         bridge.send('git.worktreeList') as Promise<typeof worktrees>,
+        bridge.send('git.submoduleList') as Promise<SubmoduleEntry[]>,
         bridge.send('git.status').catch(() => null) as Promise<WorkingTreeStatus | null>,
         bridge.send('graph.build', { all: true }) as Promise<{
           totalRows: number;
@@ -272,6 +281,7 @@
       tags = nextTags;
       stashes = nextStashes;
       worktrees = nextWorktrees;
+      submodules = nextSubmodules;
       hasWorkingChanges = workingTreeStatus !== null
         && hasWorkingTreeChanges(workingTreeStatus);
       totalRows = build.totalRows;
@@ -663,6 +673,15 @@
   async function handleSidebarWorktreeOpen(event: CustomEvent<{ path: string }>) {
     try {
       await bridge.send('ui.openFolder', { path: event.detail.path });
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      setTimeout(() => { error = ''; }, 5000);
+    }
+  }
+
+  async function handleSidebarSubmoduleOpen(event: CustomEvent<{ path: string }>) {
+    try {
+      await bridge.send('ui.openSubmodule', { path: event.detail.path });
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       setTimeout(() => { error = ''; }, 5000);
@@ -1143,6 +1162,7 @@
           {tags}
           {stashes}
           {worktrees}
+          {submodules}
           on:branchContextMenu={handleBranchContextMenu}
           on:tagContextMenu={handleTagContextMenu}
           on:stashContextMenu={handleStashContextMenu}
@@ -1150,6 +1170,7 @@
           on:checkout={handleBranchCheckout}
           on:stashApply={handleSidebarStashApply}
           on:worktreeOpen={handleSidebarWorktreeOpen}
+          on:submoduleOpen={handleSidebarSubmoduleOpen}
         />
       </aside>
       <ResizeHandle
