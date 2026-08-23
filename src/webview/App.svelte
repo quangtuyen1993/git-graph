@@ -370,27 +370,29 @@
       ];
     } else if (branch.current) {
       // Current branch menu (can't delete or checkout)
+      const hasUpstream = !!branch.upstream;
       contextMenuItems = [
-        { label: 'Push', action: 'push' },
-        { label: 'Pull', action: 'pull' },
+        { label: hasUpstream ? 'Push' : 'Publish', action: hasUpstream ? 'push' : 'publish' },
+        ...(hasUpstream ? [{ label: 'Pull', action: 'pull' }] : []),
         { label: 'Fetch', action: 'fetch' },
         { label: '', action: '', divider: true },
         { label: 'Rename branch...', action: 'renameBranch' },
       ];
     } else {
       // Local branch menu
+      const hasUpstream = !!branch.upstream;
       contextMenuItems = [
         { label: 'Checkout', action: 'checkout' },
         { label: 'Merge into current branch', action: 'merge' },
         { label: 'Rebase current onto this', action: 'rebase' },
         { label: '', action: '', divider: true },
-        { label: 'Push', action: 'push' },
-        { label: 'Pull', action: 'pull' },
+        { label: hasUpstream ? 'Push' : 'Publish', action: hasUpstream ? 'push' : 'publish' },
+        ...(hasUpstream ? [{ label: 'Pull', action: 'pull' }] : []),
         { label: 'Fetch', action: 'fetch' },
         { label: '', action: '', divider: true },
         { label: 'Rename branch...', action: 'renameBranch' },
         { label: 'Delete branch', action: 'deleteBranch', danger: true },
-        { label: 'Delete branch + remote', action: 'deleteBranchAndRemote', danger: true },
+        ...(hasUpstream ? [{ label: 'Delete branch + remote', action: 'deleteBranchAndRemote', danger: true }] : []),
       ];
     }
     contextMenuVisible = true;
@@ -567,6 +569,9 @@
             break;
           case 'push':
             await bridge.send('git.push', { remote: 'origin', branch: branchName });
+            break;
+          case 'publish':
+            await bridge.send('git.push', { remote: 'origin', branch: branchName, options: { setUpstream: true } });
             break;
           case 'pull':
             await bridge.send('git.pull', { remote: 'origin', branch: branchName });
