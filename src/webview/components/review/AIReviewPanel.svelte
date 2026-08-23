@@ -35,12 +35,16 @@
   let modelInput = '';
   let filterText = '';
 
-  // Sync initial source/target from parent (right-click context)
-  $: if (initialSource && initialSource !== sourceBranch) {
-    sourceBranch = initialSource;
+  // Sync initial source/target from parent (right-click context) — only on change
+  let lastInitialSource = '';
+  let lastInitialTarget = '';
+  $: if (initialSource !== lastInitialSource) {
+    lastInitialSource = initialSource;
+    if (initialSource) sourceBranch = initialSource;
   }
-  $: if (initialTarget && initialTarget !== targetBranch) {
-    targetBranch = initialTarget;
+  $: if (initialTarget !== lastInitialTarget) {
+    lastInitialTarget = initialTarget;
+    if (initialTarget) targetBranch = initialTarget;
   }
 
   $: cliProviders = providers.filter(p => p.group === 'cli');

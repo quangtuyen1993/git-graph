@@ -1008,14 +1008,10 @@
             // Unused — replaced by compareBranch
             break;
           case 'compareBranch': {
-            const target = await bridge.send('ui.pickBranch', {
-              exclude: branchName,
-              title: `Compare "${branchName}" with...`,
-              placeholder: 'Select target branch',
-            }) as string | null;
-            if (target) {
-              compareBranches(branchName, target);
-            }
+            // Auto-compare: source = right-clicked branch, target = current branch
+            const currentBr = branches.find(b => b.current);
+            const target = currentBr && currentBr.name !== branchName ? currentBr.name : '';
+            compareBranches(branchName, target);
             break;
           }
         }
@@ -1037,19 +1033,23 @@
     compareSource = source;
     compareTarget = target;
     compareFiles = null;
-    compareLoading = true;
     rightPanelOpen = true;
     rightPanelMode = 'review';
     clampSidePanelWidths();
     aiReviewResult = null;
     aiReviewError = '';
-    try {
-      const result = await bridge.send('ai.compare', { sourceBranch: source, targetBranch: target }) as { files: typeof compareFiles };
-      compareFiles = result.files;
-    } catch (e) {
-      aiReviewError = e instanceof Error ? e.message : String(e);
-    } finally {
-      compareLoading = false;
+
+    // If both branches set, fetch comparison immediately
+    if (source && target) {
+      compareLoading = true;
+      try {
+        const result = await bridge.send('ai.compare', { sourceBranch: source, targetBranch: target }) as { files: typeof compareFiles };
+        compareFiles = result.files;
+      } catch (e) {
+        aiReviewError = e instanceof Error ? e.message : String(e);
+      } finally {
+        compareLoading = false;
+      }
     }
   }
 
