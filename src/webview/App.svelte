@@ -299,6 +299,7 @@
       { label: 'Create branch here...', action: 'createBranch' },
       { label: 'Create tag here...', action: 'createTag' },
       { label: '', action: '', divider: true },
+      { label: 'Reword message...', action: 'reword', disabled: !onCurrentBranch },
       { label: 'Cherry-pick', action: 'cherryPick', disabled: onCurrentBranch },
       { label: 'Revert', action: 'revert', disabled: !onCurrentBranch },
       { label: '', action: '', divider: true },
@@ -392,6 +393,20 @@
           case 'revert':
             await bridge.send('git.revert', { hash });
             break;
+          case 'reword': {
+            // Get current commit message
+            const commitInfo = await bridge.send('git.show', { hash }) as { commit: { message: string; subject: string } };
+            const currentMsg = commitInfo.commit.message || commitInfo.commit.subject;
+            const newMsg = await bridge.send('ui.inputBox', {
+              prompt: 'Edit commit message:',
+              placeholder: currentMsg,
+              value: currentMsg
+            }) as string | null;
+            if (newMsg && newMsg !== currentMsg) {
+              await bridge.send('git.reword', { hash, message: newMsg });
+            }
+            break;
+          }
           case 'resetSoft':
             await bridge.send('git.reset', { mode: 'soft', ref: hash });
             break;

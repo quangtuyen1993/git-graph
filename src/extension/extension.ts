@@ -103,6 +103,9 @@ export function activate(context: vscode.ExtensionContext): void {
       case 'git.squash':
         await gitService.squash(p.hashes as string[], p.message as string);
         return { success: true };
+      case 'git.reword':
+        await gitService.reword(p.hash as string, p.message as string);
+        return { success: true };
       case 'git.canSquash':
         return gitService.canSquash(p.hashes as string[]);
       case 'git.isOnCurrentBranch':

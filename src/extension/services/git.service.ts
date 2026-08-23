@@ -293,6 +293,43 @@ export class GitService {
   }
 
   /**
+   * Reword a commit message using interactive rebase.
+   * Only works for commits on the current branch.
+   */
+  public async reword(hash: string, newMessage: string): Promise<void> {
+    const baseRef = `${hash}^`;
+
+    const todo = `reword ${hash}\n`;
+
+    const os = await import('os');
+    const fs = await import('fs/promises');
+    const path = await import('path');
+
+    const tmpDir = os.tmpdir();
+    const todoFile = path.join(tmpDir, `git-graph-todo-${Date.now()}.txt`);
+    const msgFile = path.join(tmpDir, `git-graph-msg-${Date.now()}.txt`);
+
+    await fs.writeFile(todoFile, todo, 'utf8');
+    await fs.writeFile(msgFile, newMessage, 'utf8');
+
+    try {
+      await this.cli.exec(
+        ['rebase', '-i', baseRef],
+        {
+          timeout: 30000,
+          env: {
+            GIT_SEQUENCE_EDITOR: `cp "${todoFile}"`,
+            GIT_EDITOR: `cp "${msgFile}"`,
+          }
+        }
+      );
+    } finally {
+      await fs.unlink(todoFile).catch(() => {});
+      await fs.unlink(msgFile).catch(() => {});
+    }
+  }
+
+  /**
    * Squash consecutive commits into one.
    * Hashes should be in topological order (newest first).
    * Uses interactive rebase with automated sequence editor.
