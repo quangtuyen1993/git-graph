@@ -208,7 +208,7 @@
         groupPrefix="local"
         {selectedBranch}
         on:groupToggle={(event) => toggleBranchGroup(event.detail.key)}
-        on:filter={(event) => dispatch('branchFilter', event.detail)}
+        on:select={(event) => dispatch('branchSelect', event.detail)}
         on:checkout={(event) => dispatch('checkout', event.detail)}
         on:contextMenu={(event) => dispatch('branchContextMenu', event.detail)}
       />
@@ -248,7 +248,7 @@
               {selectedBranch}
               depth={1}
               on:groupToggle={(event) => toggleBranchGroup(event.detail.key)}
-              on:filter={(event) => dispatch('branchFilter', event.detail)}
+              on:select={(event) => dispatch('branchSelect', event.detail)}
               on:checkout={(event) => dispatch('checkout', event.detail)}
               on:contextMenu={(event) => dispatch('branchContextMenu', event.detail)}
             />
@@ -397,6 +397,7 @@
 
 <style>
   .branch-sidebar {
+    --sidebar-gutter: 12px;
     height: 100%;
     overflow-y: auto;
     overflow-x: hidden;
@@ -462,7 +463,7 @@
   }
 
   .remote-group {
-    margin-left: 4px;
+    margin-left: 0;
   }
 
   .remote-name {
@@ -484,14 +485,14 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 4px 12px 4px 24px;
+    padding: 4px 12px 4px 20px;
     cursor: pointer;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     border-radius: 3px;
-    margin: 1px 4px;
-    width: calc(100% - 8px);
+    margin: 1px 0;
+    width: 100%;
     border: none;
     border-bottom: 1px solid rgba(255, 255, 255, 0.03);
     background: none;

@@ -70,6 +70,14 @@ describe('GraphMethodHandler', () => {
       layoutVersion: newBuild.layoutVersion,
     }) as { nodes: Commit[] };
     expect(newWindow.nodes[0].subject).toBe('new');
+    await expect(handler.handle('graph.getRow', {
+      hash: commit('new').hash,
+      layoutVersion: newBuild.layoutVersion,
+    })).resolves.toEqual({ row: 0 });
+    await expect(handler.handle('graph.getRow', {
+      hash: 'missing',
+      layoutVersion: newBuild.layoutVersion,
+    })).resolves.toEqual({ row: null });
 
     oldLog.resolve([commit('old')]);
     await expect(oldBuild).rejects.toThrow('Graph build superseded');
@@ -89,6 +97,10 @@ describe('GraphMethodHandler', () => {
       startRow: 0,
       count: 20,
     })).rejects.toThrow('layoutVersion is required');
+    await expect(handler.handle('graph.getRow', {
+      hash: commit('new').hash,
+      layoutVersion: newBuild.layoutVersion + 1,
+    })).rejects.toThrow('Graph layout version mismatch');
   });
 
   it('invalidates the published layout version as soon as repository identity changes', async () => {

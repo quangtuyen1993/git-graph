@@ -40,6 +40,17 @@ export class GraphMethodHandler {
         const count = (p.count as number) ?? 50;
         return this.graphService.getWindow(startRow, count, p.layoutVersion);
       }
+      case 'graph.getRow': {
+        if (typeof p.layoutVersion !== 'number') {
+          throw new Error('graph.getRow layoutVersion is required');
+        }
+        if (typeof p.hash !== 'string') {
+          throw new Error('graph.getRow hash is required');
+        }
+        return {
+          row: this.graphService.getRow(p.hash, p.layoutVersion),
+        };
+      }
       case 'graph.getLayout':
         return {
           totalRows: this.graphService.getTotalRows(),

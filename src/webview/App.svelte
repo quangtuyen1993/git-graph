@@ -1,6 +1,6 @@
 <script lang="ts">
   import { bridge } from './lib/message-bridge';
-  import { onMount, tick } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import { calculateVisibleRange, getTotalHeight, ROW_HEIGHT, BUFFER_ROWS } from './lib/virtual-scroll';
   import GraphCanvas from './components/graph/GraphCanvas.svelte';
   import ContextMenu from './components/actions/ContextMenu.svelte';
@@ -89,6 +89,9 @@
   let layoutVersion: number | null = null;
   let graphWindow: GraphWindow | null = null;
   let selectedBranchFilter: string | null = null;
+  let selectedSidebarBranch: string | null = null;
+  let focusedBranchHash: string | null = null;
+  let branchHighlightTimer: ReturnType<typeof setTimeout> | undefined;
   let selectedHash: string | null = null;
   let selectedHashes: Set<string> = new Set();
   let lastClickedHash: string | null = null;
@@ -103,6 +106,27 @@
   const graphWindowRequestGate = new LatestRequestGate();
   const graphWindowRequestCoordinator = new LatestWindowRequestCoordinator<GraphWindow>(graphWindowRequestGate);
   const graphRefreshGate = new LatestRequestGate();
+
+  function clearBranchHighlight() {
+    if (branchHighlightTimer !== undefined) {
+      clearTimeout(branchHighlightTimer);
+      branchHighlightTimer = undefined;
+    }
+    selectedSidebarBranch = null;
+    focusedBranchHash = null;
+  }
+
+  function scheduleBranchHighlightClear() {
+    branchHighlightTimer = setTimeout(() => {
+      branchHighlightTimer = undefined;
+      selectedSidebarBranch = null;
+      focusedBranchHash = null;
+    }, 2_000);
+  }
+
+  onDestroy(() => {
+    if (branchHighlightTimer !== undefined) clearTimeout(branchHighlightTimer);
+  });
 
   // Commit detail state
   let detailCommit: {
@@ -233,6 +257,7 @@
       activeRepoName = result.name;
       repos = repos.map(r => ({ ...r, active: r.path === path }));
       selectedBranchFilter = null;
+      clearBranchHighlight();
       selectedHash = null;
       selectedHashes = new Set();
       rightPanelOpen = false;
@@ -353,6 +378,7 @@
   }
 
   function handleRowClick(hash: string, event?: MouseEvent) {
+    clearBranchHighlight();
     if (event?.shiftKey && lastClickedHash && graphWindow) {
       const allNodes = graphWindow.nodes;
       const lastIdx = allNodes.findIndex(n => n.hash === lastClickedHash);
@@ -662,6 +688,7 @@
       if (ref.includes('/') && branches.some(b => b.remote && b.name === ref)) {
         ref = ref.replace(/^[^/]+\//, '');
       }
+      clearBranchHighlight();
       await runDirectMutation('Checking out…', () => bridge.send('git.checkout', { ref }) as Promise<void>);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -669,10 +696,9 @@
     }
   }
 
-  async function handleBranchFilter(event: CustomEvent<{ name: string }>) {
-    selectedBranchFilter = selectedBranchFilter === event.detail.name
-      ? null
-      : event.detail.name;
+  async function handleGraphBranchFilter(branchName: string) {
+    selectedBranchFilter = branchName || null;
+    clearBranchHighlight();
     selectedHash = null;
     selectedHashes = new Set();
     lastClickedHash = null;
@@ -685,6 +711,38 @@
     try {
       await refreshGraph();
     } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      setTimeout(() => { error = ''; }, 5000);
+    }
+  }
+
+  async function handleBranchSelect(event: CustomEvent<{ name: string }>) {
+    const branch = branches.find(candidate => candidate.name === event.detail.name);
+    const requestedLayoutVersion = layoutVersion;
+    if (!branch || requestedLayoutVersion === null || !scrollContainer) return;
+
+    try {
+      const result = await bridge.send('graph.getRow', {
+        hash: branch.hash,
+        layoutVersion: requestedLayoutVersion,
+      }) as { row: number | null };
+      if (result.row === null || requestedLayoutVersion !== layoutVersion) return;
+
+      clearBranchHighlight();
+      selectedSidebarBranch = branch.name;
+      focusedBranchHash = branch.hash;
+      scheduleBranchHighlightClear();
+      const workingRowOffset = hasWorkingChanges ? 1 : 0;
+      const targetTop = (result.row + workingRowOffset) * ROW_HEIGHT;
+      const nextScrollTop = Math.max(0, targetTop - Math.floor(viewportHeight / 2));
+      scrollTop = nextScrollTop;
+      scrollContainer.scrollTop = nextScrollTop;
+      await updateGraphWindow(
+        calculateVisibleRange({ scrollTop, viewportHeight, totalRows }),
+        graphWindow,
+      );
+    } catch (e) {
+      if (requestedLayoutVersion !== layoutVersion) return;
       error = e instanceof Error ? e.message : String(e);
       setTimeout(() => { error = ''; }, 5000);
     }
@@ -1174,6 +1232,7 @@
     {#if repos.length > 1}
       <select
         class="repo-selector"
+        aria-label="Repository"
         on:change={(e) => switchRepo(e.currentTarget.value)}
       >
         {#each repos as repo}
@@ -1183,6 +1242,17 @@
     {:else if activeRepoName}
       <span class="repo-name">{activeRepoName}</span>
     {/if}
+    <select
+      class="graph-branch-filter"
+      aria-label="Filter graph by branch"
+      value={selectedBranchFilter ?? ''}
+      on:change={(event) => handleGraphBranchFilter(event.currentTarget.value)}
+    >
+      <option value="">All branches</option>
+      {#each branches as branch (branch.name)}
+        <option value={branch.name}>{branch.name}</option>
+      {/each}
+    </select>
     <span class="status">{status}</span>
   </header>
 
@@ -1201,8 +1271,8 @@
             {stashes}
             {worktrees}
             {submodules}
-            selectedBranch={selectedBranchFilter}
-            on:branchFilter={handleBranchFilter}
+            selectedBranch={selectedSidebarBranch}
+            on:branchSelect={handleBranchSelect}
             on:branchContextMenu={handleBranchContextMenu}
             on:tagContextMenu={handleTagContextMenu}
             on:stashContextMenu={handleStashContextMenu}
@@ -1275,7 +1345,7 @@
               <div
                 class="commit-row"
                 style="top: {(node.row - graphWindow.startRow + currentStartRow) * ROW_HEIGHT + (hasWorkingChanges ? ROW_HEIGHT : 0)}px; --graph-col-width: {graphColWidth}px; --lane-rgb: {getColorRgb(node.color)}"
-                class:selected={selectedHash === node.hash || selectedHashes.has(node.hash)}
+                class:selected={selectedHash === node.hash || selectedHashes.has(node.hash) || focusedBranchHash === node.hash}
                 on:click={(e) => handleRowClick(node.hash, e)}
                 on:keydown={(e) => { if (e.key === 'Enter') handleRowClick(node.hash); }}
                 on:contextmenu={(e) => handleRowContextMenu(e, node.hash)}
@@ -1414,7 +1484,8 @@
     margin-left: auto;
   }
 
-  .repo-selector {
+  .repo-selector,
+  .graph-branch-filter {
     padding: 2px 6px;
     border: 1px solid var(--vscode-dropdown-border, #3c3c3c);
     background: var(--vscode-dropdown-background, #1e1e1e);
@@ -1425,8 +1496,14 @@
     cursor: pointer;
   }
 
-  .repo-selector:focus {
+  .repo-selector:focus,
+  .graph-branch-filter:focus {
     border-color: var(--vscode-focusBorder, #007acc);
+  }
+
+  .graph-branch-filter {
+    min-width: 140px;
+    max-width: 240px;
   }
 
   .repo-name {

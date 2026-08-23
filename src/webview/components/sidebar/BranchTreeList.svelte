@@ -25,11 +25,11 @@
     return `${groupPrefix}:${path}`;
   }
 
-  function scheduleFilter(branch: Branch) {
+  function scheduleSelect(branch: Branch) {
     if (clickTimer) clearTimeout(clickTimer);
     clickTimer = setTimeout(() => {
       clickTimer = undefined;
-      dispatch('filter', { name: branch.name });
+      dispatch('select', { name: branch.name });
     }, 180);
   }
 
@@ -55,7 +55,7 @@
       dispatch('contextMenu', { event: keyboardContextMenuEvent(event), branch });
     } else if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      dispatch('filter', { name: branch.name });
+      dispatch('select', { name: branch.name });
     }
   }
 
@@ -71,7 +71,7 @@
         <button
           type="button"
           class="branch-group"
-          style={`--tree-depth: ${depth}`}
+          style={`--tree-indent: ${depth * 16}px`}
           aria-label={`Branch group ${node.path}`}
           aria-expanded={expandedGroups[groupKey(node.path)] === true}
           on:click={() => dispatch('groupToggle', { key: groupKey(node.path) })}
@@ -86,13 +86,13 @@
           type="button"
           class="branch-item"
           class:current={node.branch.current}
-          class:filtered={selectedBranch === node.branch.name}
-          style={`--tree-depth: ${depth}`}
+          class:selected={selectedBranch === node.branch.name}
+          style={`--tree-indent: ${depth * 16}px`}
           aria-current={node.branch.current ? 'true' : undefined}
           aria-pressed={selectedBranch === node.branch.name}
           aria-label={node.branch.name}
           title={node.branch.name}
-          on:click={() => scheduleFilter(node.branch)}
+          on:click={() => scheduleSelect(node.branch)}
           on:contextmenu={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -120,7 +120,7 @@
           {selectedBranch}
           depth={depth + 1}
           on:groupToggle
-          on:filter
+          on:select
           on:checkout
           on:contextMenu
         />
@@ -141,8 +141,8 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    width: calc(100% - 8px);
-    margin: 1px 4px;
+    width: 100%;
+    margin: 1px 0;
     border: none;
     border-radius: 3px;
     background: none;
@@ -152,13 +152,13 @@
   }
 
   .branch-group {
-    padding: 4px 12px 4px calc(16px + var(--tree-depth) * 12px);
+    padding: 4px 12px 4px calc(var(--sidebar-gutter, 12px) + var(--tree-indent));
     color: var(--vscode-descriptionForeground, #999999);
     cursor: pointer;
   }
 
   .branch-item {
-    padding: 4px 12px 4px calc(24px + var(--tree-depth) * 12px);
+    padding: 4px 12px 4px calc(var(--sidebar-gutter, 12px) + 8px + var(--tree-indent));
     border-bottom: 1px solid rgba(255, 255, 255, 0.03);
     cursor: pointer;
     white-space: nowrap;
@@ -200,7 +200,7 @@
     font-weight: 600;
   }
 
-  .branch-item.filtered {
+  .branch-item.selected {
     background: var(--vscode-list-activeSelectionBackground, #094771);
     color: var(--vscode-list-activeSelectionForeground, #ffffff);
   }

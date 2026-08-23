@@ -27,7 +27,7 @@ export interface PanelLayout {
 
 const defaultMinimumCenterWidth = 300;
 const defaultHandleWidth = 4;
-const defaultLeftMinimumWidth = 150;
+const defaultLeftMinimumWidth = 300;
 const defaultRightMinimumWidth = 280;
 const defaultLeftMaximumWidth = 400;
 const defaultRightMaximumWidth = 600;

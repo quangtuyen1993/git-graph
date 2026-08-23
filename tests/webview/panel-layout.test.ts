@@ -22,10 +22,10 @@ function panelTotal(layout: ReturnType<typeof calculatePanelLayout>) {
 }
 
 describe('panel layout coordinator', () => {
-  it('advertises the historical minima when a wide viewport has enough panel budget', () => {
+  it('advertises a 300px left minimum when a wide viewport has enough panel budget', () => {
     const layout = calculatePanelLayout(wideLayout);
 
-    expect(layout.left.minWidth).toBe(150);
+    expect(layout.left.minWidth).toBe(300);
     expect(layout.right.minWidth).toBe(280);
   });
 
@@ -33,14 +33,14 @@ describe('panel layout coordinator', () => {
     const afterLeftHome = resizePanel(wideLayout, 'left', 0);
     const afterRightMouseResize = resizePanel(wideLayout, 'right', 0);
 
-    expect(afterLeftHome.left.width).toBe(150);
+    expect(afterLeftHome.left.width).toBe(300);
     expect(afterRightMouseResize.right.width).toBe(280);
   });
 
-  it('keeps values valid at the smallest viewport that supports both historical minima', () => {
-    const layout = calculatePanelLayout({ ...wideLayout, viewportWidth: 738 });
+  it('keeps values valid at the smallest viewport that supports both panel minima', () => {
+    const layout = calculatePanelLayout({ ...wideLayout, viewportWidth: 888 });
 
-    expect(layout.left).toMatchObject({ width: 150, minWidth: 150, maxWidth: 150 });
+    expect(layout.left).toMatchObject({ width: 300, minWidth: 300, maxWidth: 300 });
     expect(layout.right).toMatchObject({ width: 280, minWidth: 280, maxWidth: 280 });
   });
 

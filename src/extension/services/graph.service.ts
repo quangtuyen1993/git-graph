@@ -187,6 +187,14 @@ export class GraphService {
     };
   }
 
+  public getRow(hash: string, layoutVersion?: number): number | null {
+    if (layoutVersion !== undefined && layoutVersion !== this.layoutVersion) {
+      throw new Error(`Graph layout version mismatch: expected ${this.layoutVersion}, received ${layoutVersion}`);
+    }
+
+    return this.layout?.nodes.find(node => node.hash === hash)?.row ?? null;
+  }
+
   /** Total number of rows in the current layout. */
   public getTotalRows(): number {
     return this.layout?.totalRows ?? 0;

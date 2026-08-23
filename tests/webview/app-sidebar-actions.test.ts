@@ -14,6 +14,20 @@ const branch = {
   behind: 0,
 };
 
+const branchHeadNode = {
+  hash: branch.hash,
+  abbreviatedHash: branch.hash.slice(0, 7),
+  subject: 'branch head',
+  author: 'A',
+  authorEmail: 'a@example.test',
+  authorDate: '2026-08-24T00:00:00Z',
+  refs: ['main'],
+  parents: [],
+  lane: 0,
+  row: 50,
+  color: 0,
+};
+
 describe('App sidebar primary actions', () => {
   afterEach(() => {
     cleanup();
@@ -21,7 +35,13 @@ describe('App sidebar primary actions', () => {
     on.mockClear();
   });
 
-  async function renderApp(repos = [{ name: 'repo', path: '/repo', active: true }]) {
+  async function renderApp({
+    repos = [{ name: 'repo', path: '/repo', active: true }],
+    branchRow = 50,
+  }: {
+    repos?: { name: string; path: string; active: boolean }[];
+    branchRow?: number | null;
+  } = {}) {
     vi.stubGlobal('acquireVsCodeApi', () => ({ postMessage: vi.fn(), getState: () => null, setState: vi.fn() }));
     send.mockImplementation(async (method: string, params?: unknown) => {
       switch (method) {
@@ -42,8 +62,22 @@ describe('App sidebar primary actions', () => {
           { name: 'sdk', path: 'packages/sdk', head: 'f'.repeat(40), state: 'initialized' },
         ];
         case 'git.status': return { staged: [], unstaged: [], untracked: [], conflicted: [] };
-        case 'graph.build': return { totalRows: 1, maxLane: 0, layoutVersion: 1 };
-        case 'graph.getWindow': return { nodes: [], edges: [], startRow: 0, endRow: 0, totalRows: 1, maxLane: 0 };
+        case 'graph.build': return { totalRows: 100, maxLane: 0, layoutVersion: 1 };
+        case 'graph.getWindow': {
+          const startRow = (params as { startRow: number }).startRow;
+          const endRow = Math.min(startRow + 59, 100);
+          return {
+            nodes: startRow <= branchHeadNode.row && branchHeadNode.row < endRow
+              ? [branchHeadNode]
+              : [],
+            edges: [],
+            startRow,
+            endRow,
+            totalRows: 100,
+            maxLane: 0,
+          };
+        }
+        case 'graph.getRow': return { row: branchRow };
         default: return undefined;
       }
     });
@@ -72,27 +106,79 @@ describe('App sidebar primary actions', () => {
     await waitFor(() => expect(send).toHaveBeenCalledWith('ui.openSubmodule', { path: 'packages/sdk' }));
   });
 
-  it('filters the graph by a clicked branch and clears the filter when clicked again', async () => {
+  it('filters from the header and treats an empty selection as all branches', async () => {
     const { getByRole } = await renderApp();
-    const branchRow = getByRole('button', { name: 'main' });
+    const filter = getByRole('combobox', { name: 'Filter graph by branch' });
 
     expect(send).toHaveBeenCalledWith('graph.build', { all: true });
 
-    await fireEvent.click(branchRow);
-    await waitFor(() => {
-      expect(send).toHaveBeenCalledWith('graph.build', { branch: 'main', all: false });
-      expect(getByRole('button', { name: 'main' })).toHaveAttribute('aria-pressed', 'true');
-    });
+    await fireEvent.change(filter, { target: { value: 'main' } });
+    await waitFor(() => expect(send).toHaveBeenCalledWith(
+      'graph.build',
+      { branch: 'main', all: false },
+    ));
 
     const buildCountAfterFiltering = send.mock.calls.filter(([method]) => method === 'graph.build').length;
-    await fireEvent.click(getByRole('button', { name: 'main' }));
+    await fireEvent.change(filter, { target: { value: '' } });
 
     await waitFor(() => {
       const buildCalls = send.mock.calls.filter(([method]) => method === 'graph.build');
       expect(buildCalls.length).toBeGreaterThan(buildCountAfterFiltering);
       expect(buildCalls.at(-1)).toEqual(['graph.build', { all: true }]);
-      expect(getByRole('button', { name: 'main' })).toHaveAttribute('aria-pressed', 'false');
     });
+  });
+
+  it('moves to a branch HEAD, highlights it for two seconds, and does not rebuild', async () => {
+    const { container, getByRole } = await renderApp();
+    const buildCount = send.mock.calls.filter(([method]) => method === 'graph.build').length;
+    const headRow = container.querySelector('.commit-row') as HTMLElement;
+
+    expect(headRow).not.toHaveClass('selected');
+
+    await fireEvent.click(getByRole('button', { name: 'main' }));
+
+    await waitFor(() => {
+      expect(send).toHaveBeenCalledWith('graph.getRow', {
+        hash: branch.hash,
+        layoutVersion: 1,
+      });
+      expect((container.querySelector('.scroll-area') as HTMLElement).scrollTop).toBeGreaterThan(0);
+      expect(getByRole('button', { name: 'main' })).toHaveAttribute('aria-pressed', 'true');
+      expect(headRow).toHaveClass('selected');
+    });
+    expect(send.mock.calls.filter(([method]) => method === 'graph.build')).toHaveLength(buildCount);
+    expect(send).not.toHaveBeenCalledWith('git.show', expect.anything());
+
+    await new Promise(resolve => setTimeout(resolve, 2_100));
+    expect(headRow).not.toHaveClass('selected');
+    expect(getByRole('button', { name: 'main' })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('reloads the graph after double-click checkout switches the active branch', async () => {
+    const { getByRole } = await renderApp();
+    const buildCount = send.mock.calls.filter(([method]) => method === 'graph.build').length;
+
+    await fireEvent.dblClick(getByRole('button', { name: 'main' }));
+
+    await waitFor(() => expect(send).toHaveBeenCalledWith('git.checkout', { ref: 'main' }));
+    await waitFor(() => expect(
+      send.mock.calls.filter(([method]) => method === 'graph.build').length,
+    ).toBeGreaterThan(buildCount));
+  });
+
+  it('ignores a branch HEAD that is absent from the current graph', async () => {
+    const { container, getByRole } = await renderApp({ branchRow: null });
+    const scrollArea = container.querySelector('.scroll-area') as HTMLElement;
+    scrollArea.scrollTop = 64;
+
+    await fireEvent.click(getByRole('button', { name: 'main' }));
+    await waitFor(() => expect(send).toHaveBeenCalledWith('graph.getRow', {
+      hash: branch.hash,
+      layoutVersion: 1,
+    }));
+
+    expect(scrollArea.scrollTop).toBe(64);
+    expect(getByRole('button', { name: 'main' })).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('clears the branch filter when switching repositories', async () => {
@@ -100,23 +186,29 @@ describe('App sidebar primary actions', () => {
       { name: 'repo', path: '/repo', active: true },
       { name: 'repo-two', path: '/repo-two', active: false },
     ];
-    const { getByRole } = await renderApp(repos);
+    const { getByRole } = await renderApp({ repos });
 
-    await fireEvent.click(getByRole('button', { name: 'main' }));
+    await fireEvent.change(
+      getByRole('combobox', { name: 'Filter graph by branch' }),
+      { target: { value: 'main' } },
+    );
     await waitFor(() => expect(send).toHaveBeenCalledWith(
       'graph.build',
       { branch: 'main', all: false },
     ));
 
     const buildCount = send.mock.calls.filter(([method]) => method === 'graph.build').length;
-    await fireEvent.change(getByRole('combobox'), { target: { value: '/repo-two' } });
+    await fireEvent.change(
+      getByRole('combobox', { name: 'Repository' }),
+      { target: { value: '/repo-two' } },
+    );
 
     await waitFor(() => {
       const buildCalls = send.mock.calls.filter(([method]) => method === 'graph.build');
       expect(send).toHaveBeenCalledWith('repo.switch', { path: '/repo-two' });
       expect(buildCalls.length).toBeGreaterThan(buildCount);
       expect(buildCalls.at(-1)).toEqual(['graph.build', { all: true }]);
-      expect(getByRole('button', { name: 'main' })).toHaveAttribute('aria-pressed', 'false');
+      expect(getByRole('combobox', { name: 'Filter graph by branch' })).toHaveValue('');
     });
   });
 });
