@@ -62,13 +62,8 @@
   let worktreesExpanded = true;
   let expandedRemotes: Record<string, boolean> = {};
 
-  function isRemoteExpanded(remote: string): boolean {
-    return expandedRemotes[remote] !== false; // default true
-  }
-
   function toggleRemote(remote: string) {
-    expandedRemotes[remote] = !isRemoteExpanded(remote);
-    expandedRemotes = expandedRemotes; // trigger reactivity
+    expandedRemotes = { ...expandedRemotes, [remote]: !(expandedRemotes[remote] ?? true) };
   }
 
   function handleBranchContextMenu(event: MouseEvent, branch: Branch) {
@@ -236,12 +231,12 @@
             class="remote-header"
             on:click={() => toggleRemote(remote)}
           >
-            <span class="chevron" class:collapsed={!isRemoteExpanded(remote)}>▶</span>
+            <span class="chevron" class:collapsed={expandedRemotes[remote] === false}>▶</span>
             <span class="remote-name">{remote}</span>
             <span class="section-count">{rBranches.length}</span>
           </button>
 
-          {#if isRemoteExpanded(remote)}
+          {#if expandedRemotes[remote] !== false}
             <ul class="branch-list nested">
               {#each rBranches as branch (branch.name)}
                 <li>
