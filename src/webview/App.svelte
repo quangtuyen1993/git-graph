@@ -9,6 +9,7 @@
   import { hasWorkingTreeChanges, type WorkingTreeStatus } from './lib/git-status';
   import { handleLatestWindowIntent, LatestRequestGate } from './lib/latest-request';
   import { MutationGate, runMutationWithProgress } from './lib/mutation-gate';
+  import { clampPanelWidths } from './lib/context-menu-position';
   import CommitDetail from './components/detail/CommitDetail.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
   import ResizeHandle from './components/layout/ResizeHandle.svelte';
@@ -146,6 +147,34 @@
     });
   });
 
+  onMount(() => {
+    clampSidePanelWidths();
+    window.addEventListener('resize', clampSidePanelWidths);
+
+    return () => {
+      window.removeEventListener('resize', clampSidePanelWidths);
+    };
+  });
+
+  function clampSidePanelWidths() {
+    const handleWidth = 4;
+    const activeHandleWidth = (leftSidebarOpen ? handleWidth : 0) + (rightPanelOpen ? handleWidth : 0);
+    const widths = clampPanelWidths({
+      leftWidth: leftSidebarWidth,
+      rightWidth: rightPanelWidth,
+      viewportWidth: Math.max(0, window.innerWidth - activeHandleWidth),
+      leftOpen: leftSidebarOpen,
+      rightOpen: rightPanelOpen,
+    });
+    leftSidebarWidth = widths.leftWidth;
+    rightPanelWidth = widths.rightWidth;
+  }
+
+  function toggleLeftSidebar() {
+    leftSidebarOpen = !leftSidebarOpen;
+    clampSidePanelWidths();
+  }
+
   async function switchRepo(path: string) {
     try {
       const result = await bridge.send('repo.switch', { path }) as { name: string };
@@ -242,6 +271,7 @@
 
     if (hash && hash !== 'WORKING') {
       rightPanelOpen = true;
+      clampSidePanelWidths();
       fetchCommitDetail(hash);
     } else {
       detailCommit = null;
@@ -251,6 +281,7 @@
 
   function closeRightPanel() {
     rightPanelOpen = false;
+    clampSidePanelWidths();
     selectedHash = null;
     selectedHashes = new Set();
     detailCommit = null;
@@ -824,7 +855,7 @@
     <button
       class="toolbar-icon-btn"
       class:active={leftSidebarOpen}
-      on:click={() => { leftSidebarOpen = !leftSidebarOpen; }}
+      on:click={toggleLeftSidebar}
       title="Toggle branches panel"
     >☰</button>
     <h1>Git Graph</h1>

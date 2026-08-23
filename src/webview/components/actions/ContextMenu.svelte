@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount, onDestroy } from 'svelte';
+  import { createEventDispatcher, onMount, onDestroy, tick } from 'svelte';
   import type { MenuItem } from '../../types/menu.types';
+  import { clampMenuPosition } from '../../lib/context-menu-position';
 
   export let items: MenuItem[] = [];
   export let x: number = 0;
@@ -9,9 +10,55 @@
 
   const dispatch = createEventDispatcher();
   let menuEl: HTMLDivElement;
+  let positionedX = x;
+  let positionedY = y;
+  let wasVisible = false;
+  let previouslyFocusedElement: HTMLElement | null = null;
 
   function close() {
     dispatch('close');
+  }
+
+  function enabledMenuItems(): HTMLButtonElement[] {
+    return menuEl
+      ? [...menuEl.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]:not(:disabled)')]
+      : [];
+  }
+
+  function focusMenuItem(index: number) {
+    const enabledItems = enabledMenuItems();
+    if (enabledItems.length === 0) return;
+
+    const nextIndex = (index + enabledItems.length) % enabledItems.length;
+    enabledItems.forEach((item, itemIndex) => {
+      item.tabIndex = itemIndex === nextIndex ? 0 : -1;
+    });
+    enabledItems[nextIndex].focus();
+  }
+
+  async function openMenu() {
+    previouslyFocusedElement = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    await tick();
+    if (!visible || !menuEl) return;
+
+    const bounds = menuEl.getBoundingClientRect();
+    const position = clampMenuPosition(
+      { x, y },
+      { width: bounds.width, height: bounds.height },
+      { width: window.innerWidth, height: window.innerHeight },
+    );
+    positionedX = position.x;
+    positionedY = position.y;
+    focusMenuItem(0);
+  }
+
+  function restoreFocus() {
+    if (previouslyFocusedElement?.isConnected) {
+      previouslyFocusedElement.focus();
+    }
+    previouslyFocusedElement = null;
   }
 
   function handleItemClick(item: MenuItem) {
@@ -27,8 +74,37 @@
   }
 
   function handleKeydown(event: KeyboardEvent) {
-    if (visible && event.key === 'Escape') {
-      close();
+    const enabledItems = enabledMenuItems();
+    if (!visible || enabledItems.length === 0) return;
+
+    const currentIndex = Math.max(0, enabledItems.indexOf(document.activeElement as HTMLButtonElement));
+    switch (event.key) {
+      case 'ArrowDown':
+        event.preventDefault();
+        focusMenuItem(currentIndex + 1);
+        break;
+      case 'ArrowUp':
+        event.preventDefault();
+        focusMenuItem(currentIndex - 1);
+        break;
+      case 'Home':
+        event.preventDefault();
+        focusMenuItem(0);
+        break;
+      case 'End':
+        event.preventDefault();
+        focusMenuItem(enabledItems.length - 1);
+        break;
+      case 'Enter':
+      case ' ':
+      case 'Spacebar':
+        event.preventDefault();
+        enabledItems[currentIndex].click();
+        break;
+      case 'Escape':
+        event.preventDefault();
+        close();
+        break;
     }
   }
 
@@ -41,27 +117,35 @@
 
   onMount(() => {
     document.addEventListener('mousedown', handleClickOutside, true);
-    document.addEventListener('keydown', handleKeydown);
     document.addEventListener('contextmenu', handleContextMenu, true);
   });
 
   onDestroy(() => {
     document.removeEventListener('mousedown', handleClickOutside, true);
-    document.removeEventListener('keydown', handleKeydown);
     document.removeEventListener('contextmenu', handleContextMenu, true);
   });
+
+  $: if (visible && !wasVisible) {
+    wasVisible = true;
+    void openMenu();
+  } else if (!visible && wasVisible) {
+    wasVisible = false;
+    restoreFocus();
+  }
 </script>
 
 {#if visible}
   <div
     class="context-menu"
     bind:this={menuEl}
-    style="left: {x}px; top: {y}px;"
+    style="left: {positionedX}px; top: {positionedY}px;"
     role="menu"
+    tabindex="-1"
+    on:keydown={handleKeydown}
   >
     {#each items as item}
       {#if item.divider}
-        <div class="divider"></div>
+        <div class="divider" role="separator"></div>
       {:else}
         <button
           class="menu-item"
@@ -69,6 +153,7 @@
           class:danger={item.danger}
           role="menuitem"
           disabled={item.disabled}
+          tabindex="-1"
           on:click={() => handleItemClick(item)}
         >
           {item.label}
@@ -107,6 +192,11 @@
   .menu-item:hover:not(.disabled) {
     background: var(--vscode-menu-selectionBackground, #094771);
     color: var(--vscode-menu-selectionForeground, #ffffff);
+  }
+
+  .menu-item:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007acc);
+    outline-offset: -1px;
   }
 
   .menu-item.disabled {

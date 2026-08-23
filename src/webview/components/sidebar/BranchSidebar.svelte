@@ -99,6 +99,51 @@
     dispatch('worktreeContextMenu', { event, worktree });
   }
 
+  function isContextMenuShortcut(event: KeyboardEvent): boolean {
+    return event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10');
+  }
+
+  function keyboardContextMenuEvent(event: KeyboardEvent): MouseEvent {
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    return new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      clientX: rect.left,
+      clientY: rect.bottom,
+    });
+  }
+
+  function handleBranchKeydown(event: KeyboardEvent, branch: Branch) {
+    if (isContextMenuShortcut(event)) {
+      event.preventDefault();
+      handleBranchContextMenu(keyboardContextMenuEvent(event), branch);
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      handleBranchDblClick(branch);
+    }
+  }
+
+  function handleTagKeydown(event: KeyboardEvent, tag: Tag) {
+    if (isContextMenuShortcut(event)) {
+      event.preventDefault();
+      handleTagContextMenu(keyboardContextMenuEvent(event), tag);
+    }
+  }
+
+  function handleStashKeydown(event: KeyboardEvent, stash: StashEntry) {
+    if (isContextMenuShortcut(event)) {
+      event.preventDefault();
+      handleStashContextMenu(keyboardContextMenuEvent(event), stash);
+    }
+  }
+
+  function handleWorktreeKeydown(event: KeyboardEvent, worktree: WorktreeEntry) {
+    if (isContextMenuShortcut(event)) {
+      event.preventDefault();
+      handleWorktreeContextMenu(keyboardContextMenuEvent(event), worktree);
+    }
+  }
+
   function getShortName(branch: Branch): string {
     if (branch.remote) {
       const parts = branch.name.split('/');
@@ -124,22 +169,26 @@
     {#if localExpanded}
       <ul class="branch-list">
         {#each localBranches as branch (branch.name)}
-          <li
-            class="branch-item"
-            class:current={branch.current}
-            on:contextmenu={(e) => handleBranchContextMenu(e, branch)}
-            on:dblclick={() => handleBranchDblClick(branch)}
-            role="treeitem"
-            aria-selected={branch.current}
-          >
-            <span class="branch-icon">{branch.current ? '●' : '○'}</span>
-            <span class="branch-name">{branch.name}</span>
-            {#if branch.ahead > 0 || branch.behind > 0}
-              <span class="ahead-behind">
-                {#if branch.ahead > 0}<span class="ahead">↑{branch.ahead}</span>{/if}
-                {#if branch.behind > 0}<span class="behind">↓{branch.behind}</span>{/if}
-              </span>
-            {/if}
+          <li>
+            <button
+              type="button"
+              class="branch-item"
+              class:current={branch.current}
+              aria-current={branch.current ? 'true' : undefined}
+              aria-label={branch.name}
+              on:contextmenu={(e) => handleBranchContextMenu(e, branch)}
+              on:dblclick={() => handleBranchDblClick(branch)}
+              on:keydown={(e) => handleBranchKeydown(e, branch)}
+            >
+              <span class="branch-icon">{branch.current ? '●' : '○'}</span>
+              <span class="branch-name">{branch.name}</span>
+              {#if branch.ahead > 0 || branch.behind > 0}
+                <span class="ahead-behind">
+                  {#if branch.ahead > 0}<span class="ahead">↑{branch.ahead}</span>{/if}
+                  {#if branch.behind > 0}<span class="behind">↓{branch.behind}</span>{/if}
+                </span>
+              {/if}
+            </button>
           </li>
         {/each}
       </ul>
@@ -172,14 +221,17 @@
           {#if isRemoteExpanded(remote)}
             <ul class="branch-list nested">
               {#each rBranches as branch (branch.name)}
-                <li
-                  class="branch-item remote"
-                  on:contextmenu={(e) => handleBranchContextMenu(e, branch)}
-                  on:dblclick={() => handleBranchDblClick(branch)}
-                  role="treeitem"
-                  aria-selected={false}
-                >
-                  <span class="branch-name">{getShortName(branch)}</span>
+                <li>
+                  <button
+                    type="button"
+                    class="branch-item remote"
+                    aria-label={getShortName(branch)}
+                    on:contextmenu={(e) => handleBranchContextMenu(e, branch)}
+                    on:dblclick={() => handleBranchDblClick(branch)}
+                    on:keydown={(e) => handleBranchKeydown(e, branch)}
+                  >
+                    <span class="branch-name">{getShortName(branch)}</span>
+                  </button>
                 </li>
               {/each}
             </ul>
@@ -203,14 +255,17 @@
     {#if tagsExpanded}
       <ul class="branch-list">
         {#each tags as tag (tag.name)}
-          <li
-            class="branch-item tag"
-            on:contextmenu={(e) => handleTagContextMenu(e, tag)}
-            role="treeitem"
-            aria-selected={false}
-          >
-            <span class="branch-icon">🏷</span>
-            <span class="branch-name">{tag.name}</span>
+          <li>
+            <button
+              type="button"
+              class="branch-item tag"
+              aria-label={tag.name}
+              on:contextmenu={(e) => handleTagContextMenu(e, tag)}
+              on:keydown={(e) => handleTagKeydown(e, tag)}
+            >
+              <span class="branch-icon">🏷</span>
+              <span class="branch-name">{tag.name}</span>
+            </button>
           </li>
         {/each}
       </ul>
@@ -231,16 +286,19 @@
     {#if stashesExpanded}
       <ul class="branch-list">
         {#each stashes as stash (stash.index)}
-          <li
-            class="branch-item stash"
-            on:contextmenu={(e) => handleStashContextMenu(e, stash)}
-            role="treeitem"
-            aria-selected={false}
-          >
-            <span class="branch-icon">📦</span>
-            <span class="branch-name" title={stash.message}>
-              {stash.message || `stash@{${stash.index}}`}
-            </span>
+          <li>
+            <button
+              type="button"
+              class="branch-item stash"
+              aria-label={stash.message || `stash@{${stash.index}}`}
+              on:contextmenu={(e) => handleStashContextMenu(e, stash)}
+              on:keydown={(e) => handleStashKeydown(e, stash)}
+            >
+              <span class="branch-icon">📦</span>
+              <span class="branch-name" title={stash.message}>
+                {stash.message || `stash@{${stash.index}}`}
+              </span>
+            </button>
           </li>
         {/each}
       </ul>
@@ -261,17 +319,20 @@
     {#if worktreesExpanded}
       <ul class="branch-list">
         {#each worktrees as wt (wt.path)}
-          <li
-            class="branch-item worktree"
-            class:main={wt.isMain}
-            on:contextmenu={(e) => handleWorktreeContextMenu(e, wt)}
-            role="treeitem"
-            aria-selected={wt.isMain}
-          >
-            <span class="branch-icon">{wt.isMain ? '🏠' : '📂'}</span>
-            <span class="branch-name" title={wt.path}>
-              {wt.branch ?? wt.head?.substring(0, 7) ?? '???'}
-            </span>
+          <li>
+            <button
+              type="button"
+              class="branch-item worktree"
+              class:main={wt.isMain}
+              aria-label={`Worktree ${wt.branch ?? wt.head?.substring(0, 7) ?? 'unknown'}`}
+              on:contextmenu={(e) => handleWorktreeContextMenu(e, wt)}
+              on:keydown={(e) => handleWorktreeKeydown(e, wt)}
+            >
+              <span class="branch-icon">{wt.isMain ? '🏠' : '📂'}</span>
+              <span class="branch-name" title={wt.path}>
+                {wt.branch ?? wt.head?.substring(0, 7) ?? '???'}
+              </span>
+            </button>
           </li>
         {/each}
       </ul>
@@ -370,10 +431,21 @@
     text-overflow: ellipsis;
     border-radius: 3px;
     margin: 0 4px;
+    width: calc(100% - 8px);
+    border: none;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
   }
 
   .branch-item:hover {
     background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.04));
+  }
+
+  .branch-item:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007acc);
+    outline-offset: -1px;
   }
 
   .branch-item.current {
