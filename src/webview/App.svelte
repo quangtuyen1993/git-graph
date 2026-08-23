@@ -29,6 +29,7 @@
     abbreviatedHash: string;
     subject: string;
     author: string;
+    authorEmail: string;
     authorDate: string;
     refs: string[];
     parents: string[];
@@ -83,7 +84,7 @@
   let hasWorkingChanges = false;
 
   // Virtual scroll state
-  let scrollContainer: HTMLDivElement;
+  let scrollContainer: HTMLElement;
   let viewportHeight = 600;
   let scrollTop = 0;
   let currentStartRow = 0;
