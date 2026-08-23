@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onDestroy } from 'svelte';
   import { marked } from 'marked';
 
   interface FileChange {
@@ -70,6 +70,27 @@
   function notifySettingsChange() {
     dispatch('settingsChange', { provider: selectedProvider, model: modelInput });
   }
+
+  // A review can legitimately run for minutes, so show elapsed time to make it
+  // clear the run is alive rather than hung.
+  let elapsedSeconds = 0;
+  let elapsedTimer: ReturnType<typeof setInterval> | undefined;
+
+  $: if (reviewLoading && elapsedTimer === undefined) {
+    elapsedSeconds = 0;
+    elapsedTimer = setInterval(() => { elapsedSeconds += 1; }, 1000);
+  } else if (!reviewLoading && elapsedTimer !== undefined) {
+    clearInterval(elapsedTimer);
+    elapsedTimer = undefined;
+  }
+
+  onDestroy(() => {
+    if (elapsedTimer !== undefined) clearInterval(elapsedTimer);
+  });
+
+  $: elapsedLabel = elapsedSeconds >= 60
+    ? `${Math.floor(elapsedSeconds / 60)}m ${String(elapsedSeconds % 60).padStart(2, '0')}s`
+    : `${elapsedSeconds}s`;
 
   $: filteredFiles = compareFiles?.filter(f =>
     f.path.toLowerCase().includes(filterText.toLowerCase())
@@ -159,7 +180,7 @@
         on:click={handleReview}
         disabled={reviewLoading || !sourceBranch || !targetBranch || !selectedProvider}
       >
-        {reviewLoading ? '⏳ Reviewing...' : '🤖 AI Review'}
+        {reviewLoading ? `⏳ Reviewing… ${elapsedLabel}` : '🤖 Review Changes'}
       </button>
     </div>
   </div>

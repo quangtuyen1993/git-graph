@@ -248,6 +248,44 @@ export class AIReviewService {
     return env;
   }
 
+  /**
+   * How long to let the AI CLI run, in ms. Reasoning models on a large diff can
+   * take several minutes, so this defaults high and is configurable. A value of
+   * 0 disables the timeout entirely.
+   */
+  private getTimeoutMs(): number {
+    const config = vscode.workspace.getConfiguration('gitGraphPro.aiReview');
+    const seconds = config.get<number>('timeoutSeconds');
+    if (seconds === 0) return 0;
+    if (typeof seconds === 'number' && seconds > 0) return seconds * 1000;
+    return 600_000; // 10 minutes
+  }
+
+  /**
+   * Reset the inactivity deadline. The timeout measures silence, not total
+   * runtime, so a model that keeps emitting output is never killed mid-answer.
+   */
+  private armInactivityTimeout(
+    proc: ReturnType<typeof spawn>,
+    onTimeout: (idleMs: number) => void,
+  ): { bump: () => void; clear: () => void } {
+    const idleMs = this.getTimeoutMs();
+    if (idleMs === 0) return { bump: () => {}, clear: () => {} };
+
+    let timer: ReturnType<typeof setTimeout>;
+    const arm = () => {
+      timer = setTimeout(() => {
+        proc.kill('SIGTERM');
+        onTimeout(idleMs);
+      }, idleMs);
+    };
+    arm();
+    return {
+      bump: () => { clearTimeout(timer); arm(); },
+      clear: () => clearTimeout(timer),
+    };
+  }
+
   private spawnWithStdin(command: string, args: string[], stdin: string): Promise<string> {
     // Use resolved full path if available
     const resolvedCommand = this.commandPaths.get(command) || command;
@@ -260,22 +298,28 @@ export class AIReviewService {
 
       let stdout = '';
       let stderr = '';
+      const startedAt = Date.now();
 
-      proc.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
-      proc.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
+      const idle = this.armInactivityTimeout(proc, (idleMs) => {
+        reject(new Error(
+          `${command} produced no output for ${Math.round(idleMs / 1000)}s and was stopped. ` +
+          `Raise gitGraphPro.aiReview.timeoutSeconds (0 disables the timeout).`
+        ));
+      });
+
+      // Any output means the model is still working — push the deadline out.
+      proc.stdout.on('data', (data: Buffer) => { stdout += data.toString(); idle.bump(); });
+      proc.stderr.on('data', (data: Buffer) => { stderr += data.toString(); idle.bump(); });
 
       if (stdin) {
         proc.stdin.write(stdin);
       }
       proc.stdin.end();
 
-      const timeout = setTimeout(() => {
-        proc.kill('SIGTERM');
-        reject(new Error(`AI review timed out after 120 seconds`));
-      }, 120_000);
-
       proc.on('close', (code) => {
-        clearTimeout(timeout);
+        idle.clear();
+        const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+        console.log(`[AIReview] ${command} exited ${code} after ${elapsed}s (${stdout.length} bytes)`);
         if (code === 0) {
           resolve(stdout);
         } else {
@@ -284,7 +328,7 @@ export class AIReviewService {
       });
 
       proc.on('error', (err) => {
-        clearTimeout(timeout);
+        idle.clear();
         reject(new Error(`Failed to run ${command}: ${err.message}`));
       });
     });

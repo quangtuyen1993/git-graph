@@ -78,6 +78,36 @@ describe('MessageBridge', () => {
     });
   });
 
+  it('lets a multi-minute AI review finish instead of timing out at 30s', async () => {
+    // Regression: ai.review was absent from the unbounded set, so the webview
+    // rejected at the 30s default while the CLI was still producing a review.
+    for (const method of ['ai.review', 'ai.reviewDiff', 'ai.compare', 'ai.providers']) {
+      vi.useFakeTimers();
+      const postMessage = vi.fn();
+      vi.stubGlobal('acquireVsCodeApi', () => ({ postMessage, getState: () => ({}), setState: vi.fn() }));
+      vi.resetModules();
+      const { MessageBridge } = await import('../../src/webview/lib/message-bridge');
+      const bridge = new MessageBridge();
+      const review = bridge.send(method);
+      const observed = review.then(
+        (value) => ({ status: 'resolved' as const, value }),
+        (error) => ({ status: 'rejected' as const, error }),
+      );
+
+      // Well past the 30s default, and past the old 120s host cap.
+      await vi.advanceTimersByTimeAsync(8 * 60_000);
+      window.dispatchEvent(new MessageEvent('message', {
+        data: { type: 'response', id: 'req-1', result: { content: 'done' } },
+      }));
+
+      await expect(observed, `${method} must stay unbounded`).resolves.toEqual({
+        status: 'resolved',
+        value: { content: 'done' },
+      });
+      vi.useRealTimers();
+    }
+  });
+
   it('retains the bounded timeout for ordinary read requests', async () => {
     vi.useFakeTimers();
     const postMessage = vi.fn();

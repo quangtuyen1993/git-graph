@@ -11,10 +11,19 @@ declare function acquireVsCodeApi(): VsCodeApi;
 type EventHandler = (data: unknown) => void;
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+// Methods whose duration the host owns: the webview must not impose its own
+// deadline or it will abandon work that is still running (and, for mutations,
+// clear the gate while git is mid-operation).
 const UNBOUNDED_REQUEST_METHODS = new Set([
   'graph.build',
   'ui.confirm',
   'ui.inputBox',
+  // AI review shells out to a CLI/LLM: reasoning models routinely take several
+  // minutes on a large diff. The host applies its own configurable timeout.
+  'ai.review',
+  'ai.reviewDiff',
+  'ai.compare',
+  'ai.providers',
 ]);
 const MUTATION_REQUEST_METHODS = new Set([
   'git.checkout',

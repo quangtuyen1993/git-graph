@@ -46,6 +46,12 @@
           "type": "string",
           "default": "",
           "description": "Default model to use (e.g. 'sonnet', 'gpt-4o', 'deepseek-chat'). Leave empty for provider default."
+        },
+        "gitGraphPro.aiReview.timeoutSeconds": {
+          "type": "number",
+          "default": 600,
+          "minimum": 0,
+          "description": "Stop the AI review if it produces no output for this many seconds. Measures silence, not total runtime, so long answers are never cut off. Set to 0 to disable the timeout."
         }
       }
     }
