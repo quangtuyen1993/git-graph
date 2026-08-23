@@ -142,7 +142,9 @@ export class AIReviewService {
   }
 
   private async runKiro(input: string): Promise<string> {
-    const args = ['chat', '--print'];
+    // kiro-cli chat takes input as argument, use --no-interactive for non-TTY
+    // For large diffs, pipe via stdin with a short prompt as argument
+    const args = ['chat', '--no-interactive', '--trust-all-tools'];
     return this.spawnWithStdin('kiro-cli', args, input);
   }
 
