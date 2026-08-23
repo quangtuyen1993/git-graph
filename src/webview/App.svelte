@@ -347,6 +347,7 @@
         { label: '', action: '', divider: true },
         { label: 'Push', action: 'push' },
         { label: 'Pull', action: 'pull' },
+        { label: 'Fetch', action: 'fetch' },
         { label: '', action: '', divider: true },
         { label: 'Rename branch...', action: 'renameBranch' },
         { label: 'Delete branch', action: 'deleteBranch', danger: true },
