@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <rect width="128" height="128" rx="16" fill="#1e1e1e"/>
+  <!-- Graph lines -->
+  <line x1="40" y1="20" x2="40" y2="108" stroke="#4fc1ff" stroke-width="3" stroke-linecap="round"/>
+  <line x1="70" y1="40" x2="70" y2="88" stroke="#6a9955" stroke-width="3" stroke-linecap="round"/>
+  <path d="M 40 50 C 50 50 60 60 70 60" stroke="#d7ba7d" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <path d="M 70 80 C 60 80 50 90 40 90" stroke="#d7ba7d" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <!-- Nodes -->
+  <circle cx="40" cy="30" r="5" fill="#4fc1ff"/>
+  <circle cx="40" cy="50" r="5" fill="#4fc1ff"/>
+  <circle cx="70" cy="60" r="5" fill="#6a9955"/>
+  <circle cx="70" cy="80" r="5" fill="#6a9955"/>
+  <circle cx="40" cy="90" r="5" fill="#4fc1ff"/>
+  <circle cx="40" cy="108" r="5" fill="#4fc1ff"/>
+  <!-- Branch label -->
+  <rect x="82" y="24" width="32" height="14" rx="3" fill="#4fc1ff" opacity="0.3"/>
+  <rect x="82" y="54" width="28" height="14" rx="3" fill="#6a9955" opacity="0.3"/>
+</svg>

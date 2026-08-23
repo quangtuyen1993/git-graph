@@ -369,6 +369,11 @@
     padding: 8px 0;
     user-select: none;
     font-size: 13px;
+    background: linear-gradient(180deg, 
+      var(--vscode-sideBar-background, #1e1e1e) 0%, 
+      rgba(255, 255, 255, 0.01) 50%, 
+      var(--vscode-sideBar-background, #1e1e1e) 100%
+    );
   }
 
   .section {
@@ -445,15 +450,16 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 3px 12px 3px 24px;
+    padding: 4px 12px 4px 24px;
     cursor: pointer;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     border-radius: 3px;
-    margin: 0 4px;
+    margin: 1px 4px;
     width: calc(100% - 8px);
     border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
     background: none;
     color: inherit;
     font: inherit;

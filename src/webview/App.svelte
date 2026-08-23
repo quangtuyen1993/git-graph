@@ -1395,6 +1395,12 @@
     flex-direction: column;
     overflow: hidden;
     min-width: 300px;
+    background: linear-gradient(180deg,
+      var(--vscode-editor-background, #1e1e1e) 0%,
+      rgba(255, 255, 255, 0.008) 30%,
+      rgba(255, 255, 255, 0.008) 70%,
+      var(--vscode-editor-background, #1e1e1e) 100%
+    );
   }
 
   /* Right panel */
@@ -1516,11 +1522,15 @@
     align-items: center;
     cursor: pointer;
     user-select: none;
-    border-bottom: 1px solid transparent;
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(255, 255, 255, 0.05));
+  }
+
+  .commit-row:nth-child(even) {
+    background: rgba(255, 255, 255, 0.01);
   }
 
   .commit-row:hover {
-    background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.03));
+    background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.04));
   }
 
   .commit-row.selected {

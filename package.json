@@ -5,6 +5,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "icon": "resources/icon.svg",
   "engines": {
     "vscode": "^1.85.0"
   },
