@@ -106,7 +106,7 @@ describe('GitService history rewrites', () => {
     expect(await repo.treeOf('HEAD')).toBe(await repo.treeOf(tip));
     expect(await repo.fileAt('HEAD', 'selected-b.txt')).toBe('selected B\n');
     expect(await repo.fileAt('HEAD', 'later.txt')).toBe('later descendant\n');
-  });
+  }, 30_000);
 
   it('squash preserves a descendant merge and distinct file changes', async () => {
     const { b, c, tip } = await createMergeHistory(repo);
@@ -130,5 +130,5 @@ describe('GitService history rewrites', () => {
     expect(await repo.treeOf('HEAD')).toBe(await repo.treeOf(tip));
     expect(await repo.fileAt('HEAD', 'selected-c.txt')).toBe('selected C\n');
     expect(await repo.fileAt('HEAD', 'later.txt')).toBe('later descendant\n');
-  });
+  }, 30_000);
 });

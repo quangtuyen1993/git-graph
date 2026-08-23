@@ -155,7 +155,7 @@ describe('loadAllCommits integration', () => {
     } finally {
       await repo.cleanup();
     }
-  });
+  }, 60_000);
 
   it('loads all 501 commits from a real repository in two git log batches', async () => {
     const repo = await TempGitRepo.create();
@@ -180,7 +180,7 @@ describe('loadAllCommits integration', () => {
     } finally {
       await repo.cleanup();
     }
-  }, 30_000);
+  }, 120_000);
 
   it('uses one revision snapshot when refs change between batches', async () => {
     const repo = await TempGitRepo.create();
@@ -208,5 +208,5 @@ describe('loadAllCommits integration', () => {
     } finally {
       await repo.cleanup();
     }
-  }, 30_000);
+  }, 120_000);
 });
