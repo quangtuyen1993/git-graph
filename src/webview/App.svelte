@@ -8,7 +8,7 @@
   import { getGravatarUrl } from './lib/gravatar';
   import { hasWorkingTreeChanges, type WorkingTreeStatus } from './lib/git-status';
   import { LatestRequestGate, LatestWindowRequestCoordinator } from './lib/latest-request';
-  import { MutationGate, runMutationWithProgress } from './lib/mutation-gate';
+  import { MutationGate } from './lib/mutation-gate';
   import { calculatePanelLayout, resizePanel, type PanelLayout, type PanelSide } from './lib/panel-layout';
   import CommitDetail from './components/detail/CommitDetail.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
@@ -580,17 +580,39 @@
     contextMenuVisible = true;
   }
 
+  async function runDirectMutation(label: string, operation: () => Promise<void>) {
+    await mutationGate.run(label, async () => {
+      mutationProgress = label;
+      try {
+        await operation();
+      } finally {
+        mutationProgress = null;
+      }
+    });
+    await refreshGraph();
+  }
+
   async function handleBranchCheckout(event: CustomEvent<{ name: string }>) {
     try {
-      await runMutationWithProgress(
-        mutationGate,
-        'Checking out…',
-        async () => {
-          await bridge.send('git.checkout', { ref: event.detail.name });
-          await refreshGraph();
-        },
-        (label) => { mutationProgress = label; },
-      );
+      await runDirectMutation('Checking out…', () => bridge.send('git.checkout', { ref: event.detail.name }) as Promise<void>);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      setTimeout(() => { error = ''; }, 5000);
+    }
+  }
+
+  async function handleSidebarStashApply(event: CustomEvent<{ index: number }>) {
+    try {
+      await runDirectMutation('Applying stash…', () => bridge.send('git.stashApply', { index: event.detail.index }) as Promise<void>);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      setTimeout(() => { error = ''; }, 5000);
+    }
+  }
+
+  async function handleSidebarWorktreeOpen(event: CustomEvent<{ path: string }>) {
+    try {
+      await bridge.send('ui.openFolder', { path: event.detail.path });
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       setTimeout(() => { error = ''; }, 5000);
@@ -630,52 +652,82 @@
     worktreeRemove: 'Removing worktree…',
   };
 
+  interface ContextMutationProgress {
+    start(): void;
+    awaitConfirmation(): void;
+  }
+
   async function handleContextMenuAction(event: CustomEvent<{ action: string }>) {
     const label = mutationLabels[event.detail.action];
-    if (!label) {
-      await performContextMenuAction(event);
-      return;
-    }
+    let shouldRefresh = false;
 
     try {
-      await runMutationWithProgress(
-        mutationGate,
-        label,
-        () => performContextMenuAction(event),
-        (activeLabel) => { mutationProgress = activeLabel; },
-      );
+      if (!label) {
+        shouldRefresh = await performContextMenuAction(event);
+      } else {
+        await mutationGate.run('Preparing…', async () => {
+          mutationProgress = 'Preparing…';
+          const progress: ContextMutationProgress = {
+            start: () => {
+              mutationGate.updateLabel(label);
+              mutationProgress = label;
+            },
+            awaitConfirmation: () => {
+              mutationGate.updateLabel('Awaiting confirmation…');
+              mutationProgress = 'Awaiting confirmation…';
+            },
+          };
+
+          try {
+            shouldRefresh = await performContextMenuAction(event, progress);
+          } finally {
+            mutationProgress = null;
+          }
+        });
+      }
+
+      if (shouldRefresh) {
+        await refreshGraph();
+      }
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       setTimeout(() => { error = ''; }, 5000);
     }
   }
 
-  async function performContextMenuAction(event: CustomEvent<{ action: string }>) {
+  async function performContextMenuAction(
+    event: CustomEvent<{ action: string }>,
+    progress?: ContextMutationProgress,
+  ): Promise<boolean> {
     const action = event.detail.action;
-    if (!contextMenuTarget) return;
+    if (!contextMenuTarget) return false;
+    const runMutation = (method: string, params?: unknown) => {
+      progress?.start();
+      return bridge.send(method, params);
+    };
 
     try {
       if (contextMenuTarget.type === 'commit') {
         const hash = contextMenuTarget.value;
         switch (action) {
           case 'checkout':
-            await bridge.send('git.checkout', { ref: hash });
+            await runMutation('git.checkout', { ref: hash });
             break;
           case 'createBranch': {
             const name = await bridge.send('ui.inputBox', { prompt: 'Branch name:', placeholder: 'new-branch' }) as string | null;
-            if (name) await bridge.send('git.createBranch', { name, startPoint: hash });
+            if (name) await runMutation('git.createBranch', { name, startPoint: hash });
             break;
           }
           case 'createTag': {
             const name = await bridge.send('ui.inputBox', { prompt: 'Tag name:', placeholder: 'v1.0.0' }) as string | null;
-            if (name) await bridge.send('git.createTag', { name, hash });
+            if (name) await runMutation('git.createTag', { name, hash });
             break;
           }
           case 'cherryPick':
-            await bridge.send('git.cherryPick', { hash });
+            await runMutation('git.cherryPick', { hash });
             break;
           case 'revert':
-            await bridge.send('git.revert', { hash });
+            await runMutation('git.revert', { hash });
             break;
           case 'reword': {
             // Get current commit message
@@ -689,25 +741,27 @@
             if (newMsg && newMsg !== currentMsg) {
               const { published } = await bridge.send('git.isPublished', { hash }) as { published: boolean };
               if (published) {
+                progress?.awaitConfirmation();
                 const confirmed = await bridge.send('ui.confirm', {
                   message: 'Rewording this published commit changes descendant hashes and may require a force-push. Continue?'
                 }) as boolean;
                 if (!confirmed) break;
               }
-              await bridge.send('git.reword', { hash, message: newMsg });
+              await runMutation('git.reword', { hash, message: newMsg });
             }
             break;
           }
           case 'resetSoft':
-            await bridge.send('git.reset', { mode: 'soft', ref: hash });
+            await runMutation('git.reset', { mode: 'soft', ref: hash });
             break;
           case 'resetMixed':
-            await bridge.send('git.reset', { mode: 'mixed', ref: hash });
+            await runMutation('git.reset', { mode: 'mixed', ref: hash });
             break;
           case 'resetHard': {
+            progress?.awaitConfirmation();
             const confirmed = await bridge.send('ui.confirm', { message: 'Reset HARD will discard all uncommitted changes. Continue?' }) as boolean;
             if (confirmed) {
-              await bridge.send('git.reset', { mode: 'hard', ref: hash });
+              await runMutation('git.reset', { mode: 'hard', ref: hash });
             }
             break;
           }
@@ -736,12 +790,13 @@
                 })
               )).some(Boolean);
               if (published) {
+                progress?.awaitConfirmation();
                 const confirmed = await bridge.send('ui.confirm', {
                   message: 'Squashing published commits changes descendant hashes and may require a force-push. Continue?'
                 }) as boolean;
                 if (!confirmed) break;
               }
-              await bridge.send('git.squash', { hashes, message });
+              await runMutation('git.squash', { hashes, message });
               selectedHashes = new Set();
               selectedHash = null;
             }
@@ -758,7 +813,7 @@
       } else if (contextMenuTarget.type === 'working') {
         switch (action) {
           case 'stashTracked':
-            await bridge.send('git.stashPush');
+            await runMutation('git.stashPush');
             break;
           case 'refresh':
             break;
@@ -767,92 +822,98 @@
         const branchName = contextMenuTarget.value;
         switch (action) {
           case 'checkout':
-            await bridge.send('git.checkout', { ref: branchName });
+            await runMutation('git.checkout', { ref: branchName });
             break;
           case 'merge':
-            await bridge.send('git.merge', { branch: branchName });
+            await runMutation('git.merge', { branch: branchName });
             break;
           case 'rebase':
-            await bridge.send('git.rebase', { onto: branchName });
+            await runMutation('git.rebase', { onto: branchName });
             break;
           case 'push':
-            await bridge.send('git.push', { remote: 'origin', branch: branchName });
+            await runMutation('git.push', { remote: 'origin', branch: branchName });
             break;
           case 'publish':
-            await bridge.send('git.push', { remote: 'origin', branch: branchName, options: { setUpstream: true } });
+            await runMutation('git.push', { remote: 'origin', branch: branchName, options: { setUpstream: true } });
             break;
           case 'pull':
-            await bridge.send('git.pull', { remote: 'origin', branch: branchName });
+            await runMutation('git.pull', { remote: 'origin', branch: branchName });
             break;
           case 'fetch':
-            await bridge.send('git.fetch', { remote: 'origin' });
+            await runMutation('git.fetch', { remote: 'origin' });
             break;
           case 'renameBranch': {
             const newName = await bridge.send('ui.inputBox', { prompt: 'New branch name:', placeholder: branchName, value: branchName }) as string | null;
             if (newName && newName !== branchName) {
-              await bridge.send('git.renameBranch', { oldName: branchName, newName });
+              await runMutation('git.renameBranch', { oldName: branchName, newName });
             }
             break;
           }
           case 'deleteBranch': {
+            progress?.awaitConfirmation();
             const confirmed = await bridge.send('ui.confirm', { message: `Delete branch "${branchName}"?` }) as boolean;
             if (confirmed) {
-              await bridge.send('git.deleteBranch', { name: branchName });
+              await runMutation('git.deleteBranch', { name: branchName });
             }
             break;
           }
           case 'deleteBranchAndRemote': {
+            progress?.awaitConfirmation();
             const confirmed = await bridge.send('ui.confirm', { message: `Delete branch "${branchName}" locally AND from remote?` }) as boolean;
             if (confirmed) {
-              await bridge.send('git.deleteBranch', { name: branchName });
-              await bridge.send('git.push', { remote: 'origin', branch: `:${branchName}` });
+              await runMutation('git.deleteBranch', { name: branchName });
+              await runMutation('git.push', { remote: 'origin', branch: `:${branchName}` });
             }
             break;
           }
           case 'deleteRemoteBranch': {
             const shortName = branchName.replace(/^[^/]+\//, '');
             const remote = branchName.split('/')[0] || 'origin';
+            progress?.awaitConfirmation();
             const confirmed = await bridge.send('ui.confirm', { message: `Delete remote branch "${branchName}"?` }) as boolean;
             if (confirmed) {
-              await bridge.send('git.push', { remote, branch: `:${shortName}` });
+              await runMutation('git.push', { remote, branch: `:${shortName}` });
             }
             break;
           }
           // Tag actions
           case 'createBranchFromTag': {
             const name = await bridge.send('ui.inputBox', { prompt: 'Branch name from tag:', placeholder: `branch-from-${branchName}` }) as string | null;
-            if (name) await bridge.send('git.createBranch', { name, startPoint: branchName });
+            if (name) await runMutation('git.createBranch', { name, startPoint: branchName });
             break;
           }
           case 'pushTag':
-            await bridge.send('git.push', { remote: 'origin', branch: `refs/tags/${branchName}` });
+            await runMutation('git.push', { remote: 'origin', branch: `refs/tags/${branchName}` });
             break;
           case 'deleteTag': {
+            progress?.awaitConfirmation();
             const confirmed = await bridge.send('ui.confirm', { message: `Delete tag "${branchName}"?` }) as boolean;
             if (confirmed) {
-              await bridge.send('git.deleteTag', { name: branchName });
+              await runMutation('git.deleteTag', { name: branchName });
             }
             break;
           }
           case 'deleteTagAndRemote': {
+            progress?.awaitConfirmation();
             const confirmed = await bridge.send('ui.confirm', { message: `Delete tag "${branchName}" locally and from remote?` }) as boolean;
             if (confirmed) {
-              await bridge.send('git.deleteTag', { name: branchName });
-              await bridge.send('git.push', { remote: 'origin', branch: `:refs/tags/${branchName}` });
+              await runMutation('git.deleteTag', { name: branchName });
+              await runMutation('git.push', { remote: 'origin', branch: `:refs/tags/${branchName}` });
             }
             break;
           }
           // Stash actions
           case 'stashApply':
-            await bridge.send('git.stashApply', { index: parseInt(branchName) });
+            await runMutation('git.stashApply', { index: parseInt(branchName) });
             break;
           case 'stashPop':
-            await bridge.send('git.stashPop', { index: parseInt(branchName) });
+            await runMutation('git.stashPop', { index: parseInt(branchName) });
             break;
           case 'stashDrop': {
+            progress?.awaitConfirmation();
             const confirmed = await bridge.send('ui.confirm', { message: `Drop stash@{${branchName}}?` }) as boolean;
             if (confirmed) {
-              await bridge.send('git.stashDrop', { index: parseInt(branchName) });
+              await runMutation('git.stashDrop', { index: parseInt(branchName) });
             }
             break;
           }
@@ -861,14 +922,15 @@
             const wtPath = await bridge.send('ui.inputBox', { prompt: 'Worktree path:', placeholder: '../my-worktree' }) as string | null;
             if (wtPath) {
               const wtBranch = await bridge.send('ui.inputBox', { prompt: 'New branch name (leave empty for detached):', placeholder: '' }) as string | null;
-              await bridge.send('git.worktreeAdd', { path: wtPath, newBranch: wtBranch || undefined });
+              await runMutation('git.worktreeAdd', { path: wtPath, newBranch: wtBranch || undefined });
             }
             break;
           }
           case 'worktreeRemove': {
+            progress?.awaitConfirmation();
             const confirmed = await bridge.send('ui.confirm', { message: `Remove worktree at "${branchName}"?` }) as boolean;
             if (confirmed) {
-              await bridge.send('git.worktreeRemove', { path: branchName });
+              await runMutation('git.worktreeRemove', { path: branchName });
             }
             break;
           }
@@ -878,15 +940,10 @@
         }
       }
 
-      if (action !== 'copySha' && action !== 'copyShas') {
-        await refreshGraph();
-      }
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-      setTimeout(() => { error = ''; }, 5000);
+      return action !== 'copySha' && action !== 'copyShas';
+    } finally {
+      contextMenuTarget = null;
     }
-
-    contextMenuTarget = null;
   }
 
   function formatRelativeTime(dateStr: string): string {
@@ -963,6 +1020,8 @@
           on:stashContextMenu={handleStashContextMenu}
           on:worktreeContextMenu={handleWorktreeContextMenu}
           on:checkout={handleBranchCheckout}
+          on:stashApply={handleSidebarStashApply}
+          on:worktreeOpen={handleSidebarWorktreeOpen}
         />
       </aside>
       <ResizeHandle

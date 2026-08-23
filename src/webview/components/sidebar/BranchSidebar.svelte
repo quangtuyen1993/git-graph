@@ -87,16 +87,30 @@
     dispatch('tagContextMenu', { event, tag });
   }
 
+  function handleTagActivate(tag: Tag) {
+    dispatch('checkout', { name: tag.name });
+  }
+
   function handleStashContextMenu(event: MouseEvent, stash: StashEntry) {
     event.preventDefault();
     event.stopPropagation();
     dispatch('stashContextMenu', { event, stash });
   }
 
+  function handleStashActivate(stash: StashEntry) {
+    dispatch('stashApply', { index: stash.index });
+  }
+
   function handleWorktreeContextMenu(event: MouseEvent, worktree: WorktreeEntry) {
     event.preventDefault();
     event.stopPropagation();
     dispatch('worktreeContextMenu', { event, worktree });
+  }
+
+  function handleWorktreeActivate(worktree: WorktreeEntry) {
+    if (!worktree.isMain) {
+      dispatch('worktreeOpen', { path: worktree.path });
+    }
   }
 
   function isContextMenuShortcut(event: KeyboardEvent): boolean {
@@ -127,6 +141,9 @@
     if (isContextMenuShortcut(event)) {
       event.preventDefault();
       handleTagContextMenu(keyboardContextMenuEvent(event), tag);
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      handleTagActivate(tag);
     }
   }
 
@@ -134,6 +151,9 @@
     if (isContextMenuShortcut(event)) {
       event.preventDefault();
       handleStashContextMenu(keyboardContextMenuEvent(event), stash);
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      handleStashActivate(stash);
     }
   }
 
@@ -141,6 +161,9 @@
     if (isContextMenuShortcut(event)) {
       event.preventDefault();
       handleWorktreeContextMenu(keyboardContextMenuEvent(event), worktree);
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      handleWorktreeActivate(worktree);
     }
   }
 
@@ -260,6 +283,7 @@
               type="button"
               class="branch-item tag"
               aria-label={tag.name}
+              on:click={() => handleTagActivate(tag)}
               on:contextmenu={(e) => handleTagContextMenu(e, tag)}
               on:keydown={(e) => handleTagKeydown(e, tag)}
             >
@@ -291,6 +315,7 @@
               type="button"
               class="branch-item stash"
               aria-label={stash.message || `stash@{${stash.index}}`}
+              on:click={() => handleStashActivate(stash)}
               on:contextmenu={(e) => handleStashContextMenu(e, stash)}
               on:keydown={(e) => handleStashKeydown(e, stash)}
             >
@@ -325,6 +350,7 @@
               class="branch-item worktree"
               class:main={wt.isMain}
               aria-label={`Worktree ${wt.branch ?? wt.head?.substring(0, 7) ?? 'unknown'}`}
+              on:click={() => handleWorktreeActivate(wt)}
               on:contextmenu={(e) => handleWorktreeContextMenu(e, wt)}
               on:keydown={(e) => handleWorktreeKeydown(e, wt)}
             >

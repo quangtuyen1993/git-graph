@@ -16,7 +16,10 @@ const branches = [
 
 const tags = [{ name: 'v1.0.0', hash: 'b'.repeat(40), message: null, taggerDate: null }];
 const stashes = [{ index: 0, message: 'save work', date: '2026-08-23', branch: 'main', hash: 'c'.repeat(40) }];
-const worktrees = [{ path: '/repo', head: 'd'.repeat(40), branch: 'main', bare: false, isMain: true }];
+const worktrees = [
+  { path: '/repo', head: 'd'.repeat(40), branch: 'main', bare: false, isMain: true },
+  { path: '/repo/feature', head: 'e'.repeat(40), branch: 'feature', bare: false, isMain: false },
+];
 
 describe('BranchSidebar', () => {
   const originalRect = HTMLElement.prototype.getBoundingClientRect;
@@ -56,6 +59,42 @@ describe('BranchSidebar', () => {
     await fireEvent.keyDown(getByRole('button', { name: 'main' }), { key });
 
     expect(onCheckout).toHaveBeenCalledWith(expect.objectContaining({ detail: { name: 'main' } }));
+  });
+
+  it.each(['click', 'Enter', ' '])('dispatches tag checkout, stash apply, and non-main worktree open on %s', async (activation) => {
+    const { component, getByRole } = render(BranchSidebar, { branches, tags, stashes, worktrees });
+    const onCheckout = vi.fn();
+    const onStashApply = vi.fn();
+    const onWorktreeOpen = vi.fn();
+    component.$on('checkout', onCheckout);
+    component.$on('stashApply', onStashApply);
+    component.$on('worktreeOpen', onWorktreeOpen);
+
+    const activate = async (element: HTMLElement) => {
+      if (activation === 'click') {
+        await fireEvent.click(element);
+      } else {
+        await fireEvent.keyDown(element, { key: activation });
+      }
+    };
+
+    await activate(getByRole('button', { name: /v1\.0\.0/ }));
+    await activate(getByRole('button', { name: /save work/ }));
+    await activate(getByRole('button', { name: /worktree feature/i }));
+
+    expect(onCheckout).toHaveBeenCalledWith(expect.objectContaining({ detail: { name: 'v1.0.0' } }));
+    expect(onStashApply).toHaveBeenCalledWith(expect.objectContaining({ detail: { index: 0 } }));
+    expect(onWorktreeOpen).toHaveBeenCalledWith(expect.objectContaining({ detail: { path: '/repo/feature' } }));
+  });
+
+  it('does not open the main worktree as a primary action', async () => {
+    const { component, getByRole } = render(BranchSidebar, { branches, tags, stashes, worktrees });
+    const onWorktreeOpen = vi.fn();
+    component.$on('worktreeOpen', onWorktreeOpen);
+
+    await fireEvent.click(getByRole('button', { name: /worktree main/i }));
+
+    expect(onWorktreeOpen).not.toHaveBeenCalled();
   });
 
   it('opens context menus from Shift+F10 at the focused entry bounding box', async () => {
