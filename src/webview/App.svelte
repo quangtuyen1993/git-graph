@@ -7,7 +7,7 @@
   import type { MenuItem } from './types/menu.types';
   import { getGravatarUrl } from './lib/gravatar';
   import { hasWorkingTreeChanges, type WorkingTreeStatus } from './lib/git-status';
-  import { MutationGate } from './lib/mutation-gate';
+  import { MutationGate, runMutationWithProgress } from './lib/mutation-gate';
   import CommitDetail from './components/detail/CommitDetail.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
   import ResizeHandle from './components/layout/ResizeHandle.svelte';
@@ -477,8 +477,15 @@
 
   async function handleBranchCheckout(event: CustomEvent<{ name: string }>) {
     try {
-      await bridge.send('git.checkout', { ref: event.detail.name });
-      await refreshGraph();
+      await runMutationWithProgress(
+        mutationGate,
+        'Checking out…',
+        async () => {
+          await bridge.send('git.checkout', { ref: event.detail.name });
+          await refreshGraph();
+        },
+        (label) => { mutationProgress = label; },
+      );
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       setTimeout(() => { error = ''; }, 5000);
@@ -526,14 +533,15 @@
     }
 
     try {
-      const operation = mutationGate.run(label, () => performContextMenuAction(event));
-      mutationProgress = mutationGate.activeLabel;
-      await operation;
+      await runMutationWithProgress(
+        mutationGate,
+        label,
+        () => performContextMenuAction(event),
+        (activeLabel) => { mutationProgress = activeLabel; },
+      );
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       setTimeout(() => { error = ''; }, 5000);
-    } finally {
-      mutationProgress = mutationGate.activeLabel;
     }
   }
 

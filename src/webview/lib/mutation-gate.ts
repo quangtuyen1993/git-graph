@@ -14,3 +14,18 @@ export class MutationGate {
     }
   }
 }
+
+export async function runMutationWithProgress<T>(
+  gate: MutationGate,
+  label: string,
+  operation: () => Promise<T>,
+  setProgress: (label: string | null) => void,
+): Promise<T> {
+  const mutation = gate.run(label, operation);
+  setProgress(gate.activeLabel);
+  try {
+    return await mutation;
+  } finally {
+    setProgress(gate.activeLabel);
+  }
+}
