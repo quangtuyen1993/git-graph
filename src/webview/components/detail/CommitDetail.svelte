@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import { getGravatarUrl } from '../../lib/gravatar';
+  import Avatar from '../common/Avatar.svelte';
 
   export let commit: {
     hash: string;
@@ -81,13 +81,7 @@
   <div class="detail-panel">
     <!-- Author section -->
     <div class="detail-author">
-      <img
-        src={getGravatarUrl(commit.authorEmail, 32)}
-        alt={commit.author}
-        class="detail-avatar"
-        width="32"
-        height="32"
-      />
+      <Avatar name={commit.author} email={commit.authorEmail} size={32} />
       <div class="author-info">
         <span class="author-name">{commit.author}</span>
         <span class="author-date">{formatRelativeTime(commit.authorDate)}</span>
@@ -179,11 +173,6 @@
     align-items: center;
     gap: 10px;
     margin-bottom: 12px;
-  }
-
-  .detail-avatar {
-    border-radius: 50%;
-    flex-shrink: 0;
   }
 
   .author-info {

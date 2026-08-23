@@ -97,7 +97,39 @@ export function md5(input: string): string {
   return rhex(state[0]) + rhex(state[1]) + rhex(state[2]) + rhex(state[3]);
 }
 
-export function getGravatarUrl(email: string, size: number = 20): string {
+/**
+ * Build a Gravatar URL for an email.
+ *
+ * `size` is the CSS size — the request asks for 2x so the image stays sharp on
+ * HiDPI displays. `fallback` controls what Gravatar serves when the address has
+ * no profile image: pass `'404'` to detect absence and render initials instead.
+ */
+export function getGravatarUrl(email: string, size: number = 20, fallback: string = 'identicon'): string {
   const hash = md5(email.toLowerCase().trim());
-  return `https://www.gravatar.com/avatar/${hash}?s=${size}&d=identicon`;
+  const requested = Math.max(size * 2, 40);
+  return `https://www.gravatar.com/avatar/${hash}?s=${requested}&d=${fallback}`;
+}
+
+/** Deterministic palette for initials avatars — stable per email. */
+const INITIALS_COLORS = [
+  '#4ec9b0', '#569cd6', '#c586c0', '#ce9178', '#6a9955',
+  '#d7ba7d', '#9cdcfe', '#e06c9f', '#b5cea8', '#dcdcaa',
+];
+
+/** Background colour for an initials avatar, derived from the email. */
+export function getAvatarColor(email: string): string {
+  const key = (email || '').toLowerCase().trim();
+  let sum = 0;
+  for (let i = 0; i < key.length; i++) sum = (sum + key.charCodeAt(i) * (i + 1)) % 9973;
+  return INITIALS_COLORS[sum % INITIALS_COLORS.length];
+}
+
+/** Up to two initials for a display name, falling back to the email local part. */
+export function getInitials(name: string, email: string = ''): string {
+  const source = (name || '').trim() || (email || '').split('@')[0].replace(/[._-]+/g, ' ').trim();
+  if (!source) return '?';
+  const words = source.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '?';
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[words.length - 1][0]).toUpperCase();
 }

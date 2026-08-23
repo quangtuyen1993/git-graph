@@ -5,7 +5,8 @@
   import GraphCanvas from './components/graph/GraphCanvas.svelte';
   import ContextMenu from './components/actions/ContextMenu.svelte';
   import type { MenuItem } from './types/menu.types';
-  import { getGravatarUrl } from './lib/gravatar';
+  import { getColorRgb } from './lib/graph-colors';
+  import Avatar from './components/common/Avatar.svelte';
   import { hasWorkingTreeChanges, type WorkingTreeStatus } from './lib/git-status';
   import { LatestRequestGate, LatestWindowRequestCoordinator } from './lib/latest-request';
   import { MutationGate } from './lib/mutation-gate';
@@ -1211,7 +1212,7 @@
             {#each graphWindow.nodes as node (node.hash)}
               <div
                 class="commit-row"
-                style="top: {(node.row - graphWindow.startRow + currentStartRow) * ROW_HEIGHT + (hasWorkingChanges ? ROW_HEIGHT : 0)}px; --graph-col-width: {graphColWidth}px"
+                style="top: {(node.row - graphWindow.startRow + currentStartRow) * ROW_HEIGHT + (hasWorkingChanges ? ROW_HEIGHT : 0)}px; --graph-col-width: {graphColWidth}px; --lane-rgb: {getColorRgb(node.color)}"
                 class:selected={selectedHash === node.hash || selectedHashes.has(node.hash)}
                 on:click={(e) => handleRowClick(node.hash, e)}
                 on:keydown={(e) => { if (e.key === 'Enter') handleRowClick(node.hash); }}
@@ -1229,14 +1230,7 @@
                 <div class="col-date">{formatRelativeTime(node.authorDate)}</div>
                 <div class="col-sha">{node.abbreviatedHash}</div>
                 <div class="col-author">
-                  <img
-                    src={getGravatarUrl(node.authorEmail || '')}
-                    alt={node.author}
-                    title={node.author}
-                    class="avatar"
-                    width="18"
-                    height="18"
-                  />
+                  <Avatar name={node.author} email={node.authorEmail ?? ''} size={18} />
                   <span class="author-name">{node.author}</span>
                 </div>
               </div>
@@ -1410,12 +1404,7 @@
     flex-direction: column;
     overflow: hidden;
     min-width: 300px;
-    background: linear-gradient(180deg,
-      var(--vscode-editor-background, #1e1e1e) 0%,
-      rgba(255, 255, 255, 0.008) 30%,
-      rgba(255, 255, 255, 0.008) 70%,
-      var(--vscode-editor-background, #1e1e1e) 100%
-    );
+    background: var(--vscode-editor-background, #1e1e1e);
   }
 
   /* Right panel */
@@ -1527,7 +1516,9 @@
     pointer-events: none;
   }
 
-  /* Commit rows */
+  /* Commit rows.
+     Each row is tinted with its own lane colour (--lane-rgb), fading out to the
+     right so the graph column reads as the colour source. */
   .commit-row {
     position: absolute;
     left: 0;
@@ -1538,19 +1529,30 @@
     cursor: pointer;
     user-select: none;
     border-bottom: 1px solid var(--vscode-panel-border, rgba(255, 255, 255, 0.05));
-  }
-
-  .commit-row:nth-child(even) {
-    background: rgba(255, 255, 255, 0.01);
+    --lane-rgb: 120, 120, 120;
+    --lane-alpha: 0.05;
+    background:
+      linear-gradient(
+        90deg,
+        rgba(var(--lane-rgb), var(--lane-alpha)) 0%,
+        rgba(var(--lane-rgb), calc(var(--lane-alpha) * 0.45)) 45%,
+        rgba(var(--lane-rgb), 0) 85%
+      );
   }
 
   .commit-row:hover {
-    background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.04));
+    --lane-alpha: 0.13;
   }
 
   .commit-row.selected {
-    background: var(--vscode-list-activeSelectionBackground, #094771);
+    --lane-alpha: 0.22;
+  }
+
+  /* Selected rows keep the lane tint but add the theme's selection foreground
+     and a lane-coloured accent bar so selection stays obvious. */
+  .commit-row.selected {
     color: var(--vscode-list-activeSelectionForeground, #ffffff);
+    box-shadow: inset 2px 0 0 0 rgb(var(--lane-rgb));
   }
 
   .commit-row .col-graph {
@@ -1600,12 +1602,6 @@
     align-items: center;
     gap: 6px;
     overflow: hidden;
-  }
-
-  .avatar {
-    border-radius: 50%;
-    opacity: 0.85;
-    flex-shrink: 0;
   }
 
   .author-name {
