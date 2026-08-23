@@ -80,6 +80,41 @@ describe('GitService file changes', () => {
       expect.objectContaining({ path: 'image.bin', status: 'added', binary: true, additions: 0, deletions: 0 }),
     ]));
   });
+
+  it('uses divergent three-dot refs and returns only right-side rename, copy, and binary changes', async () => {
+    const copyBase = Array.from({ length: 10 }, (_, index) => `line-${index}`).join('\n') + '\n';
+    const copyChanged = copyBase + 'updated\n';
+    await writeFiles(repo.path, {
+      'rename-me.txt': 'rename\n',
+      'copy-source.txt': copyBase,
+      'base.txt': 'base\n',
+    });
+    await repo.execGit(['add', '.']);
+    await repo.execGit(['commit', '-m', 'shared base']);
+    const base = (await repo.execGit(['rev-parse', 'HEAD'])).trim();
+
+    await repo.execGit(['checkout', '-b', 'left']);
+    await writeFile(path.join(repo.path, 'left-only.txt'), 'left only\n');
+    await repo.execGit(['add', '.']);
+    await repo.execGit(['commit', '-m', 'left-only']);
+
+    await repo.execGit(['checkout', '-b', 'right', base]);
+    await rename(path.join(repo.path, 'rename-me.txt'), path.join(repo.path, 'renamed.txt'));
+    await writeFiles(repo.path, { 'copy-source.txt': copyChanged, 'copy.txt': copyChanged });
+    await writeFile(path.join(repo.path, 'right-image.bin'), Buffer.from([0, 1, 2, 3]));
+    await repo.execGit(['add', '.']);
+    await repo.execGit(['commit', '-m', 'right changes']);
+
+    const result = await new GitService(repo.path).diff('left', 'right');
+    expect(result.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'renamed.txt', oldPath: 'rename-me.txt', status: 'renamed' }),
+      expect.objectContaining({ path: 'copy.txt', oldPath: 'copy-source.txt', status: 'copied' }),
+      expect.objectContaining({ path: 'right-image.bin', status: 'added', binary: true }),
+    ]));
+    expect(result.files).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'left-only.txt' }),
+    ]));
+  });
 });
 
 async function writeFiles(repoPath: string, files: Record<string, string>): Promise<void> {
