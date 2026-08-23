@@ -171,9 +171,10 @@ export class AIReviewService {
           return;
       }
 
-      const proc = spawn(command, args, {
+      const resolvedCmd = this.commandPaths.get(command) || command;
+      const proc = spawn(resolvedCmd, args, {
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env },
+        env: this.getEnv(),
       });
 
       let fullOutput = '';
@@ -298,19 +299,49 @@ export class AIReviewService {
     }
   }
 
+  private commandPaths = new Map<string, string>();
+
   private async isCommandAvailable(command: string): Promise<boolean> {
     return new Promise((resolve) => {
-      const proc = spawn('which', [command], { stdio: ['ignore', 'pipe', 'ignore'] });
-      proc.on('close', (code) => resolve(code === 0));
+      const proc = spawn('which', [command], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+        env: this.getEnv(),
+      });
+      let path = '';
+      proc.stdout?.on('data', (d: Buffer) => { path += d.toString(); });
+      proc.on('close', (code) => {
+        if (code === 0 && path.trim()) {
+          this.commandPaths.set(command, path.trim());
+          resolve(true);
+        } else {
+          resolve(false);
+        }
+      });
       proc.on('error', () => resolve(false));
     });
   }
 
+  private getEnv(): Record<string, string | undefined> {
+    const env = { ...process.env };
+    // Ensure common user bin paths are in PATH
+    const extraPaths = [
+      `${process.env.HOME}/.local/bin`,
+      `${process.env.HOME}/.nvm/versions/node/v24.2.0/bin`,
+      '/usr/local/bin',
+      '/opt/homebrew/bin',
+    ];
+    const currentPath = env.PATH || '';
+    env.PATH = [...extraPaths, currentPath].join(':');
+    return env;
+  }
+
   private spawnWithStdin(command: string, args: string[], stdin: string): Promise<string> {
+    // Use resolved full path if available
+    const resolvedCommand = this.commandPaths.get(command) || command;
     return new Promise((resolve, reject) => {
-      const proc = spawn(command, args, {
+      const proc = spawn(resolvedCommand, args, {
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env },
+        env: this.getEnv(),
       });
 
       let stdout = '';

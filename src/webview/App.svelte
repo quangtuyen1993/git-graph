@@ -165,11 +165,12 @@
     });
 
     // Listen for streaming AI review chunks
-    bridge.on('ai.reviewChunk', (data: { chunk: string }) => {
+    bridge.on('ai.reviewChunk', (data: unknown) => {
+      const { chunk } = data as { chunk: string };
       if (!aiReviewResult) {
         aiReviewResult = { content: '', provider: '', model: '', timestamp: new Date().toISOString() };
       }
-      aiReviewResult = { ...aiReviewResult, content: aiReviewResult.content + data.chunk };
+      aiReviewResult = { ...aiReviewResult, content: aiReviewResult.content + chunk };
     });
   });
 
