@@ -199,36 +199,45 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         if (!gitService) throw new Error('No git repository found');
         const filePath = p.path as string;
         const oldPath = p.oldPath as string | null | undefined;
-        const sB = p.sourceBranch as string;
-        const tB = p.targetBranch as string;
+        // sourceBranch = base (merge target), targetBranch = head (your changes)
+        const baseBranch = p.sourceBranch as string;
+        const headBranch = p.targetBranch as string;
         const status = (p.status as string) ?? 'modified';
 
-        // Get file at target branch (base) and source branch (changed)
-        const targetContent = (status !== 'added')
-          ? await gitService.showFile(tB, oldPath ?? filePath) ?? ''
+        // Base side (left): empty for added files, otherwise content at base branch
+        const baseContent = (status !== 'added')
+          ? await gitService.showFile(baseBranch, oldPath ?? filePath) ?? ''
           : '';
-        const sourceContent = (status !== 'deleted')
-          ? await gitService.showFile(sB, filePath) ?? ''
+        // Head side (right): empty for deleted files, otherwise content at head branch
+        const headContent = (status !== 'deleted')
+          ? await gitService.showFile(headBranch, filePath) ?? ''
           : '';
 
         const fileName = filePath.split('/').pop() ?? filePath;
 
-        const targetUri = vscode.Uri.from({
+        const baseUri = vscode.Uri.from({
           scheme: GIT_GRAPH_SCHEME,
           path: `/${oldPath ?? filePath}`,
-          query: `ref=${tB}&ts=${Date.now()}`,
+          query: `ref=${baseBranch}&ts=${Date.now()}`,
         });
-        const sourceUri = vscode.Uri.from({
+        const headUri = vscode.Uri.from({
           scheme: GIT_GRAPH_SCHEME,
           path: `/${filePath}`,
-          query: `ref=${sB}&ts=${Date.now()}`,
+          query: `ref=${headBranch}&ts=${Date.now()}`,
         });
 
-        contentProvider.setContent(targetUri.toString(), targetContent);
-        contentProvider.setContent(sourceUri.toString(), sourceContent);
+        contentProvider.setContent(baseUri.toString(), baseContent);
+        contentProvider.setContent(headUri.toString(), headContent);
 
-        const title = `${fileName} (${tB} → ${sB})`;
-        await vscode.commands.executeCommand('vscode.diff', targetUri, sourceUri, title);
+        let title: string;
+        if (status === 'added') {
+          title = `${fileName} (added in ${headBranch})`;
+        } else if (status === 'deleted') {
+          title = `${fileName} (deleted in ${headBranch})`;
+        } else {
+          title = `${fileName} (${baseBranch} → ${headBranch})`;
+        }
+        await vscode.commands.executeCommand('vscode.diff', baseUri, headUri, title);
         return { success: true };
       }
       default:

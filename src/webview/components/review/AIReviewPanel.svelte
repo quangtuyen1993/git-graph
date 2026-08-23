@@ -520,20 +520,34 @@
   }
 
   .result-content {
-    padding: 12px;
+    padding: 16px;
     font-size: 13px;
-    line-height: 1.6;
+    line-height: 1.7;
   }
 
   .result-content :global(h2), .result-content :global(h3), .result-content :global(h4) {
-    margin: 12px 0 6px;
+    margin: 16px 0 8px;
+  }
+
+  .result-content :global(h2:first-child),
+  .result-content :global(h3:first-child),
+  .result-content :global(h4:first-child) {
+    margin-top: 0;
+  }
+
+  .result-content :global(p) {
+    margin: 0 0 12px;
+  }
+
+  .result-content :global(p:last-child) {
+    margin-bottom: 0;
   }
 
   .result-content :global(strong) { color: var(--vscode-foreground, #eee); }
 
   .result-content :global(code) {
     background: var(--vscode-textCodeBlock-background, #2a2a2a);
-    padding: 1px 4px;
+    padding: 2px 5px;
     border-radius: 3px;
     font-family: var(--vscode-editor-font-family, monospace);
     font-size: 12px;
@@ -541,12 +555,31 @@
 
   .result-content :global(pre) {
     background: var(--vscode-textCodeBlock-background, #2a2a2a);
-    padding: 8px;
+    padding: 12px;
     border-radius: 4px;
     overflow-x: auto;
-    margin: 8px 0;
+    margin: 12px 0;
   }
 
   .result-content :global(pre code) { background: none; padding: 0; }
-  .result-content :global(li) { margin: 4px 0; }
+
+  .result-content :global(ul), .result-content :global(ol) {
+    margin: 8px 0 12px;
+    padding-left: 24px;
+  }
+
+  .result-content :global(li) { margin: 6px 0; }
+
+  .result-content :global(hr) {
+    border: none;
+    border-top: 1px solid var(--vscode-panel-border, #333);
+    margin: 16px 0;
+  }
+
+  .result-content :global(blockquote) {
+    margin: 12px 0;
+    padding: 8px 12px;
+    border-left: 3px solid var(--vscode-textBlockQuote-border, #4fc1ff);
+    background: var(--vscode-textBlockQuote-background, rgba(255,255,255,0.02));
+  }
 </style>
