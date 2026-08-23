@@ -127,7 +127,7 @@
   let rightPanelMaxWidth = 600;
 
   // AI Review state
-  let aiProviders: { id: string; name: string; available: boolean; models: string[] }[] = [];
+  let aiProviders: { id: string; name: string; available: boolean; group: 'cli' | 'api' }[] = [];
   let aiReviewResult: { content: string; provider: string; model: string; timestamp: string } | null = null;
   let aiReviewLoading = false;
   let aiReviewError = '';
