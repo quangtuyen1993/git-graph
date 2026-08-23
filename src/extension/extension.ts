@@ -51,6 +51,9 @@ export function activate(context: vscode.ExtensionContext): void {
       case 'git.deleteBranch':
         await gitService.deleteBranch(p.name as string, p.force as boolean | undefined);
         return { success: true };
+      case 'git.renameBranch':
+        await gitService.renameBranch(p.oldName as string, p.newName as string);
+        return { success: true };
       case 'git.merge':
         await gitService.merge(p.branch as string, p.options as { noFF?: boolean; message?: string } | undefined);
         return { success: true };

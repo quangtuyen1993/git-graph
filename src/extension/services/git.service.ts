@@ -97,6 +97,10 @@ export class GitService {
     await this.cli.exec(['branch', flag, name]);
   }
 
+  public async renameBranch(oldName: string, newName: string): Promise<void> {
+    await this.cli.exec(['branch', '-m', oldName, newName]);
+  }
+
   public async merge(branch: string, options?: { noFF?: boolean; message?: string }): Promise<void> {
     const args = ['merge', branch];
     if (options?.noFF) args.push('--no-ff');

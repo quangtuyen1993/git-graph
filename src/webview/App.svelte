@@ -7,11 +7,15 @@
   import type { MenuItem } from './types/menu.types';
   import { getGravatarUrl } from './lib/gravatar';
   import CommitDetail from './components/detail/CommitDetail.svelte';
+  import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
+  import ResizeHandle from './components/layout/ResizeHandle.svelte';
 
   interface Branch {
     name: string;
     current: boolean;
     hash: string;
+    remote: string | null;
+    upstream: string | null;
   }
 
   interface GraphNode {
@@ -87,6 +91,12 @@
   }[] | null = null;
   let detailLoading = false;
 
+  // Panel state
+  let leftSidebarOpen = true;
+  let rightPanelOpen = false;
+  let leftSidebarWidth = 200;
+  let rightPanelWidth = 340;
+
   // Context menu state
   let contextMenuVisible = false;
   let contextMenuX = 0;
@@ -95,7 +105,7 @@
   let contextMenuTarget: { type: 'commit' | 'branch'; value: string } | null = null;
 
   // Computed graph column width
-  $: graphColWidth = (maxLane + 1) * 16 + 24; // LANE_WIDTH * lanes + padding
+  $: graphColWidth = (maxLane + 1) * 16 + 24;
 
   onMount(async () => {
     try {
@@ -114,7 +124,6 @@
   async function refreshGraph() {
     branches = await bridge.send('git.branches') as Branch[];
 
-    // Check for working changes
     try {
       const st = await bridge.send('git.status') as { files?: unknown[] };
       hasWorkingChanges = Array.isArray(st?.files) && st.files.length > 0;
@@ -164,7 +173,6 @@
 
   function handleRowClick(hash: string, event?: MouseEvent) {
     if (event?.shiftKey && lastClickedHash && graphWindow) {
-      // Shift+click: range select between lastClickedHash and this hash
       const allNodes = graphWindow.nodes;
       const lastIdx = allNodes.findIndex(n => n.hash === lastClickedHash);
       const currIdx = allNodes.findIndex(n => n.hash === hash);
@@ -174,7 +182,6 @@
         const end = Math.max(lastIdx, currIdx);
         selectedHashes = new Set(allNodes.slice(start, end + 1).map(n => n.hash));
         selectedHash = hash;
-        // Don't fetch detail for multi-select
         if (selectedHashes.size > 1) {
           detailCommit = null;
           detailFiles = null;
@@ -182,18 +189,26 @@
         }
       }
     } else {
-      // Normal click: single select
       selectedHashes = new Set(hash !== 'WORKING' ? [hash] : []);
       lastClickedHash = hash !== 'WORKING' ? hash : null;
       selectedHash = hash;
     }
 
     if (hash && hash !== 'WORKING') {
+      rightPanelOpen = true;
       fetchCommitDetail(hash);
     } else {
       detailCommit = null;
       detailFiles = null;
     }
+  }
+
+  function closeRightPanel() {
+    rightPanelOpen = false;
+    selectedHash = null;
+    selectedHashes = new Set();
+    detailCommit = null;
+    detailFiles = null;
   }
 
   async function fetchCommitDetail(hash: string) {
@@ -220,7 +235,6 @@
           binary: boolean;
         }[];
       };
-      // Only update if still selected (user may have clicked another)
       if (selectedHash === hash) {
         detailCommit = result.commit;
         detailFiles = result.files;
@@ -238,21 +252,16 @@
     contextMenuVisible = false;
     await tick();
 
-    // If right-clicking a hash that's part of multi-selection, show multi-commit menu
     if (selectedHashes.size > 1 && selectedHashes.has(hash)) {
       contextMenuTarget = { type: 'commit', value: hash };
       contextMenuX = event.clientX;
       contextMenuY = event.clientY;
       const count = selectedHashes.size;
 
-      // Get hashes in display order
       const hashes = graphWindow
-        ? graphWindow.nodes
-            .filter(n => selectedHashes.has(n.hash))
-            .map(n => n.hash)
+        ? graphWindow.nodes.filter(n => selectedHashes.has(n.hash)).map(n => n.hash)
         : [...selectedHashes];
 
-      // Check if squash is possible (all commits on current branch, consecutive)
       let canSquash = false;
       try {
         const result = await bridge.send('git.canSquash', { hashes }) as { ok: boolean; reason?: string };
@@ -273,12 +282,10 @@
       return;
     }
 
-    // Single commit context menu
     contextMenuTarget = { type: 'commit', value: hash };
     contextMenuX = event.clientX;
     contextMenuY = event.clientY;
 
-    // Check if commit is on current branch (needed for reset, revert, cherry-pick)
     let onCurrentBranch = false;
     try {
       const result = await bridge.send('git.isOnCurrentBranch', { hash }) as { onBranch: boolean };
@@ -302,6 +309,60 @@
       { label: 'Copy SHA', action: 'copySha' },
     ];
     contextMenuVisible = true;
+  }
+
+  async function handleBranchContextMenu(event: CustomEvent<{ event: MouseEvent; branch: Branch }>) {
+    const { event: mouseEvent, branch } = event.detail;
+    contextMenuVisible = false;
+    await tick();
+
+    contextMenuTarget = { type: 'branch', value: branch.name };
+    contextMenuX = mouseEvent.clientX;
+    contextMenuY = mouseEvent.clientY;
+
+    if (branch.remote) {
+      // Remote branch menu
+      contextMenuItems = [
+        { label: 'Checkout', action: 'checkout' },
+        { label: 'Merge into current branch', action: 'merge' },
+        { label: '', action: '', divider: true },
+        { label: 'Delete remote branch', action: 'deleteRemoteBranch', danger: true },
+      ];
+    } else if (branch.current) {
+      // Current branch menu (can't delete or checkout)
+      contextMenuItems = [
+        { label: 'Push', action: 'push' },
+        { label: 'Pull', action: 'pull' },
+        { label: 'Fetch', action: 'fetch' },
+        { label: '', action: '', divider: true },
+        { label: 'Rename branch...', action: 'renameBranch' },
+      ];
+    } else {
+      // Local branch menu
+      contextMenuItems = [
+        { label: 'Checkout', action: 'checkout' },
+        { label: 'Merge into current branch', action: 'merge' },
+        { label: 'Rebase current onto this', action: 'rebase' },
+        { label: '', action: '', divider: true },
+        { label: 'Push', action: 'push' },
+        { label: 'Pull', action: 'pull' },
+        { label: '', action: '', divider: true },
+        { label: 'Rename branch...', action: 'renameBranch' },
+        { label: 'Delete branch', action: 'deleteBranch', danger: true },
+        { label: 'Delete branch + remote', action: 'deleteBranchAndRemote', danger: true },
+      ];
+    }
+    contextMenuVisible = true;
+  }
+
+  async function handleBranchCheckout(event: CustomEvent<{ name: string }>) {
+    try {
+      await bridge.send('git.checkout', { ref: event.detail.name });
+      await refreshGraph();
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      setTimeout(() => { error = ''; }, 5000);
+    }
   }
 
   async function handleContextMenuAction(event: CustomEvent<{ action: string }>) {
@@ -348,14 +409,10 @@
             await navigator.clipboard.writeText(hash);
             break;
           case 'squash': {
-            // Get hashes in topological order (newest first as displayed)
             const hashes = graphWindow
-              ? graphWindow.nodes
-                  .filter(n => selectedHashes.has(n.hash))
-                  .map(n => n.hash)
+              ? graphWindow.nodes.filter(n => selectedHashes.has(n.hash)).map(n => n.hash)
               : [...selectedHashes];
 
-            // Default message: oldest commit's subject
             const oldestHash = hashes[hashes.length - 1];
             const defaultMsg = graphWindow?.nodes.find(n => n.hash === oldestHash)?.subject ?? '';
 
@@ -374,9 +431,7 @@
           }
           case 'copyShas': {
             const shas = graphWindow
-              ? graphWindow.nodes
-                  .filter(n => selectedHashes.has(n.hash))
-                  .map(n => n.hash)
+              ? graphWindow.nodes.filter(n => selectedHashes.has(n.hash)).map(n => n.hash)
               : [...selectedHashes];
             await navigator.clipboard.writeText(shas.join('\n'));
             break;
@@ -403,6 +458,13 @@
           case 'fetch':
             await bridge.send('git.fetch', { remote: 'origin' });
             break;
+          case 'renameBranch': {
+            const newName = await bridge.send('ui.inputBox', { prompt: 'New branch name:', placeholder: branchName, value: branchName }) as string | null;
+            if (newName && newName !== branchName) {
+              await bridge.send('git.renameBranch', { oldName: branchName, newName });
+            }
+            break;
+          }
           case 'deleteBranch': {
             const confirmed = await bridge.send('ui.confirm', { message: `Delete branch "${branchName}"?` }) as boolean;
             if (confirmed) {
@@ -410,10 +472,27 @@
             }
             break;
           }
+          case 'deleteBranchAndRemote': {
+            const confirmed = await bridge.send('ui.confirm', { message: `Delete branch "${branchName}" locally AND from remote?` }) as boolean;
+            if (confirmed) {
+              await bridge.send('git.deleteBranch', { name: branchName });
+              await bridge.send('git.push', { remote: 'origin', branch: `:${branchName}` });
+            }
+            break;
+          }
+          case 'deleteRemoteBranch': {
+            const shortName = branchName.replace(/^[^/]+\//, '');
+            const remote = branchName.split('/')[0] || 'origin';
+            const confirmed = await bridge.send('ui.confirm', { message: `Delete remote branch "${branchName}"?` }) as boolean;
+            if (confirmed) {
+              await bridge.send('git.push', { remote, branch: `:${shortName}` });
+            }
+            break;
+          }
         }
       }
 
-      if (action !== 'copySha') {
+      if (action !== 'copySha' && action !== 'copyShas') {
         await refreshGraph();
       }
     } catch (e) {
@@ -471,15 +550,15 @@
 
     if (seconds < 60) return 'just now';
     const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+    if (minutes < 60) return `${minutes}m ago`;
     const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+    if (hours < 24) return `${hours}h ago`;
     const days = Math.floor(hours / 24);
-    if (days < 30) return `${days} day${days === 1 ? '' : 's'} ago`;
+    if (days < 30) return `${days}d ago`;
     const months = Math.floor(days / 30);
-    if (months < 12) return `${months} month${months === 1 ? '' : 's'} ago`;
+    if (months < 12) return `${months}mo ago`;
     const years = Math.floor(months / 12);
-    return `${years} year${years === 1 ? '' : 's'} ago`;
+    return `${years}y ago`;
   }
 
   function getRefType(ref: string): 'head' | 'tag' | 'branch' {
@@ -495,7 +574,13 @@
 
 <div class="container">
   <header class="toolbar">
-    <h1>Git Graph Pro</h1>
+    <button
+      class="toolbar-icon-btn"
+      class:active={leftSidebarOpen}
+      on:click={() => { leftSidebarOpen = !leftSidebarOpen; }}
+      title="Toggle branches panel"
+    >☰</button>
+    <h1>Git Graph</h1>
     <span class="status">{status}</span>
     <div class="toolbar-actions">
       <button class="toolbar-btn" on:click={handleToolbarFetch} title="Fetch All">⬇ Fetch</button>
@@ -509,8 +594,26 @@
     <div class="error-banner">{error}</div>
   {/if}
 
-  <div class="content-split" class:has-detail={selectedHash && selectedHash !== 'WORKING'}>
-    <div class="main-panel">
+  <div class="content-area">
+    <!-- Left sidebar: Branches -->
+    {#if leftSidebarOpen}
+      <aside class="left-sidebar" style="width: {leftSidebarWidth}px;">
+        <BranchSidebar
+          {branches}
+          on:branchContextMenu={handleBranchContextMenu}
+          on:checkout={handleBranchCheckout}
+        />
+      </aside>
+      <ResizeHandle
+        side="left"
+        bind:currentWidth={leftSidebarWidth}
+        minWidth={150}
+        maxWidth={400}
+      />
+    {/if}
+
+    <!-- Center: Graph -->
+    <div class="center-panel">
       <div class="table-header" style="--graph-col-width: {graphColWidth}px">
         <div class="col-graph">&#160;</div>
         <div class="col-message">MESSAGE</div>
@@ -522,7 +625,6 @@
 
       <section class="scroll-area" bind:this={scrollContainer} on:scroll={handleScroll}>
         <div class="scroll-content" style="height: {getTotalHeight(totalRows + (hasWorkingChanges ? 1 : 0))}px;">
-          <!-- SVG graph column overlay -->
           {#if graphWindow}
             <div
               class="graph-svg-overlay"
@@ -537,7 +639,6 @@
             </div>
           {/if}
 
-          <!-- Working Changes row -->
           {#if hasWorkingChanges}
             <div
               class="commit-row working-changes"
@@ -553,12 +654,13 @@
               <div class="col-message">
                 <span class="working-label">● Working Changes</span>
               </div>
+              <div class="col-files"></div>
               <div class="col-date"></div>
               <div class="col-sha"></div>
+              <div class="col-avatar"></div>
             </div>
           {/if}
 
-          <!-- Commit rows -->
           {#if graphWindow}
             {#each graphWindow.nodes as node (node.hash)}
               <div
@@ -604,8 +706,19 @@
       </section>
     </div>
 
-    {#if selectedHash && selectedHash !== 'WORKING'}
-      <aside class="detail-panel-container">
+    <!-- Right panel: Commit Detail -->
+    {#if rightPanelOpen}
+      <ResizeHandle
+        side="right"
+        bind:currentWidth={rightPanelWidth}
+        minWidth={280}
+        maxWidth={600}
+      />
+      <aside class="right-panel" style="width: {rightPanelWidth}px;">
+        <div class="right-panel-header">
+          <span class="right-panel-title">COMMIT</span>
+          <button class="close-btn" on:click={closeRightPanel} title="Close panel">×</button>
+        </div>
         <CommitDetail
           commit={detailCommit}
           files={detailFiles}
@@ -632,25 +745,47 @@
     flex-direction: column;
     height: 100%;
     overflow: hidden;
+    background: var(--vscode-editor-background, #1e1e1e);
+    color: var(--vscode-foreground, #cccccc);
   }
 
+  /* Toolbar */
   .toolbar {
-    padding: 8px 16px;
-    border-bottom: 1px solid var(--border);
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--vscode-panel-border, #2b2b2b);
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     flex-shrink: 0;
+    background: var(--vscode-titleBar-activeBackground, #1e1e1e);
   }
 
   .toolbar h1 {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
+    margin: 0;
+  }
+
+  .toolbar-icon-btn {
+    background: none;
+    border: none;
+    color: var(--vscode-foreground, #cccccc);
+    font-size: 16px;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 3px;
+    opacity: 0.7;
+  }
+
+  .toolbar-icon-btn:hover,
+  .toolbar-icon-btn.active {
+    opacity: 1;
+    background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.1));
   }
 
   .status {
-    font-size: 12px;
-    opacity: 0.7;
+    font-size: 11px;
+    opacity: 0.6;
   }
 
   .toolbar-actions {
@@ -660,12 +795,12 @@
   }
 
   .toolbar-btn {
-    padding: 4px 8px;
+    padding: 3px 8px;
     border: 1px solid var(--vscode-button-border, transparent);
     background: var(--vscode-button-secondaryBackground, #3a3d41);
     color: var(--vscode-button-secondaryForeground, #cccccc);
     border-radius: 3px;
-    font-size: 12px;
+    font-size: 11px;
     cursor: pointer;
   }
 
@@ -674,11 +809,81 @@
   }
 
   .error-banner {
-    padding: 8px 16px;
-    background: var(--error);
-    color: var(--bg);
+    padding: 6px 12px;
+    background: var(--vscode-inputValidation-errorBackground, #5a1d1d);
+    color: var(--vscode-errorForeground, #f44747);
     font-size: 12px;
     flex-shrink: 0;
+    border-bottom: 1px solid var(--vscode-inputValidation-errorBorder, #be1100);
+  }
+
+  /* Content area: 3-panel layout */
+  .content-area {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  /* Left sidebar */
+  .left-sidebar {
+    flex-shrink: 0;
+    border-right: 1px solid var(--vscode-panel-border, #2b2b2b);
+    background: var(--vscode-sideBar-background, #1e1e1e);
+    overflow: hidden;
+  }
+
+  /* Center panel */
+  .center-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-width: 300px;
+  }
+
+  /* Right panel */
+  .right-panel {
+    flex-shrink: 0;
+    border-left: 1px solid var(--vscode-panel-border, #2b2b2b);
+    background: var(--vscode-sideBar-background, #1e1e1e);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .right-panel-header {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--vscode-panel-border, #2b2b2b);
+    flex-shrink: 0;
+  }
+
+  .right-panel-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--vscode-sideBarSectionHeader-foreground, #bbbbbb);
+  }
+
+  .close-btn {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: var(--vscode-foreground, #cccccc);
+    font-size: 18px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+    border-radius: 3px;
+    opacity: 0.6;
+  }
+
+  .close-btn:hover {
+    opacity: 1;
+    background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.1));
   }
 
   /* Table header */
@@ -687,11 +892,11 @@
     align-items: center;
     height: 28px;
     padding: 0;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--vscode-panel-border, #2b2b2b);
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
-    opacity: 0.6;
+    opacity: 0.5;
     flex-shrink: 0;
     user-select: none;
   }
@@ -707,17 +912,26 @@
     padding-left: 8px;
   }
 
+  .table-header .col-files {
+    width: 36px;
+    min-width: 36px;
+  }
+
   .table-header .col-date {
-    width: 140px;
-    min-width: 140px;
+    width: 80px;
+    min-width: 80px;
     padding-left: 8px;
   }
 
   .table-header .col-sha {
-    width: 80px;
-    min-width: 80px;
+    width: 70px;
+    min-width: 70px;
     padding-left: 8px;
-    padding-right: 12px;
+  }
+
+  .table-header .col-avatar {
+    width: 32px;
+    min-width: 32px;
   }
 
   /* Scroll area */
@@ -733,7 +947,6 @@
     min-width: 100%;
   }
 
-  /* SVG graph overlay */
   .graph-svg-overlay {
     position: absolute;
     left: 0;
@@ -751,10 +964,11 @@
     align-items: center;
     cursor: pointer;
     user-select: none;
+    border-bottom: 1px solid transparent;
   }
 
   .commit-row:hover {
-    background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.04));
+    background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.03));
   }
 
   .commit-row.selected {
@@ -781,32 +995,45 @@
     gap: 6px;
   }
 
-  .commit-row .col-date {
-    width: 140px;
-    min-width: 140px;
-    padding-left: 8px;
-    font-size: 12px;
-    opacity: 0.7;
-    white-space: nowrap;
-  }
-
-  .commit-row .col-sha {
-    width: 80px;
-    min-width: 80px;
-    padding-left: 8px;
-    padding-right: 8px;
-    font-size: 12px;
-    font-family: var(--vscode-editor-font-family, monospace);
-    color: var(--vscode-textLink-foreground, #007acc);
-    white-space: nowrap;
-  }
-
-  .commit-row .col-files, .table-header .col-files {
+  .commit-row .col-files {
     width: 36px;
     min-width: 36px;
     display: flex;
     align-items: center;
     justify-content: center;
+  }
+
+  .commit-row .col-date {
+    width: 80px;
+    min-width: 80px;
+    padding-left: 8px;
+    font-size: 11px;
+    opacity: 0.6;
+    white-space: nowrap;
+  }
+
+  .commit-row .col-sha {
+    width: 70px;
+    min-width: 70px;
+    padding-left: 8px;
+    font-size: 11px;
+    font-family: var(--vscode-editor-font-family, monospace);
+    color: var(--vscode-textLink-foreground, #4fc1ff);
+    white-space: nowrap;
+  }
+
+  .commit-row .col-avatar {
+    width: 32px;
+    min-width: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding-right: 4px;
+  }
+
+  .avatar {
+    border-radius: 50%;
+    opacity: 0.85;
   }
 
   .files-badge {
@@ -818,28 +1045,13 @@
     font-weight: 600;
   }
 
-  .commit-row .col-avatar {
-    width: 32px;
-    min-width: 32px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding-right: 8px;
-  }
-
-  .avatar {
-    border-radius: 50%;
-    opacity: 0.9;
-  }
-
-  /* Working changes row */
   .working-changes .working-label {
     color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d);
     font-weight: 600;
     font-size: 13px;
   }
 
-  /* Ref badges (inline) */
+  /* Ref badges */
   .ref-badge {
     display: inline-block;
     padding: 1px 6px;
@@ -851,18 +1063,21 @@
   }
 
   .ref-branch {
-    background: var(--vscode-badge-background, #007acc);
-    color: var(--vscode-badge-foreground, #ffffff);
+    background: rgba(0, 122, 204, 0.2);
+    color: var(--vscode-textLink-foreground, #4fc1ff);
+    border: 1px solid rgba(0, 122, 204, 0.4);
   }
 
   .ref-tag {
-    background: var(--vscode-editorWarning-foreground, #d7ba7d);
-    color: #1e1e1e;
+    background: rgba(215, 186, 125, 0.15);
+    color: var(--vscode-editorWarning-foreground, #d7ba7d);
+    border: 1px solid rgba(215, 186, 125, 0.4);
   }
 
   .ref-head {
-    background: var(--vscode-testing-iconPassed, #6a9955);
-    color: #ffffff;
+    background: rgba(106, 153, 85, 0.2);
+    color: var(--vscode-testing-iconPassed, #6a9955);
+    border: 1px solid rgba(106, 153, 85, 0.5);
   }
 
   .commit-subject {
@@ -875,29 +1090,5 @@
     padding: 32px;
     text-align: center;
     opacity: 0.5;
-  }
-
-  /* Split layout */
-  .content-split {
-    display: flex;
-    flex: 1;
-    overflow: hidden;
-    min-height: 0;
-  }
-
-  .main-panel {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    min-width: 0;
-  }
-
-  .detail-panel-container {
-    width: 340px;
-    min-width: 280px;
-    border-left: 1px solid var(--border);
-    overflow-y: auto;
-    flex-shrink: 0;
   }
 </style>
