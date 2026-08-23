@@ -179,7 +179,6 @@
                   role="treeitem"
                   aria-selected={false}
                 >
-                  <span class="branch-icon">↙</span>
                   <span class="branch-name">{getShortName(branch)}</span>
                 </li>
               {/each}

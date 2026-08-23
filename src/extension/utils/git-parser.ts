@@ -101,6 +101,8 @@ export function parseBranches(output: string): Branch[] {
 
     // A branch is remote if its full refname starts with refs/remotes/
     const isRemote = fullRef.startsWith('refs/remotes/');
+    // Skip symbolic HEAD refs (e.g. refs/remotes/origin/HEAD)
+    const isSymbolicHead = fullRef.endsWith('/HEAD');
     const remote = isRemote ? (name.split('/')[0] ?? null) : null;
 
     // Parse ahead/behind from track info (e.g. "ahead 3, behind 2" or "ahead 1")
@@ -121,9 +123,10 @@ export function parseBranches(output: string): Branch[] {
       hash,
       lastCommitDate,
       ahead,
-      behind
+      behind,
+      _skip: isSymbolicHead
     };
-  }).filter(b => b.name && !b.name.endsWith('/HEAD') && !b.name.match(/^[^/]+\/HEAD$/));
+  }).filter(b => b.name && !b._skip).map(({ _skip, ...rest }) => rest);
 }
 
 /**
