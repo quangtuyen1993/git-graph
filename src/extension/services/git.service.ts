@@ -150,10 +150,21 @@ export class GitService {
     if (!entry) throw new Error(`Submodule not found: ${relativePath}`);
     if (entry.state === 'uninitialized') throw new Error(`Submodule is not initialized: ${relativePath}`);
 
-    const configuredPath = await realpath(entry.absolutePath);
+    const canonicalize = async (candidatePath: string): Promise<string> => {
+      try {
+        return await realpath(candidatePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          throw new Error(`Submodule directory is missing: ${relativePath}`);
+        }
+        throw error;
+      }
+    };
+
+    const configuredPath = await canonicalize(entry.absolutePath);
     const repoPath = await GitService.findRepo(configuredPath);
     if (!repoPath) throw new Error(`Submodule not found: ${relativePath}`);
-    const canonicalRepoPath = await realpath(repoPath);
+    const canonicalRepoPath = await canonicalize(repoPath);
     if (configuredPath !== canonicalRepoPath) throw new Error(`Submodule not found: ${relativePath}`);
 
     return { ...entry, absolutePath: configuredPath };

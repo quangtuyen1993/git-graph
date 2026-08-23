@@ -35,7 +35,7 @@ describe('App sidebar primary actions', () => {
           { path: '/repo/feature', head: 'e'.repeat(40), branch: 'feature', bare: false, isMain: false },
         ];
         case 'git.submoduleList': return [
-          { name: 'sdk', path: 'packages/sdk', absolutePath: '/repo/packages/sdk', head: 'f'.repeat(40), state: 'initialized' },
+          { name: 'sdk', path: 'packages/sdk', head: 'f'.repeat(40), state: 'initialized' },
         ];
         case 'git.status': return { staged: [], unstaged: [], untracked: [], conflicted: [] };
         case 'graph.build': return { totalRows: 1, maxLane: 0, layoutVersion: 1 };

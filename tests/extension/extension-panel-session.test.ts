@@ -3,10 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const hostMocks = vi.hoisted(() => ({
   createFileSystemWatcher: vi.fn(),
   createWebviewPanel: vi.fn(),
+  executeCommand: vi.fn(),
   findRepo: vi.fn(),
+  getParents: vi.fn(),
   gitDirectory: vi.fn(),
+  registerTextDocumentContentProvider: vi.fn(),
   resolveSubmodule: vi.fn(),
   registerCommand: vi.fn(),
+  showFile: vi.fn(),
   showWarningMessage: vi.fn(),
   workspaceFolders: [] as Array<{ name: string; uri: { fsPath: string } }>,
 }));
@@ -21,13 +25,14 @@ vi.mock('vscode', () => ({
     joinPath: (...parts: Array<{ toString(): string } | string>) => ({
       toString: () => parts.map(String).join('/'),
     }),
+    parse: (value: string) => ({ toString: () => value }),
   },
   ViewColumn: { One: 1 },
   RelativePattern: class {
     constructor(public readonly base: string, public readonly pattern: string) {}
   },
   commands: {
-    executeCommand: vi.fn(),
+    executeCommand: hostMocks.executeCommand,
     registerCommand: hostMocks.registerCommand,
   },
   window: {
@@ -41,7 +46,7 @@ vi.mock('vscode', () => ({
       return hostMocks.workspaceFolders;
     },
     createFileSystemWatcher: hostMocks.createFileSystemWatcher,
-    registerTextDocumentContentProvider: vi.fn(() => ({ dispose: vi.fn() })),
+    registerTextDocumentContentProvider: hostMocks.registerTextDocumentContentProvider,
   },
 }));
 
@@ -63,6 +68,14 @@ vi.mock('../../src/extension/services/git.service', () => ({
 
     resolveSubmodule(relativePath: string): Promise<unknown> {
       return hostMocks.resolveSubmodule(this.repoPath, relativePath);
+    }
+
+    getParents(hash: string): Promise<string[]> {
+      return hostMocks.getParents(this.repoPath, hash);
+    }
+
+    showFile(ref: string, path: string): Promise<string> {
+      return hostMocks.showFile(this.repoPath, ref, path);
     }
 
     branches(): Promise<Array<{ name: string }>> {
@@ -179,6 +192,10 @@ describe('extension panel sessions', () => {
     ];
     hostMocks.findRepo.mockImplementation(async (path: string) => path.replace('/workspace', '/repo'));
     hostMocks.gitDirectory.mockImplementation(async (path: string) => path.replace('/repo', '/git'));
+    hostMocks.getParents.mockResolvedValue(['parent']);
+    hostMocks.showFile.mockImplementation(async (repoPath: string, ref: string, path: string) => (
+      `${repoPath}:${ref}:${path}`
+    ));
     hostMocks.resolveSubmodule.mockResolvedValue({
       name: 'sdk',
       path: 'packages/sdk',
@@ -187,6 +204,9 @@ describe('extension panel sessions', () => {
     });
     hostMocks.createWebviewPanel.mockImplementation(() => fakePanel());
     hostMocks.createFileSystemWatcher.mockImplementation(() => fakeWatcher());
+    hostMocks.registerTextDocumentContentProvider.mockImplementation((_scheme, provider) => {
+      return { dispose: vi.fn(), provider };
+    });
   });
 
   afterEach(() => {
@@ -404,5 +424,58 @@ describe('extension panel sessions', () => {
     expect(await responseFor(rootPanel, 'root-branches')).toMatchObject({
       result: [{ name: '/repo/root' }],
     });
+  });
+
+  it.each([
+    {
+      method: 'ui.openDiff',
+      params: { path: 'src/shared.ts', hash: 'commit', status: 'modified' },
+    },
+    {
+      method: 'ui.compareDiff',
+      params: {
+        path: 'src/shared.ts',
+        sourceBranch: 'feature',
+        targetBranch: 'main',
+        status: 'modified',
+      },
+    },
+  ])('keeps two panel sessions\' $method virtual documents distinct at the same clock tick', async ({ method, params }) => {
+    const rootPanel = await activateAndOpenRoot();
+    await vi.waitFor(() => expect(hostMocks.createFileSystemWatcher).toHaveBeenCalledTimes(1));
+    rootPanel.receive({
+      id: 'open-submodule',
+      type: 'request',
+      method: 'ui.openSubmodule',
+      params: { path: 'packages/sdk' },
+    });
+    await vi.waitFor(() => expect(hostMocks.createWebviewPanel).toHaveBeenCalledTimes(2));
+    const childPanel = hostMocks.createWebviewPanel.mock.results[1].value as FakePanel;
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1234);
+
+    try {
+      rootPanel.receive({ id: 'root-diff', type: 'request', method, params });
+      childPanel.receive({ id: 'child-diff', type: 'request', method, params });
+      await responseFor(rootPanel, 'root-diff');
+      await responseFor(childPanel, 'child-diff');
+
+      const diffCalls = hostMocks.executeCommand.mock.calls
+        .filter(([command]) => command === 'vscode.diff');
+      expect(diffCalls).toHaveLength(2);
+      const [rootLeft, rootRight] = diffCalls[0].slice(1, 3) as Array<{ toString(): string }>;
+      const [childLeft, childRight] = diffCalls[1].slice(1, 3) as Array<{ toString(): string }>;
+      expect([rootLeft.toString(), rootRight.toString()])
+        .not.toEqual([childLeft.toString(), childRight.toString()]);
+
+      const provider = hostMocks.registerTextDocumentContentProvider.mock.calls[0][1] as {
+        provideTextDocumentContent(uri: { toString(): string }): string;
+      };
+      expect(provider.provideTextDocumentContent(rootLeft)).toContain('/repo/root:');
+      expect(provider.provideTextDocumentContent(rootRight)).toContain('/repo/root:');
+      expect(provider.provideTextDocumentContent(childLeft)).toContain('/real/sdk:');
+      expect(provider.provideTextDocumentContent(childRight)).toContain('/real/sdk:');
+    } finally {
+      now.mockRestore();
+    }
   });
 });

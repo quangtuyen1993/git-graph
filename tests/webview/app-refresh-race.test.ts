@@ -66,7 +66,7 @@ describe('App graph refresh ordering', () => {
       tags: deferred<[]>(),
       stashes: deferred<[]>(),
       worktrees: deferred<[]>(),
-      submodules: deferred<{ name: string; path: string; absolutePath: string; head: string | null; state: 'initialized' }[]>(),
+      submodules: deferred<{ name: string; path: string; head: string | null; state: 'initialized' }[]>(),
       status: deferred<{ staged: []; unstaged: []; untracked: []; conflicted: [] }>(),
     };
     const awayWindow = deferred<ReturnType<typeof windowResult>>();
@@ -98,7 +98,7 @@ describe('App graph refresh ordering', () => {
           return metadataRound === 2
             ? slowMetadata.submodules.promise
             : Promise.resolve(metadataRound === 1 ? [] : [{
-              name: 'new-sdk', path: 'packages/new-sdk', absolutePath: '/repo/packages/new-sdk', head: 'f'.repeat(40), state: 'initialized',
+              name: 'new-sdk', path: 'packages/new-sdk', head: 'f'.repeat(40), state: 'initialized',
             }]);
         case 'git.status':
           return metadataRound === 2
@@ -164,7 +164,7 @@ describe('App graph refresh ordering', () => {
     slowMetadata.tags.resolve([]);
     slowMetadata.stashes.resolve([]);
     slowMetadata.worktrees.resolve([]);
-    slowMetadata.submodules.resolve([{ name: 'stale-sdk', path: 'packages/stale-sdk', absolutePath: '/repo/packages/stale-sdk', head: 'e'.repeat(40), state: 'initialized' }]);
+    slowMetadata.submodules.resolve([{ name: 'stale-sdk', path: 'packages/stale-sdk', head: 'e'.repeat(40), state: 'initialized' }]);
     slowMetadata.status.resolve({ staged: [], unstaged: [], untracked: [], conflicted: [] });
     await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 0));

@@ -41,8 +41,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const { AIReviewService } = await import('./services/ai-review.service');
   const aiReview = new AIReviewService();
+  let nextPanelSessionId = 0;
 
   function createPanelSession(panel: vscode.WebviewPanel, request: PanelRequest): void {
+    const panelSessionId = ++nextPanelSessionId;
+    let virtualDocumentRequestSequence = 0;
     const router = new MessageRouter();
     const session = request.kind === 'root'
       ? new RepositorySession({
@@ -152,8 +155,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
           const shortHash = hash.substring(0, 7);
           const fileName = filePath.split('/').pop() ?? filePath;
-          const parentUri = vscode.Uri.parse(`${GIT_GRAPH_SCHEME}:${oldPath ?? filePath}?ref=${parentHash ?? 'empty'}&ts=${Date.now()}`);
-          const currentUri = vscode.Uri.parse(`${GIT_GRAPH_SCHEME}:${filePath}?ref=${hash}&ts=${Date.now()}`);
+          const virtualDocumentRequestId = ++virtualDocumentRequestSequence;
+          const parentUri = vscode.Uri.parse(`${GIT_GRAPH_SCHEME}:${oldPath ?? filePath}?ref=${parentHash ?? 'empty'}&ts=${Date.now()}&session=${panelSessionId}&request=${virtualDocumentRequestId}&side=parent`);
+          const currentUri = vscode.Uri.parse(`${GIT_GRAPH_SCHEME}:${filePath}?ref=${hash}&ts=${Date.now()}&session=${panelSessionId}&request=${virtualDocumentRequestId}&side=current`);
           contentProvider.setContent(parentUri.toString(), parentContent);
           contentProvider.setContent(currentUri.toString(), currentContent);
 
@@ -205,8 +209,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             ? await gitService.showFile(sourceBranch, filePath) ?? ''
             : '';
           const fileName = filePath.split('/').pop() ?? filePath;
-          const targetUri = vscode.Uri.parse(`${GIT_GRAPH_SCHEME}:${oldPath ?? filePath}?ref=${targetBranch}&ts=${Date.now()}`);
-          const sourceUri = vscode.Uri.parse(`${GIT_GRAPH_SCHEME}:${filePath}?ref=${sourceBranch}&ts=${Date.now()}`);
+          const virtualDocumentRequestId = ++virtualDocumentRequestSequence;
+          const targetUri = vscode.Uri.parse(`${GIT_GRAPH_SCHEME}:${oldPath ?? filePath}?ref=${targetBranch}&ts=${Date.now()}&session=${panelSessionId}&request=${virtualDocumentRequestId}&side=target`);
+          const sourceUri = vscode.Uri.parse(`${GIT_GRAPH_SCHEME}:${filePath}?ref=${sourceBranch}&ts=${Date.now()}&session=${panelSessionId}&request=${virtualDocumentRequestId}&side=source`);
           contentProvider.setContent(targetUri.toString(), targetContent);
           contentProvider.setContent(sourceUri.toString(), sourceContent);
           const title = `${fileName} (${targetBranch} → ${sourceBranch})`;

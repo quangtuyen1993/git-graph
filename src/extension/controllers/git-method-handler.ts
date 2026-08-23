@@ -1,5 +1,5 @@
 import { GitService } from '../services/git.service';
-import type { GitLogOptions } from '../types/git.types';
+import type { GitLogOptions, SubmoduleListEntry } from '../types/git.types';
 
 export async function handleGitMethod(
   gitService: GitService,
@@ -17,8 +17,15 @@ export async function handleGitMethod(
       return gitService.tags();
     case 'git.status':
       return gitService.status();
-    case 'git.submoduleList':
-      return gitService.submoduleList();
+    case 'git.submoduleList': {
+      const submodules = await gitService.submoduleList();
+      return submodules.map(({ name, path, head, state }): SubmoduleListEntry => ({
+        name,
+        path,
+        head,
+        state,
+      }));
+    }
     case 'git.show':
       return gitService.show(p.hash as string);
     case 'git.diff':

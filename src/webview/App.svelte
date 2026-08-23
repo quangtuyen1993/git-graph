@@ -28,7 +28,6 @@
   interface SubmoduleEntry {
     name: string;
     path: string;
-    absolutePath: string;
     head: string | null;
     state: 'initialized' | 'uninitialized' | 'modified' | 'conflicted';
   }

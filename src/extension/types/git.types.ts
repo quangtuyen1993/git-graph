@@ -122,3 +122,5 @@ export interface SubmoduleEntry {
   head: string | null;
   state: SubmoduleState;
 }
+
+export type SubmoduleListEntry = Omit<SubmoduleEntry, 'absolutePath'>;

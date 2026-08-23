@@ -37,7 +37,6 @@
   interface SubmoduleEntry {
     name: string;
     path: string;
-    absolutePath: string;
     head: string | null;
     state: 'initialized' | 'uninitialized' | 'modified' | 'conflicted';
   }
@@ -395,13 +394,16 @@
             <button
               type="button"
               class="branch-item submodule {submodule.state}"
-              aria-label={`Submodule ${submodule.name}, ${submodule.path}, ${submodule.state}`}
+              aria-label={`Submodule ${submodule.name}, ${submodule.path}, ${submodule.head ? `${submodule.head.substring(0, 7)}, ` : ''}${submodule.state}`}
               title={submodule.path}
               on:click={() => dispatch('submoduleOpen', { path: submodule.path })}
               on:keydown={(event) => handleSubmoduleKeydown(event, submodule)}
             >
               <span class="branch-icon">{submodule.state === 'initialized' ? '◈' : '◇'}</span>
               <span class="branch-name">{submodule.name}</span>
+              {#if submodule.head}
+                <span class="submodule-head">{submodule.head.substring(0, 7)}</span>
+              {/if}
             </button>
           </li>
         {/each}
@@ -582,6 +584,15 @@
 
   .branch-item.submodule.conflicted .branch-name {
     color: var(--vscode-editorError-foreground, #f14c4c);
+  }
+
+  .submodule-head {
+    margin-left: auto;
+    padding-right: 8px;
+    flex-shrink: 0;
+    color: var(--vscode-descriptionForeground, #aaaaaa);
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 10px;
   }
 
   .ahead-behind {

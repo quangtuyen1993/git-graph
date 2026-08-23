@@ -9,7 +9,13 @@ const fakeGitService = {
   branches: async () => [],
   tags: async () => [],
   status: async () => ({ branch: '', ahead: 0, behind: 0, staged: [], unstaged: [], untracked: [] }),
-  submoduleList: async () => [],
+  submoduleList: async () => [{
+    name: 'sdk',
+    path: 'packages/sdk',
+    absolutePath: '/repo/packages/sdk',
+    head: 'f'.repeat(40),
+    state: 'initialized' as const,
+  }],
   show: async () => ({ commit: {}, files: [] }),
   diff: async () => ({ files: [], raw: '' }),
   checkout: async () => undefined,
@@ -42,9 +48,14 @@ const fakeGitService = {
 } satisfies Partial<GitService>;
 
 describe('handleGitMethod', () => {
-  it('returns discovered submodules', async () => {
+  it('returns discovered submodules without exposing host-only absolute paths', async () => {
     await expect(handleGitMethod(fakeGitService as GitService, 'git.submoduleList', {}))
-      .resolves.toEqual([]);
+      .resolves.toEqual([{
+        name: 'sdk',
+        path: 'packages/sdk',
+        head: 'f'.repeat(40),
+        state: 'initialized',
+      }]);
   });
 
   it('handles every Git RPC the webview can send', async () => {
