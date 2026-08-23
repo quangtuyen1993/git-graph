@@ -169,6 +169,48 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return { pong: true, timestamp: Date.now() };
   });
 
+  // Register AI review namespace handler
+  const { AIReviewService } = await import('./services/ai-review.service');
+  const aiReview = new AIReviewService();
+
+  router.register('ai', async (method: string, params: unknown) => {
+    const p = (params ?? {}) as Record<string, unknown>;
+    switch (method) {
+      case 'ai.providers':
+        return aiReview.detectProviders();
+      case 'ai.review': {
+        if (!gitService) throw new Error('No git repository found');
+        const sourceBranch = p.sourceBranch as string;
+        const targetBranch = p.targetBranch as string;
+        const provider = p.provider as string;
+        const model = p.model as string | undefined;
+
+        // Get diff between branches
+        const diff = await gitService.getDiff(sourceBranch, targetBranch);
+        if (!diff.trim()) {
+          return { content: 'No differences found between branches.', provider, model: model ?? '', timestamp: new Date().toISOString() };
+        }
+
+        // Truncate if too large (most LLMs have context limits)
+        const maxChars = 100_000;
+        const truncatedDiff = diff.length > maxChars
+          ? diff.substring(0, maxChars) + `\n\n... (truncated, ${diff.length - maxChars} chars omitted)`
+          : diff;
+
+        return aiReview.review({ diff: truncatedDiff, provider, model });
+      }
+      case 'ai.reviewDiff': {
+        // Review a raw diff string directly
+        const diff = p.diff as string;
+        const provider = p.provider as string;
+        const model = p.model as string | undefined;
+        return aiReview.review({ diff, provider, model });
+      }
+      default:
+        throw new Error(`Unknown method: ${method}`);
+    }
+  });
+
   webviewProvider = new GitGraphWebviewProvider(context.extensionUri, router);
 
   const openCommand = vscode.commands.registerCommand('gitGraphPro.open', () => {

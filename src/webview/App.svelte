@@ -13,6 +13,7 @@
   import CommitDetail from './components/detail/CommitDetail.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
   import ResizeHandle from './components/layout/ResizeHandle.svelte';
+  import AIReviewPanel from './components/review/AIReviewPanel.svelte';
 
   interface Branch {
     name: string;
@@ -117,12 +118,19 @@
   // Panel state
   let leftSidebarOpen = true;
   let rightPanelOpen = false;
+  let rightPanelMode: 'detail' | 'review' = 'detail';
   let leftSidebarWidth = 200;
   let rightPanelWidth = 340;
   let leftPanelMinWidth = 0;
   let leftPanelMaxWidth = 400;
   let rightPanelMinWidth = 0;
   let rightPanelMaxWidth = 600;
+
+  // AI Review state
+  let aiProviders: { id: string; name: string; available: boolean; models: string[] }[] = [];
+  let aiReviewResult: { content: string; provider: string; model: string; timestamp: string } | null = null;
+  let aiReviewLoading = false;
+  let aiReviewError = '';
 
   // Context menu state
   let contextMenuVisible = false;
@@ -145,6 +153,8 @@
       const active = repos.find(r => r.active);
       activeRepoName = active?.name ?? repos[0]?.name ?? '';
       await refreshGraph();
+      // Load AI providers
+      aiProviders = await bridge.send('ai.providers') as typeof aiProviders;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       status = 'Error';
@@ -343,6 +353,7 @@
 
     if (hash && hash !== 'WORKING') {
       rightPanelOpen = true;
+      rightPanelMode = 'detail';
       clampSidePanelWidths();
       fetchCommitDetail(hash);
     } else {
@@ -511,6 +522,8 @@
         { label: 'Fetch', action: 'fetch' },
         { label: '', action: '', divider: true },
         { label: 'Rename branch...', action: 'renameBranch' },
+        { label: '', action: '', divider: true },
+        { label: '🤖 AI Review...', action: 'aiReview' },
       ];
     } else {
       // Local branch menu
@@ -538,6 +551,8 @@
         { label: 'Rename branch...', action: 'renameBranch' },
         { label: 'Delete branch', action: 'deleteBranch', danger: true },
         ...(hasUpstream ? [{ label: 'Delete branch + remote', action: 'deleteBranchAndRemote', danger: true }] : []),
+        { label: '', action: '', divider: true },
+        { label: '🤖 AI Review...', action: 'aiReview' },
       ];
     }
     contextMenuVisible = true;
@@ -981,6 +996,9 @@
           case 'worktreeOpen':
             await bridge.send('ui.openFolder', { path: branchName });
             break;
+          case 'aiReview':
+            openAIReviewPanel();
+            break;
         }
       }
 
@@ -988,6 +1006,26 @@
     } finally {
       contextMenuTarget = null;
     }
+  }
+
+  async function handleAIReview(event: CustomEvent<{ sourceBranch: string; targetBranch: string; provider: string; model: string }>) {
+    const { sourceBranch, targetBranch, provider, model } = event.detail;
+    aiReviewLoading = true;
+    aiReviewError = '';
+    aiReviewResult = null;
+    try {
+      aiReviewResult = await bridge.send('ai.review', { sourceBranch, targetBranch, provider, model }) as typeof aiReviewResult;
+    } catch (e) {
+      aiReviewError = e instanceof Error ? e.message : String(e);
+    } finally {
+      aiReviewLoading = false;
+    }
+  }
+
+  function openAIReviewPanel(targetBranch?: string) {
+    rightPanelOpen = true;
+    rightPanelMode = 'review';
+    clampSidePanelWidths();
   }
 
   function formatRelativeTime(dateStr: string): string {
@@ -1176,15 +1214,26 @@
       />
       <aside class="right-panel" style="width: {rightPanelWidth}px;">
         <div class="right-panel-header">
-          <span class="right-panel-title">COMMIT</span>
+          <span class="right-panel-title">{rightPanelMode === 'review' ? 'AI REVIEW' : 'COMMIT'}</span>
           <button class="close-btn" on:click={closeRightPanel} title="Close panel">×</button>
         </div>
-        <CommitDetail
-          commit={detailCommit}
-          files={detailFiles}
-          loading={detailLoading}
-          on:openFile={(e) => bridge.send('ui.openDiff', e.detail)}
-        />
+        {#if rightPanelMode === 'review'}
+          <AIReviewPanel
+            providers={aiProviders}
+            branches={branches.map(b => ({ name: b.name, current: b.current }))}
+            result={aiReviewResult}
+            loading={aiReviewLoading}
+            error={aiReviewError}
+            on:review={handleAIReview}
+          />
+        {:else}
+          <CommitDetail
+            commit={detailCommit}
+            files={detailFiles}
+            loading={detailLoading}
+            on:openFile={(e) => bridge.send('ui.openDiff', e.detail)}
+          />
+        {/if}
       </aside>
     {/if}
   </div>

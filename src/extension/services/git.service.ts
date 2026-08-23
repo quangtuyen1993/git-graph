@@ -150,6 +150,13 @@ export class GitService {
     };
   }
 
+  /**
+   * Get raw diff text between two refs (for AI review).
+   */
+  public async getDiff(ref1: string, ref2: string): Promise<string> {
+    return this.cli.exec(['diff', `${ref1}..${ref2}`]);
+  }
+
   // --- Write Operations ---
 
   public async checkout(ref: string): Promise<void> {

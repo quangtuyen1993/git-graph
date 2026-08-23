@@ -19,7 +19,28 @@
         "command": "gitGraphPro.open",
         "title": "Git Graph Pro: Open"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Git Graph Pro",
+      "properties": {
+        "gitGraphPro.aiReview.deepseekApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "DeepSeek API key for AI code review. Get one at https://platform.deepseek.com"
+        },
+        "gitGraphPro.aiReview.defaultProvider": {
+          "type": "string",
+          "enum": ["auto", "claude", "openai", "deepseek"],
+          "default": "auto",
+          "description": "Default AI provider for code review. 'auto' detects available CLIs."
+        },
+        "gitGraphPro.aiReview.defaultModel": {
+          "type": "string",
+          "default": "",
+          "description": "Default model to use (e.g. 'sonnet', 'gpt-4o', 'deepseek-chat'). Leave empty for provider default."
+        }
+      }
+    }
   },
   "scripts": {
     "dev": "concurrently \"npm run dev:host\" \"npm run dev:webview\"",
