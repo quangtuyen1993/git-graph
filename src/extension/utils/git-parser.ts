@@ -28,7 +28,7 @@ export const LOG_FORMAT = [
  * Use with `git branch -a --format=BRANCH_FORMAT`
  */
 export const BRANCH_FORMAT =
-  `%(HEAD)%(refname:short)${FIELD_SEP}%(objectname:short)${FIELD_SEP}%(upstream:short)${FIELD_SEP}%(committerdate:iso8601-strict)`;
+  `%(HEAD)%(refname:short)${FIELD_SEP}%(objectname:short)${FIELD_SEP}%(upstream:short)${FIELD_SEP}%(committerdate:iso8601-strict)${FIELD_SEP}%(refname)`;
 
 /**
  * git tag --format string.
@@ -96,9 +96,11 @@ export function parseBranches(output: string): Branch[] {
     const hash = (parts[1] ?? '').trim();
     const upstream = (parts[2] ?? '').trim() || null;
     const lastCommitDate = (parts[3] ?? '').trim();
+    const fullRef = (parts[4] ?? '').trim();
 
-    // A branch is remote if it contains a slash (e.g. "origin/main")
-    const remote = name.includes('/') ? name : null;
+    // A branch is remote if its full refname starts with refs/remotes/
+    const isRemote = fullRef.startsWith('refs/remotes/');
+    const remote = isRemote ? (name.split('/')[0] ?? null) : null;
 
     return {
       name,
@@ -108,7 +110,7 @@ export function parseBranches(output: string): Branch[] {
       hash,
       lastCommitDate
     };
-  });
+  }).filter(b => !b.name.endsWith('/HEAD'));
 }
 
 /**
