@@ -506,6 +506,13 @@
               value: currentMsg
             }) as string | null;
             if (newMsg && newMsg !== currentMsg) {
+              const { published } = await bridge.send('git.isPublished', { hash }) as { published: boolean };
+              if (published) {
+                const confirmed = await bridge.send('ui.confirm', {
+                  message: 'Rewording this published commit changes descendant hashes and may require a force-push. Continue?'
+                }) as boolean;
+                if (!confirmed) break;
+              }
               await bridge.send('git.reword', { hash, message: newMsg });
             }
             break;
@@ -541,6 +548,18 @@
             }) as string | null;
 
             if (message) {
+              const published = (await Promise.all(
+                hashes.map(async (selectedHash) => {
+                  const result = await bridge.send('git.isPublished', { hash: selectedHash }) as { published: boolean };
+                  return result.published;
+                })
+              )).some(Boolean);
+              if (published) {
+                const confirmed = await bridge.send('ui.confirm', {
+                  message: 'Squashing published commits changes descendant hashes and may require a force-push. Continue?'
+                }) as boolean;
+                if (!confirmed) break;
+              }
               await bridge.send('git.squash', { hashes, message });
               selectedHashes = new Set();
               selectedHash = null;

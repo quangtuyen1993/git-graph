@@ -152,6 +152,10 @@ export class GitService {
     await this.cli.exec(['cherry-pick', hash]);
   }
 
+  public async revert(hash: string): Promise<void> {
+    await this.cli.exec(['revert', '--no-edit', hash]);
+  }
+
   public async stash(action: 'push' | 'pop' | 'drop' | 'list', options?: { message?: string; index?: number }): Promise<unknown> {
     const args = ['stash', action];
     if (action === 'push' && options?.message) {

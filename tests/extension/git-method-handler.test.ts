@@ -1,0 +1,77 @@
+import { readFile } from 'fs/promises';
+import path from 'path';
+import { describe, expect, it } from 'vitest';
+import { handleGitMethod } from '../../src/extension/controllers/git-method-handler';
+import { GitService } from '../../src/extension/services/git.service';
+
+const fakeGitService = {
+  log: async () => [],
+  branches: async () => [],
+  tags: async () => [],
+  status: async () => ({ branch: '', ahead: 0, behind: 0, staged: [], unstaged: [], untracked: [] }),
+  show: async () => ({ commit: {}, files: [] }),
+  diff: async () => ({ files: [], raw: '' }),
+  checkout: async () => undefined,
+  createBranch: async () => undefined,
+  deleteBranch: async () => undefined,
+  renameBranch: async () => undefined,
+  merge: async () => undefined,
+  rebase: async () => undefined,
+  cherryPick: async () => undefined,
+  revert: async () => undefined,
+  stash: async () => undefined,
+  stashList: async () => [],
+  stashApply: async () => undefined,
+  worktreeList: async () => [],
+  worktreeAdd: async () => undefined,
+  worktreeRemove: async () => undefined,
+  push: async () => undefined,
+  pull: async () => undefined,
+  fetch: async () => undefined,
+  reset: async () => undefined,
+  createTag: async () => undefined,
+  deleteTag: async () => undefined,
+  abortMerge: async () => undefined,
+  abortRebase: async () => undefined,
+  squash: async () => undefined,
+  reword: async () => undefined,
+  canSquash: async () => ({ ok: true }),
+  isOnCurrentBranch: async () => true,
+  isPublished: async () => false,
+} satisfies Partial<GitService>;
+
+describe('handleGitMethod', () => {
+  it('handles every Git RPC the webview can send', async () => {
+    const appSource = await readFile(path.resolve('src/webview/App.svelte'), 'utf8');
+    const webviewMethods = [...appSource.matchAll(/bridge\.send\('(git\.[^']+)'/g)].map((match) => match[1]);
+    const methods = new Set([...webviewMethods, 'git.revert', 'git.isPublished']);
+    const unknownMethods: string[] = [];
+
+    for (const method of methods) {
+      try {
+        await handleGitMethod(fakeGitService as GitService, method, {
+          hash: 'abc123',
+          hashes: ['abc123', 'def456'],
+          ref: 'main',
+          ref1: 'HEAD',
+          ref2: 'HEAD~1',
+          name: 'name',
+          oldName: 'old-name',
+          newName: 'new-name',
+          branch: 'main',
+          path: '/tmp/worktree',
+          mode: 'mixed',
+          message: 'message',
+        });
+      } catch (error) {
+        if (error instanceof Error && error.message.startsWith('Unknown method:')) {
+          unknownMethods.push(method);
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    expect(unknownMethods).toEqual([]);
+  });
+});
