@@ -136,9 +136,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const parents = await gitService.getParents(hash);
         const parentHash = parents.length > 0 ? parents[0] : null;
 
-        // Get file content at current commit
-        const currentContent = await gitService.showFile(hash, filePath) ?? '';
-
         // Get file content at parent commit (empty for added files)
         let parentContent = '';
         if (parentHash && status !== 'added') {
@@ -154,15 +151,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           path: `/${oldPath ?? filePath}`,
           query: `ref=${parentHash ?? 'empty'}&ts=${Date.now()}`,
         });
-        const currentUri = vscode.Uri.from({
-          scheme: GIT_GRAPH_SCHEME,
-          path: `/${filePath}`,
-          query: `ref=${hash}&ts=${Date.now()}`,
-        });
-
-        // Set content for the content provider
         contentProvider.setContent(parentUri.toString(), parentContent);
-        contentProvider.setContent(currentUri.toString(), currentContent);
+
+        // Right side: use the real workspace file when this commit is HEAD, so the diff
+        // editor keeps its "Open File" action. Otherwise use a virtual document.
+        const headHash = (await gitService.getHeadHash().catch(() => null)) ?? null;
+        const isHeadCommit = !!headHash && headHash === hash;
+
+        let currentUri: vscode.Uri;
+        if (isHeadCommit && status !== 'deleted') {
+          currentUri = vscode.Uri.joinPath(vscode.Uri.file(gitService.getRepoPath()), filePath);
+        } else {
+          const currentContent = await gitService.showFile(hash, filePath) ?? '';
+          currentUri = vscode.Uri.from({
+            scheme: GIT_GRAPH_SCHEME,
+            path: `/${filePath}`,
+            query: `ref=${hash}&ts=${Date.now()}`,
+          });
+          contentProvider.setContent(currentUri.toString(), currentContent);
+        }
 
         // Build diff title
         let title: string;
@@ -209,10 +216,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const baseContent = (status !== 'added')
           ? await gitService.showFile(baseBranch, oldPath ?? filePath) ?? ''
           : '';
-        // Head side (right): empty for deleted files, otherwise content at head branch
-        const headContent = (status !== 'deleted')
-          ? await gitService.showFile(headBranch, filePath) ?? ''
-          : '';
 
         const fileName = filePath.split('/').pop() ?? filePath;
 
@@ -221,14 +224,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           path: `/${oldPath ?? filePath}`,
           query: `ref=${baseBranch}&ts=${Date.now()}`,
         });
-        const headUri = vscode.Uri.from({
-          scheme: GIT_GRAPH_SCHEME,
-          path: `/${filePath}`,
-          query: `ref=${headBranch}&ts=${Date.now()}`,
-        });
-
         contentProvider.setContent(baseUri.toString(), baseContent);
-        contentProvider.setContent(headUri.toString(), headContent);
+
+        // Head side (right): use the real workspace file when comparing against the
+        // checked-out branch, so the diff editor keeps its "Open File" action and the
+        // file stays editable. Fall back to a virtual doc for other branches.
+        const branchList = await gitService.branches();
+        const currentBranch = branchList.find(b => b.current)?.name;
+        const headIsCheckedOut = !!currentBranch && currentBranch === headBranch;
+
+        let headUri: vscode.Uri;
+        if (headIsCheckedOut && status !== 'deleted') {
+          headUri = vscode.Uri.joinPath(vscode.Uri.file(gitService.getRepoPath()), filePath);
+        } else {
+          const headContent = (status !== 'deleted')
+            ? await gitService.showFile(headBranch, filePath) ?? ''
+            : '';
+          headUri = vscode.Uri.from({
+            scheme: GIT_GRAPH_SCHEME,
+            path: `/${filePath}`,
+            query: `ref=${headBranch}&ts=${Date.now()}`,
+          });
+          contentProvider.setContent(headUri.toString(), headContent);
+        }
 
         let title: string;
         if (status === 'added') {

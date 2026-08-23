@@ -337,6 +337,14 @@ export class GitService {
     return output.trim().split('\n').filter(Boolean);
   }
 
+  /**
+   * Get the full hash HEAD currently points at.
+   */
+  public async getHeadHash(): Promise<string> {
+    const output = await this.cli.exec(['rev-parse', 'HEAD']);
+    return output.trim();
+  }
+
   // --- Stash Operations ---
 
   public async stashList(): Promise<StashEntry[]> {
