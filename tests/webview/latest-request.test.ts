@@ -196,4 +196,53 @@ describe('LatestWindowRequestCoordinator', () => {
     expect(appliedWindow.id).toBe('latest');
     expect(maxActiveRequests).toBe(1);
   });
+
+  it('clears loading after the latest rejection and accepts a subsequent intent', async () => {
+    const coordinator = new LatestWindowRequestCoordinator<{
+      id: string;
+      startRow: number;
+      endRow: number;
+    }>();
+    const currentWindow = { id: 'top', startRow: 0, endRow: 20 };
+    const loadingWrites: boolean[] = [];
+    let activeRequests = 0;
+    let appliedWindow = currentWindow;
+
+    await expect(coordinator.handle({
+      currentWindow,
+      desiredRange: { startRow: 50, endRow: 60 },
+      request: async () => {
+        activeRequests += 1;
+        try {
+          throw new Error('window failed');
+        } finally {
+          activeRequests -= 1;
+        }
+      },
+      apply: (window) => { appliedWindow = window; },
+      setLoading: (value) => { loadingWrites.push(value); },
+    })).rejects.toThrow('window failed');
+
+    expect(activeRequests).toBe(0);
+    expect(loadingWrites.at(-1)).toBe(false);
+
+    await expect(coordinator.handle({
+      currentWindow,
+      desiredRange: { startRow: 100, endRow: 110 },
+      request: async () => {
+        activeRequests += 1;
+        try {
+          return { id: 'recovered', startRow: 100, endRow: 120 };
+        } finally {
+          activeRequests -= 1;
+        }
+      },
+      apply: (window) => { appliedWindow = window; },
+      setLoading: (value) => { loadingWrites.push(value); },
+    })).resolves.toBeUndefined();
+
+    expect(activeRequests).toBe(0);
+    expect(appliedWindow.id).toBe('recovered');
+    expect(loadingWrites.at(-1)).toBe(false);
+  });
 });

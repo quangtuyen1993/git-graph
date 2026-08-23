@@ -57,6 +57,106 @@ describe('loadAllCommits', () => {
 });
 
 describe('loadAllCommits integration', () => {
+  it('loads an unborn all-refs repository as an empty graph', async () => {
+    const repo = await TempGitRepo.create();
+
+    try {
+      const service = new GitService(repo.path);
+      await expect(loadAllCommits(service, { all: true })).resolves.toEqual([]);
+    } finally {
+      await repo.cleanup();
+    }
+  });
+
+  it('keeps an explicitly empty revision snapshot empty if HEAD appears later', async () => {
+    const repo = await TempGitRepo.create();
+
+    try {
+      const service = new GitService(repo.path);
+      const realSnapshot = service.snapshotLogOptions.bind(service);
+      vi.spyOn(service, 'snapshotLogOptions').mockImplementationOnce(async (options) => {
+        const snapshot = await realSnapshot(options);
+        expect(snapshot.revisions).toEqual([]);
+        await repo.commitSeries(['Appeared after snapshot']);
+        return snapshot;
+      });
+
+      await expect(loadAllCommits(service, { all: true })).resolves.toEqual([]);
+    } finally {
+      await repo.cleanup();
+    }
+  });
+
+  it('snapshots an explicit branch without including a divergent branch', async () => {
+    const repo = await TempGitRepo.create();
+
+    try {
+      const [baseHash] = await repo.commitSeries(['Base']);
+      await repo.execGit(['branch', 'feature']);
+      await repo.commitSeries(['Main only']);
+      await repo.execGit(['checkout', 'feature']);
+      const [featureHash] = await repo.commitSeries(['Feature only']);
+      await repo.execGit(['checkout', 'main']);
+      const service = new GitService(repo.path);
+      const logSpy = vi.spyOn(service, 'log');
+
+      const commits = await loadAllCommits(service, { branch: 'feature' });
+
+      expect(commits.map(({ hash }) => hash)).toEqual([featureHash, baseHash]);
+      expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
+        branch: undefined,
+        all: false,
+        revisions: [featureHash],
+      }));
+    } finally {
+      await repo.cleanup();
+    }
+  });
+
+  it('keeps an all-refs multi-branch snapshot stable while both refs change between batches', async () => {
+    const repo = await TempGitRepo.create();
+
+    try {
+      const [baseHash] = await repo.commitSeries(['Base']);
+      await repo.execGit(['branch', 'side']);
+      const mainHashes = await repo.commitSeries(['Main 1', 'Main 2']);
+      await repo.execGit(['checkout', 'side']);
+      const sideHashes = await repo.commitSeries(['Side 1', 'Side 2']);
+      await repo.execGit(['checkout', 'main']);
+      const originalHashes = [baseHash, ...mainHashes, ...sideHashes];
+      const service = new GitService(repo.path);
+      const realLog = service.log.bind(service);
+      const revisionSnapshots: (string[] | undefined)[] = [];
+      let batchCount = 0;
+      vi.spyOn(service, 'log').mockImplementation(async (options) => {
+        revisionSnapshots.push(options.revisions);
+        const batch = await realLog(options);
+        batchCount += 1;
+        if (batchCount === 1) {
+          await repo.commitSeries(['New main after snapshot']);
+          await repo.execGit(['checkout', 'side']);
+          await repo.commitSeries(['New side after snapshot']);
+          await repo.execGit(['checkout', 'main']);
+        }
+        return batch;
+      });
+
+      const commits = await loadAllCommits(service, { all: true }, 2);
+
+      expect(commits).toHaveLength(originalHashes.length);
+      expect(new Set(commits.map(({ hash }) => hash))).toEqual(new Set(originalHashes));
+      expect(batchCount).toBe(3);
+      expect(revisionSnapshots[0]).toHaveLength(2);
+      expect(revisionSnapshots).toEqual([
+        revisionSnapshots[0],
+        revisionSnapshots[0],
+        revisionSnapshots[0],
+      ]);
+    } finally {
+      await repo.cleanup();
+    }
+  });
+
   it('loads all 501 commits from a real repository in two git log batches', async () => {
     const repo = await TempGitRepo.create();
 

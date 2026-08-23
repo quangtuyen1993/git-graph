@@ -11,19 +11,43 @@ declare function acquireVsCodeApi(): VsCodeApi;
 type EventHandler = (data: unknown) => void;
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
-const LONG_RUNNING_REQUEST_TIMEOUT_MS = 130_000;
-const UNBOUNDED_REQUEST_METHODS = new Set(['graph.build']);
-const LONG_RUNNING_REQUEST_METHODS = new Set([
+const UNBOUNDED_REQUEST_METHODS = new Set([
+  'graph.build',
+  'ui.confirm',
+  'ui.inputBox',
+]);
+const MUTATION_REQUEST_METHODS = new Set([
+  'git.checkout',
+  'git.createBranch',
+  'git.deleteBranch',
+  'git.renameBranch',
+  'git.merge',
+  'git.rebase',
+  'git.cherryPick',
+  'git.revert',
+  'git.stash',
+  'git.stashApply',
+  'git.stashPop',
+  'git.stashDrop',
+  'git.stashPush',
+  'git.worktreeAdd',
+  'git.worktreeRemove',
   'git.fetch',
   'git.pull',
   'git.push',
+  'git.reset',
+  'git.createTag',
+  'git.deleteTag',
+  'git.abortMerge',
+  'git.abortRebase',
   'git.reword',
   'git.squash',
 ]);
 
 function requestTimeout(method: string): number | null {
-  if (UNBOUNDED_REQUEST_METHODS.has(method)) return null;
-  if (LONG_RUNNING_REQUEST_METHODS.has(method)) return LONG_RUNNING_REQUEST_TIMEOUT_MS;
+  if (UNBOUNDED_REQUEST_METHODS.has(method) || MUTATION_REQUEST_METHODS.has(method)) {
+    return null;
+  }
   return DEFAULT_REQUEST_TIMEOUT_MS;
 }
 

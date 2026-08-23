@@ -7,7 +7,7 @@
   import type { MenuItem } from './types/menu.types';
   import { getGravatarUrl } from './lib/gravatar';
   import { hasWorkingTreeChanges, type WorkingTreeStatus } from './lib/git-status';
-  import { LatestRequestGate, LatestWindowRequestCoordinator, runLatestRequest } from './lib/latest-request';
+  import { LatestRequestGate, LatestWindowRequestCoordinator } from './lib/latest-request';
   import { MutationGate, runMutationWithProgress } from './lib/mutation-gate';
   import { calculatePanelLayout, resizePanel, type PanelLayout, type PanelSide } from './lib/panel-layout';
   import CommitDetail from './components/detail/CommitDetail.svelte';
@@ -218,59 +218,56 @@
   }
 
   async function refreshGraph() {
-    await runLatestRequest(
-      graphRefreshGate,
-      async () => {
-        const [nextBranches, nextTags, nextStashes, nextWorktrees, workingTreeStatus] = await Promise.all([
-          bridge.send('git.branches') as Promise<Branch[]>,
-          bridge.send('git.tags') as Promise<typeof tags>,
-          bridge.send('git.stashList') as Promise<typeof stashes>,
-          bridge.send('git.worktreeList') as Promise<typeof worktrees>,
-          bridge.send('git.status').catch(() => null) as Promise<WorkingTreeStatus | null>,
-        ]);
-        const build = await bridge.send('graph.build', { all: true }) as {
+    const refreshToken = graphRefreshGate.issue();
+    graphWindowRequestGate.issue();
+    loading = false;
+
+    try {
+      const [nextBranches, nextTags, nextStashes, nextWorktrees, workingTreeStatus, build] = await Promise.all([
+        bridge.send('git.branches') as Promise<Branch[]>,
+        bridge.send('git.tags') as Promise<typeof tags>,
+        bridge.send('git.stashList') as Promise<typeof stashes>,
+        bridge.send('git.worktreeList') as Promise<typeof worktrees>,
+        bridge.send('git.status').catch(() => null) as Promise<WorkingTreeStatus | null>,
+        bridge.send('graph.build', { all: true }) as Promise<{
           totalRows: number;
           maxLane: number;
           layoutVersion: number;
-        };
-        const range = calculateVisibleRange({
-          scrollTop,
-          viewportHeight,
-          totalRows: build.totalRows,
-        });
-        const count = Math.ceil(viewportHeight / ROW_HEIGHT) + BUFFER_ROWS * 2;
-        const nextWindow = await bridge.send('graph.getWindow', {
-          startRow: range.startRow,
-          count,
-          layoutVersion: build.layoutVersion,
-        }) as GraphWindow;
-        return {
-          branches: nextBranches,
-          tags: nextTags,
-          stashes: nextStashes,
-          worktrees: nextWorktrees,
-          hasWorkingChanges: workingTreeStatus !== null
-            && hasWorkingTreeChanges(workingTreeStatus),
-          build,
-          window: nextWindow,
-        };
-      },
-      (result) => {
-        graphWindowRequestGate.issue();
-        branches = result.branches;
-        tags = result.tags;
-        stashes = result.stashes;
-        worktrees = result.worktrees;
-        hasWorkingChanges = result.hasWorkingChanges;
-        totalRows = result.build.totalRows;
-        maxLane = result.build.maxLane;
-        layoutVersion = result.build.layoutVersion;
-        graphWindow = result.window;
-        currentStartRow = result.window.startRow;
-        loading = false;
-        status = `${result.branches.length} branches, ${result.build.totalRows} commits`;
-      },
-    );
+        }>,
+      ]);
+      if (!graphRefreshGate.isLatest(refreshToken)) return;
+
+      const range = calculateVisibleRange({
+        scrollTop,
+        viewportHeight,
+        totalRows: build.totalRows,
+      });
+      const count = Math.ceil(viewportHeight / ROW_HEIGHT) + BUFFER_ROWS * 2;
+      const nextWindow = await bridge.send('graph.getWindow', {
+        startRow: range.startRow,
+        count,
+        layoutVersion: build.layoutVersion,
+      }) as GraphWindow;
+      if (!graphRefreshGate.isLatest(refreshToken)) return;
+
+      graphWindowRequestGate.issue();
+      branches = nextBranches;
+      tags = nextTags;
+      stashes = nextStashes;
+      worktrees = nextWorktrees;
+      hasWorkingChanges = workingTreeStatus !== null
+        && hasWorkingTreeChanges(workingTreeStatus);
+      totalRows = build.totalRows;
+      maxLane = build.maxLane;
+      layoutVersion = build.layoutVersion;
+      graphWindow = nextWindow;
+      currentStartRow = nextWindow.startRow;
+      loading = false;
+      status = `${nextBranches.length} branches, ${build.totalRows} commits`;
+    } catch (refreshError) {
+      if (!graphRefreshGate.isLatest(refreshToken)) return;
+      throw refreshError;
+    }
   }
 
   async function updateGraphWindow(

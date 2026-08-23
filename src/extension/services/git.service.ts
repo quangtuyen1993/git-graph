@@ -65,7 +65,8 @@ export class GitService {
     if (options.grep) args.push(`--grep=${options.grep}`);
     if (options.after) args.push(`--after=${options.after}`);
     if (options.before) args.push(`--before=${options.before}`);
-    if (options.revisions?.length) {
+    if (options.revisions !== undefined) {
+      if (options.revisions.length === 0) return [];
       args.push(...options.revisions);
     } else {
       if (options.all) args.push('--all');
