@@ -80,6 +80,24 @@ describe('ContextMenu', () => {
     expect(onAction).toHaveBeenCalledWith(expect.objectContaining({ detail: { action: 'first' } }));
   });
 
+  it.each(['Enter', ' '])('restores the trigger after %s activates a menu item', async (key) => {
+    const trigger = document.createElement('button');
+    document.body.append(trigger);
+    trigger.focus();
+    const result = render(ContextMenu, { items, visible: true });
+    let closeTransition: Promise<void> | undefined;
+    result.component.$on('close', () => {
+      closeTransition = Promise.resolve().then(() => result.rerender({ visible: false }));
+    });
+
+    await tick();
+    await fireEvent.keyDown(result.getByRole('menuitem', { name: 'First action' }), { key });
+    await closeTransition;
+
+    expect(document.activeElement).toBe(trigger);
+    trigger.remove();
+  });
+
   it('dispatches close on Escape and restores the prior focused element after closing', async () => {
     const trigger = document.createElement('button');
     document.body.append(trigger);

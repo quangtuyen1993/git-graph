@@ -65,7 +65,7 @@
 
   function handleItemClick(item: MenuItem) {
     if (item.disabled || item.divider) return;
-    close();
+    close({ restoreFocus: true });
     dispatch('action', { action: item.action });
   }
 

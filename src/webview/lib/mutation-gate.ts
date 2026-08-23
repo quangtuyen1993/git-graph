@@ -1,6 +1,13 @@
 export class MutationGate {
   public activeLabel: string | null = null;
 
+  updateLabel(label: string): void {
+    if (!this.activeLabel) {
+      throw new Error('No Git mutation is in progress');
+    }
+    this.activeLabel = label;
+  }
+
   async run<T>(label: string, operation: () => Promise<T>): Promise<T> {
     if (this.activeLabel) {
       throw new Error('A Git mutation is already in progress');
