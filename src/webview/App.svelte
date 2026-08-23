@@ -518,46 +518,6 @@
     contextMenuTarget = null;
   }
 
-  async function handleToolbarFetch() {
-    try {
-      await bridge.send('git.fetch', { remote: 'origin' });
-      await refreshGraph();
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-      setTimeout(() => { error = ''; }, 5000);
-    }
-  }
-
-  async function handleToolbarPull() {
-    try {
-      await bridge.send('git.pull', { remote: 'origin' });
-      await refreshGraph();
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-      setTimeout(() => { error = ''; }, 5000);
-    }
-  }
-
-  async function handleToolbarPush() {
-    try {
-      await bridge.send('git.push', { remote: 'origin' });
-      await refreshGraph();
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-      setTimeout(() => { error = ''; }, 5000);
-    }
-  }
-
-  async function handleToolbarStash() {
-    try {
-      await bridge.send('git.stash', { action: 'push' });
-      await refreshGraph();
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-      setTimeout(() => { error = ''; }, 5000);
-    }
-  }
-
   function formatRelativeTime(dateStr: string): string {
     const now = Date.now();
     const date = new Date(dateStr).getTime();
@@ -597,12 +557,6 @@
     >☰</button>
     <h1>Git Graph</h1>
     <span class="status">{status}</span>
-    <div class="toolbar-actions">
-      <button class="toolbar-btn" on:click={handleToolbarFetch} title="Fetch All">⬇ Fetch</button>
-      <button class="toolbar-btn" on:click={handleToolbarPull} title="Pull">↓ Pull</button>
-      <button class="toolbar-btn" on:click={handleToolbarPush} title="Push">↑ Push</button>
-      <button class="toolbar-btn" on:click={handleToolbarStash} title="Stash">📦 Stash</button>
-    </div>
   </header>
 
   {#if error}
@@ -795,26 +749,6 @@
   .status {
     font-size: 11px;
     opacity: 0.6;
-  }
-
-  .toolbar-actions {
-    display: flex;
-    gap: 4px;
-    margin-left: auto;
-  }
-
-  .toolbar-btn {
-    padding: 3px 8px;
-    border: 1px solid var(--vscode-button-border, transparent);
-    background: var(--vscode-button-secondaryBackground, #3a3d41);
-    color: var(--vscode-button-secondaryForeground, #cccccc);
-    border-radius: 3px;
-    font-size: 11px;
-    cursor: pointer;
-  }
-
-  .toolbar-btn:hover {
-    background: var(--vscode-button-secondaryHoverBackground, #45494e);
   }
 
   .error-banner {
