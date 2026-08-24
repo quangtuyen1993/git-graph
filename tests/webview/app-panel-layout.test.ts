@@ -45,6 +45,11 @@ function setViewportWidth(width: number) {
   fireEvent(window, new Event('resize'));
 }
 
+function setViewportHeight(height: number) {
+  Object.defineProperty(window, 'innerHeight', { value: height, configurable: true, writable: true });
+  fireEvent(window, new Event('resize'));
+}
+
 function leftPanelWidth(container: HTMLElement): number {
   const aside = container.querySelector('.left-sidebar') as HTMLElement;
   return Number.parseInt(aside.style.width, 10);
@@ -111,5 +116,19 @@ describe('App panel sizing', () => {
     await fireEvent.dblClick(handle);
 
     await waitFor(() => expect(leftPanelWidth(container)).toBe(260));
+  });
+
+  it('goes compact when the window is too short for full chrome', async () => {
+    stubState();
+    vi.stubGlobal('acquireVsCodeApi', () => ({ postMessage: vi.fn(), getState: () => null, setState: vi.fn() }));
+    setViewportWidth(1400);
+    setViewportHeight(260);
+    const { container } = render(App);
+
+    await waitFor(() => expect(container.querySelector('.container.compact')).not.toBeNull());
+
+    setViewportHeight(800);
+
+    await waitFor(() => expect(container.querySelector('.container.compact')).toBeNull());
   });
 });

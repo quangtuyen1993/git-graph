@@ -129,3 +129,15 @@ export function resizePanel(input: PanelLayoutInput, side: PanelSide, requestedW
     rightWidth: side === 'right' ? width : currentLayout.right.width,
   });
 }
+
+export type PanelDensity = 'normal' | 'compact';
+
+/**
+ * Below this height the chrome costs more than it explains: in the bottom
+ * Panel the toolbar and column header eat a third of the visible rows.
+ */
+const compactHeightThreshold = 320;
+
+export function calculateDensity({ viewportHeight }: { viewportHeight: number }): PanelDensity {
+  return viewportHeight < compactHeightThreshold ? 'compact' : 'normal';
+}

@@ -11,7 +11,7 @@
   import { hasWorkingTreeChanges, type WorkingTreeStatus } from './lib/git-status';
   import { LatestRequestGate, LatestWindowRequestCoordinator } from './lib/latest-request';
   import { MutationGate } from './lib/mutation-gate';
-  import { calculatePanelLayout, defaultPanelWidths, type PanelSide } from './lib/panel-layout';
+  import { calculateDensity, calculatePanelLayout, defaultPanelWidths, type PanelSide } from './lib/panel-layout';
   import CommitDetail from './components/detail/CommitDetail.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
   import ResizeHandle from './components/layout/ResizeHandle.svelte';
@@ -162,6 +162,9 @@
   let desiredLeftWidth = defaultPanelWidths.left;
   let desiredRightWidth = defaultPanelWidths.right;
   let viewportWidth = typeof window === 'undefined' ? 1400 : window.innerWidth;
+  let windowHeight = typeof window === 'undefined' ? 800 : window.innerHeight;
+
+  $: density = calculateDensity({ viewportHeight: windowHeight });
 
   $: panelLayout = calculatePanelLayout({
     leftWidth: desiredLeftWidth,
@@ -227,12 +230,15 @@
   });
 
   onMount(() => {
-    const trackViewportWidth = () => { viewportWidth = window.innerWidth; };
-    trackViewportWidth();
-    window.addEventListener('resize', trackViewportWidth);
+    const trackViewport = () => {
+      viewportWidth = window.innerWidth;
+      windowHeight = window.innerHeight;
+    };
+    trackViewport();
+    window.addEventListener('resize', trackViewport);
 
     return () => {
-      window.removeEventListener('resize', trackViewportWidth);
+      window.removeEventListener('resize', trackViewport);
       if (panelStateSaveTimer) clearTimeout(panelStateSaveTimer);
     };
   });
@@ -1275,7 +1281,7 @@
   }
 </script>
 
-<div class="container">
+<div class="container" class:compact={density === 'compact'}>
   {#if mutationProgress}
     <div class="mutation-progress" aria-live="polite">{mutationProgress}</div>
   {/if}
@@ -1978,5 +1984,23 @@
     padding: 32px;
     text-align: center;
     opacity: 0.5;
+  }
+
+  /* The bottom Panel opens around 250px tall. Chrome that reads as breathing
+     room in an editor tab costs a whole commit row down here. */
+  .container.compact .toolbar {
+    height: 24px;
+  }
+
+  .container.compact .status {
+    display: none;
+  }
+
+  .container.compact .table-header {
+    display: none;
+  }
+
+  .container.compact .right-panel-header {
+    height: 24px;
   }
 </style>
