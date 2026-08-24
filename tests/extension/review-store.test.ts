@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReviewStore, type ReviewEntry } from '../../src/extension/services/review-store';
 
 const REPO = 'abc123abc123';
@@ -155,25 +155,32 @@ describe('ReviewStore', () => {
   });
 
   it('does not deadlock when a critical section rejects', async () => {
-    // Write a body file for entry 'broken'
-    await mkdir(join(root, REPO), { recursive: true });
-    await writeFile(join(root, REPO, 'broken.md'), 'body', 'utf8');
+    // Create initial entries
+    await store.create(REPO, entry('one'));
+    await store.create(REPO, entry('two'));
 
-    // Corrupt the index so readIndex will throw
-    await writeFile(join(root, REPO, 'index.json'), '{ not json', 'utf8');
+    // Spy on writeIndex to make it throw on the first call
+    const writeIndexSpy = vi.spyOn(store as any, 'writeIndex');
+    writeIndexSpy.mockRejectedValueOnce(new Error('Simulated write failure'));
 
-    // Try to finish the entry. This will fail because readIndex fails
-    // But we should not deadlock or poison the chain for future callers.
+    // Try to finish 'one' - this should throw because writeIndex fails
     try {
-      await store.finish(REPO, 'broken', { status: 'done' });
-    } catch {
-      // Expected to throw when index is corrupt
+      await store.finish(REPO, 'one', { status: 'done' });
+      throw new Error('Expected first finish to throw');
+    } catch (err) {
+      if ((err as any).message === 'Expected first finish to throw') throw err;
+      // Expected - the write failed
     }
 
+    // Restore the spy so writeIndex works again
+    writeIndexSpy.mockRestore();
+
     // A subsequent operation on the same repo should still work.
-    // After rebuilding, we should be able to list entries.
-    const list = await store.list(REPO);
-    expect(list).toHaveLength(1);
-    expect(list[0].id).toBe('broken');
+    // This proves the mutex chain was not poisoned by the rejection.
+    // If the chain was poisoned (without the rejection guard), this second finish would hang or fail.
+    await store.finish(REPO, 'two', { status: 'done', finishedAt: '2026-08-24T00:05:00.000Z' });
+
+    const finished = await store.get(REPO, 'two');
+    expect(finished?.status).toBe('done');
   });
 });

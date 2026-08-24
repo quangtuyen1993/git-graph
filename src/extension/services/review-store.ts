@@ -76,6 +76,33 @@ export class ReviewStore {
     });
   }
 
+  /**
+   * Called once at activation. No child process outlives the extension host, so
+   * an entry still marked `running` is the debris of a killed run. Reporting it
+   * as `interrupted` is the honest state; it must never read as `done`.
+   */
+  public async reconcileOrphans(): Promise<string[]> {
+    const repoIds = await readdir(this.rootDir).catch(() => [] as string[]);
+    const rewritten: string[] = [];
+
+    for (const repoId of repoIds) {
+      await this.withIndexLock(repoId, async () => {
+        const entries = await this.readIndex(repoId);
+        let changed = false;
+        for (const entry of entries) {
+          if (entry.status !== 'running') continue;
+          entry.status = 'interrupted';
+          entry.finishedAt = new Date().toISOString();
+          rewritten.push(entry.id);
+          changed = true;
+        }
+        if (changed) await this.writeIndex(repoId, entries);
+      });
+    }
+
+    return rewritten;
+  }
+
   private indexPath(repoId: string): string {
     return join(this.rootDir, repoId, 'index.json');
   }
