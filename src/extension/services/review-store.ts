@@ -4,14 +4,19 @@ import { assertSafeReviewId } from './review-key';
 
 export type ReviewStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
 
+export type ReviewTargetKind = 'branch' | 'commit' | 'range';
+
 export interface ReviewEntry {
   id: string;
-  /** Base of the comparison. Diff reads sourceBranch..targetBranch. */
-  sourceBranch: string;
-  sourceSha: string;
+  kind: ReviewTargetKind;
+  /** Base of the comparison. Diff reads baseRef..headRef. */
+  baseRef: string;
+  baseSha: string;
   /** Head of the comparison. */
-  targetBranch: string;
-  targetSha: string;
+  headRef: string;
+  headSha: string;
+  /** Commit subject — only meaningful for kind 'commit'. */
+  subject?: string;
   provider: string;
   model: string;
   status: ReviewStatus;
@@ -179,7 +184,11 @@ export class ReviewStore {
     if (raw === null) return [];
     try {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed as ReviewEntry[];
+      if (Array.isArray(parsed)) {
+        const { entries, changed } = migrateEntries(parsed);
+        if (changed) await this.writeIndex(repoId, entries);
+        return entries;
+      }
     } catch {
       // fall through to the retry / rebuild below
     }
@@ -203,12 +212,10 @@ export class ReviewStore {
         const id = name.slice(0, -3);
         return {
           id,
-          sourceBranch: 'unknown',
-          sourceSha: '',
-          targetBranch: 'unknown',
-          targetSha: '',
-          provider: 'unknown',
-          model: 'unknown',
+          kind: 'branch' as const,
+          baseRef: 'unknown', baseSha: '',
+          headRef: 'unknown', headSha: '',
+          provider: 'unknown', model: 'unknown',
           status: 'interrupted' as const,
           startedAt: new Date(0).toISOString(),
         };
@@ -266,4 +273,40 @@ export class ReviewStore {
     this.indexMutexes.set(repoId, result.catch(() => {}));
     return result;
   }
+}
+
+/**
+ * Older indexes stored sourceBranch/targetBranch. Mapped in place, written
+ * back once, so old cached reviews survive the rename. An entry in neither
+ * format is dropped rather than thrown on — a corrupt row must not take the
+ * whole index down.
+ */
+function migrateEntries(parsed: unknown[]): { entries: ReviewEntry[]; changed: boolean } {
+  let changed = false;
+  const entries: ReviewEntry[] = [];
+  for (const raw of parsed) {
+    const e = raw as Record<string, unknown> | null;
+    if (e && typeof e.baseRef === 'string' && typeof e.id === 'string') {
+      entries.push(raw as ReviewEntry);
+      continue;
+    }
+    changed = true;
+    if (e && typeof e.sourceBranch === 'string' && typeof e.id === 'string') {
+      entries.push({
+        id: e.id,
+        kind: 'branch',
+        baseRef: e.sourceBranch,
+        baseSha: typeof e.sourceSha === 'string' ? e.sourceSha : '',
+        headRef: typeof e.targetBranch === 'string' ? e.targetBranch : 'unknown',
+        headSha: typeof e.targetSha === 'string' ? e.targetSha : '',
+        provider: typeof e.provider === 'string' ? e.provider : 'unknown',
+        model: typeof e.model === 'string' ? e.model : 'unknown',
+        status: (e.status as ReviewStatus) ?? 'interrupted',
+        startedAt: typeof e.startedAt === 'string' ? e.startedAt : new Date(0).toISOString(),
+        ...(typeof e.finishedAt === 'string' ? { finishedAt: e.finishedAt } : {}),
+        ...(typeof e.error === 'string' ? { error: e.error } : {}),
+      });
+    }
+  }
+  return { entries, changed };
 }

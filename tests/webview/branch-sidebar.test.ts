@@ -127,10 +127,10 @@ describe('BranchSidebar', () => {
     expect(getByRole('button', { name: 'Branch group fix' })).toHaveAttribute('aria-expanded', 'true');
     const nestedGroup = getByRole('button', { name: 'Branch group fix/abc' });
     expect(nestedGroup).toHaveAttribute('aria-expanded', 'true');
-    expect(nestedGroup).toHaveStyle('--tree-indent: 16px');
+    expect(nestedGroup).toHaveStyle('--tree-indent: 32px');
     const activeBranch = getByRole('button', { name: 'fix/abc/abcd' });
     expect(activeBranch).toHaveAttribute('aria-current', 'true');
-    expect(activeBranch).toHaveStyle('--tree-indent: 32px');
+    expect(activeBranch).toHaveStyle('--tree-indent: 48px');
     expect(activeBranch.querySelector('.branch-name')).toHaveTextContent(/^abcd$/);
     expect(getByRole('button', { name: 'fix/abc/abce' })).toBeEnabled();
     expect(getByRole('button', { name: 'Branch group fix/other' })).toHaveAttribute('aria-expanded', 'false');

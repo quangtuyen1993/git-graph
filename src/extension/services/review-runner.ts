@@ -1,13 +1,15 @@
 import { AIReviewService, ReviewCancelledError } from './ai-review.service';
 import { buildReviewId } from './review-key';
-import type { ReviewStore } from './review-store';
+import type { ReviewStore, ReviewTargetKind } from './review-store';
 
 export interface StartReviewInput {
   repoId: string;
-  sourceBranch: string;
-  sourceSha: string;
-  targetBranch: string;
-  targetSha: string;
+  kind: ReviewTargetKind;
+  baseRef: string;
+  baseSha: string;
+  headRef: string;
+  headSha: string;
+  subject?: string;
   provider: string;
   model: string;
   payloadText: string;
@@ -48,17 +50,24 @@ export class ReviewRunner {
    * review that is already running.
    */
   public async start(input: StartReviewInput): Promise<string> {
-    const id = buildReviewId(input);
+    const id = buildReviewId({
+      baseSha: input.baseSha,
+      headSha: input.headSha,
+      provider: input.provider,
+      model: input.model,
+    });
     if (this.inFlight.has(id)) return id;
 
     const controller = new AbortController();
 
     await this.store.create(input.repoId, {
       id,
-      sourceBranch: input.sourceBranch,
-      sourceSha: input.sourceSha,
-      targetBranch: input.targetBranch,
-      targetSha: input.targetSha,
+      kind: input.kind,
+      baseRef: input.baseRef,
+      baseSha: input.baseSha,
+      headRef: input.headRef,
+      headSha: input.headSha,
+      ...(input.subject ? { subject: input.subject } : {}),
       provider: input.provider,
       model: input.model || 'default',
       status: 'running',

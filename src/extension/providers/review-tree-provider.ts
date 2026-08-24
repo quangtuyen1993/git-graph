@@ -67,11 +67,11 @@ export class ReviewTreeProvider implements vscode.TreeDataProvider<ReviewEntry>,
   }
 
   public getTreeItem(entry: ReviewEntry): vscode.TreeItem {
-    const item = new vscode.TreeItem(`${entry.sourceBranch} ← ${entry.targetBranch}`);
+    const item = new vscode.TreeItem(`${entry.baseRef} ← ${entry.headRef}`);
     item.description = formatDescription(entry, Date.now());
     item.iconPath = new vscode.ThemeIcon(statusIcon(entry.status));
     item.contextValue = entry.status;
-    item.tooltip = `${entry.provider} · ${entry.model}\n${entry.sourceSha.slice(0, 7)}..${entry.targetSha.slice(0, 7)}`;
+    item.tooltip = `${entry.provider} · ${entry.model}\n${entry.baseSha.slice(0, 7)}..${entry.headSha.slice(0, 7)}`;
     item.command = {
       command: 'gitGraphPro.review.open',
       title: 'Open Review',

@@ -11,10 +11,11 @@ let store: ReviewStore;
 function entry(id: string, over: Partial<ReviewEntry> = {}): ReviewEntry {
   return {
     id,
-    sourceBranch: 'main',
-    sourceSha: 'a'.repeat(40),
-    targetBranch: 'feat/x',
-    targetSha: 'b'.repeat(40),
+    kind: 'branch',
+    baseRef: 'main',
+    baseSha: 'a'.repeat(40),
+    headRef: 'feat/x',
+    headSha: 'b'.repeat(40),
     provider: 'claude',
     model: 'sonnet',
     status: 'running',
@@ -65,7 +66,7 @@ describe('ReviewStore', () => {
 
     const saved = await store.get(REPO, 'one');
     expect(saved).toMatchObject({ status: 'done', finishedAt: '2026-08-24T00:05:00.000Z' });
-    expect(saved?.sourceBranch).toBe('main');
+    expect(saved?.baseRef).toBe('main');
   });
 
   it('removes the entry and its body', async () => {
@@ -346,5 +347,56 @@ describe('ReviewStore', () => {
 
   it('refuses to turn a traversing id into a path', () => {
     expect(() => store.bodyPath(REPO, '../../../../tmp/victim')).toThrow(/invalid review id/i);
+  });
+});
+
+describe('index migration', () => {
+  it('maps a legacy sourceBranch entry to baseRef/headRef with kind branch', async () => {
+    const legacy = [{
+      id: 'aaaaaaa..bbbbbbb.claude.sonnet',
+      sourceBranch: 'main', sourceSha: 'a'.repeat(40),
+      targetBranch: 'feat/x', targetSha: 'b'.repeat(40),
+      provider: 'claude', model: 'sonnet',
+      status: 'done', startedAt: '2026-08-01T00:00:00.000Z',
+    }];
+    await mkdir(join(root, 'repo-a'), { recursive: true });
+    await writeFile(join(root, 'repo-a', 'index.json'), JSON.stringify(legacy), 'utf8');
+
+    const entries = await store.list('repo-a');
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: 'aaaaaaa..bbbbbbb.claude.sonnet',
+      kind: 'branch',
+      baseRef: 'main', baseSha: 'a'.repeat(40),
+      headRef: 'feat/x', headSha: 'b'.repeat(40),
+    });
+    // migration ghi lại file một lần: đọc thẳng từ đĩa phải thấy format mới
+    const rewritten = JSON.parse(await readFile(join(root, 'repo-a', 'index.json'), 'utf8'));
+    expect(rewritten[0].baseRef).toBe('main');
+    expect(rewritten[0].sourceBranch).toBeUndefined();
+  });
+
+  it('drops an entry that is neither format instead of throwing', async () => {
+    await mkdir(join(root, 'repo-a'), { recursive: true });
+    await writeFile(join(root, 'repo-a', 'index.json'),
+      JSON.stringify([{ garbage: true }, null]), 'utf8');
+
+    await expect(store.list('repo-a')).resolves.toEqual([]);
+  });
+
+  it('round-trips a commit-kind entry', async () => {
+    await store.create('repo-a', {
+      id: 'aaaaaaa..bbbbbbb.claude.default',
+      kind: 'commit',
+      baseRef: 'a'.repeat(40), baseSha: 'a'.repeat(40),
+      headRef: 'b'.repeat(40), headSha: 'b'.repeat(40),
+      subject: 'fix: something (merge)',
+      provider: 'claude', model: 'default',
+      status: 'running', startedAt: new Date().toISOString(),
+    });
+    const entries = await store.list('repo-a');
+    expect(entries[0].kind).toBe('commit');
+    expect(entries[0].subject).toBe('fix: something (merge)');
   });
 });

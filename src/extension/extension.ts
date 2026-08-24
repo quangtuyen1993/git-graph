@@ -524,8 +524,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (!repoId) return;
       await reviewStore.remove(repoId, entry.id);
       await reviewHandler('review.start', {
-        sourceBranch: entry.sourceBranch,
-        targetBranch: entry.targetBranch,
+        sourceBranch: entry.baseRef,
+        targetBranch: entry.headRef,
         provider: entry.provider,
         model: entry.model,
       });

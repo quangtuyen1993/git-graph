@@ -1,6 +1,17 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import Avatar from '../common/Avatar.svelte';
+  import ResizeHandle from '../layout/ResizeHandle.svelte';
+
+  /*
+   * The files list takes the remaining space and the message sits below it at a
+   * height the user can drag. Both keep a floor so neither can be collapsed to
+   * nothing by accident.
+   */
+  const DEFAULT_MESSAGE_HEIGHT = 120;
+  const MIN_MESSAGE_HEIGHT = 60;
+  const MAX_MESSAGE_HEIGHT = 480;
+  let messageHeight = DEFAULT_MESSAGE_HEIGHT;
 
   export let commit: {
     hash: string;
@@ -96,11 +107,6 @@
       {/each}
     </div>
 
-    <!-- Commit message -->
-    <div class="detail-message">
-      {commit.message || commit.subject}
-    </div>
-
     <!-- Files changed header -->
     <div class="detail-files-header">
       <span class="files-title">FILES CHANGED</span>
@@ -147,6 +153,21 @@
         {/each}
       </div>
     {/if}
+
+    <ResizeHandle
+      axis="y"
+      side="bottom"
+      currentWidth={messageHeight}
+      minWidth={MIN_MESSAGE_HEIGHT}
+      maxWidth={MAX_MESSAGE_HEIGHT}
+      on:resize={(event) => { messageHeight = event.detail.width; }}
+      on:reset={() => { messageHeight = DEFAULT_MESSAGE_HEIGHT; }}
+    />
+
+    <!-- Commit message: below the files, since the files are what you came for -->
+    <div class="detail-message" style="height: {messageHeight}px">
+      {commit.message || commit.subject}
+    </div>
   </div>
 {/if}
 
@@ -161,14 +182,17 @@
   }
 
   .detail-panel {
-    padding: 16px;
-    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    padding: 16px 16px 0;
     height: 100%;
+    overflow: hidden;
     color: var(--vscode-foreground, #ccc);
   }
 
   /* Author section */
   .detail-author {
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     gap: 10px;
@@ -194,6 +218,7 @@
 
   /* SHA + refs */
   .detail-refs {
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -222,10 +247,13 @@
   }
 
   /* Commit message */
+  /* Height is driven by the splitter; scrolls when the message is long. */
   .detail-message {
+    flex-shrink: 0;
+    overflow-y: auto;
+    padding: 8px 0 16px;
     font-size: 13px;
     line-height: 1.5;
-    margin-bottom: 16px;
     white-space: pre-wrap;
     word-break: break-word;
     color: var(--vscode-foreground, #ccc);
@@ -233,6 +261,7 @@
 
   /* Files header */
   .detail-files-header {
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -312,6 +341,9 @@
     display: flex;
     flex-direction: column;
     gap: 1px;
+    flex: 1;
+    min-height: 120px;
+    overflow-y: auto;
   }
 
   .file-entry {

@@ -75,3 +75,82 @@ describe('BranchSidebar hierarchy', () => {
     expect(remoteSection?.classList.contains('nested-header')).toBe(false);
   });
 });
+
+describe('BranchSidebar ahead/behind indicators', () => {
+  afterEach(cleanup);
+
+  const diverged = [
+    { name: 'main', current: true, hash: 'a'.repeat(40), remote: null, upstream: 'origin/main', ahead: 2, behind: 5 },
+  ];
+
+  it('renders ahead and behind as rotated arrow glyphs, not text characters', () => {
+    const { container } = render(BranchSidebar, {
+      branches: diverged, tags: [], stashes: [], worktrees: [], submodules: [],
+    });
+
+    const ahead = container.querySelector('.ahead') as HTMLElement;
+    const behind = container.querySelector('.behind') as HTMLElement;
+
+    expect(ahead.querySelector('svg')).toBeTruthy();
+    expect(behind.querySelector('svg')).toBeTruthy();
+    expect(ahead.textContent).toContain('2');
+    expect(behind.textContent).toContain('5');
+    // The old implementation used literal arrow characters.
+    expect(container.textContent).not.toContain('↑');
+    expect(container.textContent).not.toContain('↓');
+  });
+
+  it('shows neither indicator when the branch is level with its remote', () => {
+    const level = [{ ...diverged[0], ahead: 0, behind: 0 }];
+    const { container } = render(BranchSidebar, {
+      branches: level, tags: [], stashes: [], worktrees: [], submodules: [],
+    });
+
+    expect(container.querySelector('.ahead')).toBeNull();
+    expect(container.querySelector('.behind')).toBeNull();
+  });
+});
+
+describe('BranchSidebar indentation', () => {
+  afterEach(cleanup);
+
+  const nested = [
+    { name: 'main', current: true, hash: 'a'.repeat(40), remote: null, upstream: null, ahead: 0, behind: 0 },
+    { name: 'chore/deps/bump', current: false, hash: 'b'.repeat(40), remote: null, upstream: null, ahead: 0, behind: 0 },
+    { name: 'chore/deps/lock', current: false, hash: 'c'.repeat(40), remote: null, upstream: null, ahead: 0, behind: 0 },
+  ];
+
+  /** The --tree-indent each row carries, in px. */
+  function indentOf(el: Element | null): number {
+    return Number.parseInt((el as HTMLElement).style.getPropertyValue('--tree-indent'), 10);
+  }
+
+  it('steps every level by the same amount', async () => {
+    const { container, getByRole } = render(BranchSidebar, {
+      branches: nested, tags: [], stashes: [], worktrees: [], submodules: [],
+    });
+
+    const chore = getByRole('button', { name: 'Branch group chore' });
+    await fireEvent.click(chore);
+    const deps = getByRole('button', { name: 'Branch group chore/deps' });
+    await fireEvent.click(deps);
+
+    const level1 = indentOf(chore);
+    const level2 = indentOf(deps);
+    const level3 = indentOf(container.querySelector('[aria-label="chore/deps/bump"]'));
+
+    // The step from group to subgroup must equal the step from subgroup to leaf.
+    expect(level2 - level1).toBe(level3 - level2);
+    expect(level1).toBeGreaterThan(0);
+  });
+
+  it('indents a top-level group past its section header', () => {
+    const { getByRole } = render(BranchSidebar, {
+      branches: nested, tags: [], stashes: [], worktrees: [], submodules: [],
+    });
+
+    // A section header sits at the sidebar gutter with no tree indent; a group
+    // directly beneath it must not land on the same left edge.
+    expect(indentOf(getByRole('button', { name: 'Branch group chore' }))).toBeGreaterThan(0);
+  });
+});

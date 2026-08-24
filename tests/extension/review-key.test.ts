@@ -17,7 +17,7 @@ describe('slugSegment', () => {
 });
 
 describe('buildReviewId', () => {
-  const shas = { sourceSha: 'a'.repeat(40), targetSha: 'b'.repeat(40) };
+  const shas = { baseSha: 'a'.repeat(40), headSha: 'b'.repeat(40) };
 
   it('joins abbreviated shas with the provider and model', () => {
     expect(buildReviewId({ ...shas, provider: 'claude', model: 'sonnet' }))
@@ -60,7 +60,7 @@ describe('repoIdFor', () => {
 describe('isSafeReviewId', () => {
   it('accepts an id built by buildReviewId', () => {
     expect(isSafeReviewId(buildReviewId({
-      sourceSha: 'a'.repeat(40), targetSha: 'b'.repeat(40), provider: 'claude', model: 'anthropic/sonnet-4',
+      baseSha: 'a'.repeat(40), headSha: 'b'.repeat(40), provider: 'claude', model: 'anthropic/sonnet-4',
     }))).toBe(true);
   });
 

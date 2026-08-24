@@ -32,7 +32,7 @@
   const ROW_HEIGHT = 32;
   const LANE_WIDTH = 16;
   const PADDING_LEFT = 12;
-  const NODE_RADIUS = 5;
+  const NODE_RADIUS = 3.5;
 
   $: svgWidth = (maxLane + 1) * LANE_WIDTH + PADDING_LEFT + 8;
   $: svgHeight = nodes.length * ROW_HEIGHT;
@@ -70,7 +70,7 @@
     <path
       d={computeEdgePath(edge)}
       stroke={getColor(edge.color)}
-      stroke-width="2"
+      stroke-width="1.25"
       fill="none"
       stroke-linecap="round"
     />
@@ -85,7 +85,7 @@
       r={isMerge ? NODE_RADIUS + 1 : NODE_RADIUS}
       fill={isMerge ? 'var(--vscode-editor-background, #1e1e1e)' : getColor(node.color)}
       stroke={getColor(node.color)}
-      stroke-width={isMerge ? 2 : 0}
+      stroke-width={isMerge ? 1.25 : 0}
     />
   {/each}
 </svg>

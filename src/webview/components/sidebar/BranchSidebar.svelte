@@ -479,8 +479,8 @@
     align-items: center;
     gap: 6px;
     width: 100%;
-    height: 26px;
-    padding: 0 12px 0 24px;
+    height: 30px;
+    padding: 0 12px 0 28px;
     border: none;
     background: none;
     color: var(--vscode-foreground, #cccccc);
@@ -492,11 +492,6 @@
 
   .remote-group {
     margin-left: 0;
-  }
-
-  /* Branches under a remote sit one level deeper again. */
-  .remote-group :global(.branch-tree) {
-    --sidebar-gutter: 32px;
   }
 
   .remote-name {
@@ -519,8 +514,8 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    min-height: 26px;
-    padding: 4px 12px 4px 20px;
+    min-height: 30px;
+    padding: 6px 12px 6px 20px;
     cursor: pointer;
     white-space: nowrap;
     overflow: hidden;
@@ -611,21 +606,4 @@
     font-size: 11px;
   }
 
-  .ahead-behind {
-    margin-left: auto;
-    display: flex;
-    gap: 4px;
-    font-size: 11px;
-    font-weight: 600;
-    flex-shrink: 0;
-    padding-right: 8px;
-  }
-
-  .ahead {
-    color: var(--vscode-gitDecoration-addedResourceForeground, #81b88b);
-  }
-
-  .behind {
-    color: var(--vscode-editorWarning-foreground, #d7ba7d);
-  }
 </style>

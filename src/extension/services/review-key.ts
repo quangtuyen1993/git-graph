@@ -26,13 +26,13 @@ export function assertSafeReviewId(id: unknown): string {
 }
 
 export function buildReviewId(input: {
-  sourceSha: string;
-  targetSha: string;
+  baseSha: string;
+  headSha: string;
   provider: string;
   model?: string;
 }): string {
-  const source = input.sourceSha.slice(0, 7);
-  const target = input.targetSha.slice(0, 7);
+  const source = input.baseSha.slice(0, 7);
+  const target = input.headSha.slice(0, 7);
   const provider = slugSegment(input.provider);
   const model = slugSegment(input.model || 'default') || 'default';
   return `${source}..${target}.${provider}.${model}`;

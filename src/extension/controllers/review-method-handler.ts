@@ -50,14 +50,14 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
         const git = deps.getGitService();
         if (!git) throw new Error('No git repository found');
 
-        const sourceBranch = p.sourceBranch as string;
-        const targetBranch = p.targetBranch as string;
+        const baseRef = p.sourceBranch as string;
+        const headRef = p.targetBranch as string;
         const provider = p.provider as string;
         const model = (p.model as string) || '';
 
-        const [sourceSha, targetSha] = await Promise.all([
-          git.revParse(sourceBranch),
-          git.revParse(targetBranch),
+        const [baseSha, headSha] = await Promise.all([
+          git.revParse(baseRef),
+          git.revParse(headRef),
         ]);
 
         // Same commits, same model: serve the stored answer. A completed review
@@ -66,7 +66,7 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
         // rebuilding the payload here would be wasted work that ReviewRunner
         // would just deduplicate again. Only a finished, successful entry may
         // be opened; a failure or a cancellation must be retried, not served.
-        const id = buildReviewId({ sourceSha, targetSha, provider, model });
+        const id = buildReviewId({ baseSha, headSha, provider, model });
         const existing = await deps.store.get(repoId, id);
         if (existing?.status === 'done') {
           await deps.openBody(repoId, id);
@@ -80,21 +80,21 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
           return { id, cached: false };
         }
 
-        const diff = await git.getDiff(sourceBranch, targetBranch);
+        const diff = await git.getDiff(baseRef, headRef);
         if (!diff.trim()) {
-          throw new Error(`No differences between ${sourceBranch} and ${targetBranch}`);
+          throw new Error(`No differences between ${baseRef} and ${headRef}`);
         }
 
         const [changed, commits] = await Promise.all([
-          git.diff(sourceBranch, targetBranch).then(d => d.files).catch(() => undefined),
-          git.log({ revisions: [`${sourceBranch}..${targetBranch}`], maxCount: 100 })
+          git.diff(baseRef, headRef).then(d => d.files).catch(() => undefined),
+          git.log({ revisions: [`${baseRef}..${headRef}`], maxCount: 100 })
             .then(cs => cs.map(c => c.subject))
             .catch(() => undefined),
         ]);
 
         const payload = buildReviewPayload({
-          baseBranch: sourceBranch,
-          headBranch: targetBranch,
+          baseBranch: baseRef,
+          headBranch: headRef,
           diff,
           files: changed as never,
           commits,
@@ -103,8 +103,9 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
 
         const startedId = await deps.runner.start({
           repoId,
-          sourceBranch, sourceSha,
-          targetBranch, targetSha,
+          kind: 'branch',
+          baseRef, baseSha,
+          headRef, headSha,
           provider, model,
           payloadText: payload.text,
         });

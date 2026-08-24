@@ -72,12 +72,13 @@
         <button
           type="button"
           class="branch-group"
-          style={`--tree-indent: ${depth * 16}px`}
+          style={`--tree-indent: ${(depth + 1) * 16}px`}
           aria-label={`Branch group ${node.path}`}
           aria-expanded={expandedGroups[groupKey(node.path)] === true}
           on:click={() => dispatch('groupToggle', { key: groupKey(node.path) })}
         >
           <span class="chevron" class:collapsed={expandedGroups[groupKey(node.path)] !== true}><Icon name="chevron-right" /></span>
+          <span class="group-icon"><Icon name={expandedGroups[groupKey(node.path)] === true ? 'folder-opened' : 'folder'} size={14} /></span>
           <span class="group-name">{node.label}</span>
         </button>
       {/if}
@@ -88,7 +89,7 @@
           class="branch-item"
           class:current={node.branch.current}
           class:selected={selectedBranch === node.branch.name}
-          style={`--tree-indent: ${depth * 16}px`}
+          style={`--tree-indent: ${(depth + 1) * 16}px`}
           aria-current={node.branch.current ? 'true' : undefined}
           aria-pressed={selectedBranch === node.branch.name}
           aria-label={node.branch.name}
@@ -106,8 +107,16 @@
           <span class="branch-name">{node.label}</span>
           {#if node.branch.ahead > 0 || node.branch.behind > 0}
             <span class="ahead-behind">
-              {#if node.branch.ahead > 0}<span class="ahead">↑{node.branch.ahead}</span>{/if}
-              {#if node.branch.behind > 0}<span class="behind">↓{node.branch.behind}</span>{/if}
+              {#if node.branch.ahead > 0}
+                <span class="ahead" title={`${node.branch.ahead} commit(s) to push`}>
+                  <Icon name="arrow-small-up" size={12} />{node.branch.ahead}
+                </span>
+              {/if}
+              {#if node.branch.behind > 0}
+                <span class="behind" title={`${node.branch.behind} commit(s) to pull`}>
+                  <Icon name="arrow-small-down" size={12} />{node.branch.behind}
+                </span>
+              {/if}
             </span>
           {/if}
         </button>
@@ -153,15 +162,15 @@
   }
 
   .branch-group {
-    min-height: 26px;
-    padding: 4px 12px 4px calc(var(--sidebar-gutter, 12px) + var(--tree-indent));
+    min-height: 30px;
+    padding: 6px 12px 6px calc(var(--sidebar-gutter, 12px) + var(--tree-indent));
     color: var(--vscode-descriptionForeground, #767676);
     cursor: pointer;
   }
 
   .branch-item {
-    min-height: 26px;
-    padding: 4px 12px 4px calc(var(--sidebar-gutter, 12px) + 8px + var(--tree-indent));
+    min-height: 30px;
+    padding: 6px 12px 6px calc(var(--sidebar-gutter, 12px) + var(--tree-indent));
     cursor: pointer;
     white-space: nowrap;
     overflow: hidden;
@@ -194,9 +203,21 @@
     transform: rotate(0deg);
   }
 
+  .group-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    color: var(--vscode-descriptionForeground, #767676);
+  }
+
   .group-name {
     overflow: hidden;
     text-overflow: ellipsis;
+    font-size: 13px;
+    line-height: 18px;
     font-weight: 600;
   }
 
@@ -230,10 +251,22 @@
     color: var(--vscode-testing-iconPassed, #6a9955);
   }
 
+  /* Explicit rather than inherited, so the branch name is the clearest thing
+     in the row and does not pick up a dimmed colour from its surroundings. */
   .branch-name {
     overflow: hidden;
-    color: inherit;
     text-overflow: ellipsis;
+    font-size: 13px;
+    line-height: 18px;
+    color: var(--vscode-foreground, #cccccc);
+  }
+
+  .branch-item.current .branch-name {
+    font-weight: 600;
+  }
+
+  .branch-item.selected .branch-name {
+    color: var(--vscode-list-activeSelectionForeground, #ffffff);
   }
 
   .ahead-behind {
@@ -243,11 +276,34 @@
     font-size: 11px;
   }
 
+  /*
+   * Diagonal, because ahead/behind is movement relative to the remote rather
+   * than plain up/down. Codicon ships no diagonal arrow, so the small vertical
+   * one is rotated; that stays crisp where a Unicode glyph varies by font.
+   */
+  .ahead,
+  .behind {
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+  }
+
+  .ahead :global(svg),
+  .behind :global(svg) {
+    transform: rotate(45deg);
+  }
+
+  .behind :global(svg) {
+    transform: rotate(-45deg);
+  }
+
+  /* Ahead is work you have; behind is work you need. Neither is an error, so
+     nothing here is red. */
   .ahead {
-    color: var(--vscode-gitDecoration-addedResourceForeground, #81b88b);
+    color: var(--vscode-gitDecoration-addedResourceForeground, #6a9955);
   }
 
   .behind {
-    color: var(--vscode-gitDecoration-deletedResourceForeground, #c74e39);
+    color: var(--vscode-editorWarning-foreground, #bf8803);
   }
 </style>

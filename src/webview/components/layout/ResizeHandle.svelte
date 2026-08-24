@@ -2,7 +2,18 @@
   import { createEventDispatcher, onDestroy } from 'svelte';
 
   /** Which side of the handle the resizable panel is on */
-  export let side: 'left' | 'right' = 'left';
+  export let side: 'left' | 'right' | 'top' | 'bottom' = 'left';
+  /**
+   * Drag direction. 'x' resizes width (the panel splitters); 'y' resizes
+   * height (the commit detail's files/message split). Defaults to 'x' so
+   * every existing caller behaves exactly as before.
+   */
+  export let axis: 'x' | 'y' = 'x';
+
+  $: vertical = axis === 'y';
+  $: resizeCursor = vertical ? 'row-resize' : 'col-resize';
+  /** A leading panel grows as the pointer moves away from the origin. */
+  $: leading = side === 'left' || side === 'top';
 
   const dispatch = createEventDispatcher();
 
@@ -30,26 +41,19 @@
   function onMouseDown(event: MouseEvent) {
     event.preventDefault();
     dragging = true;
-    startX = event.clientX;
+    startX = vertical ? event.clientY : event.clientX;
     startWidth = currentWidth;
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('mouseup', onMouseUp);
-    document.body.style.cursor = 'col-resize';
+    document.body.style.cursor = resizeCursor;
     document.body.style.userSelect = 'none';
   }
 
   function onMouseMove(event: MouseEvent) {
     if (!dragging) return;
-    const delta = event.clientX - startX;
-    let newWidth: number;
+    const delta = (vertical ? event.clientY : event.clientX) - startX;
 
-    if (side === 'left') {
-      newWidth = startWidth + delta;
-    } else {
-      newWidth = startWidth - delta;
-    }
-
-    setWidth(newWidth);
+    setWidth(leading ? startWidth + delta : startWidth - delta);
   }
 
   function onMouseUp() {
@@ -65,10 +69,12 @@
 
     switch (event.key) {
       case 'ArrowRight':
-        nextWidth = currentWidth + (side === 'left' ? keyboardStep : -keyboardStep);
+      case 'ArrowDown':
+        nextWidth = currentWidth + (leading ? keyboardStep : -keyboardStep);
         break;
       case 'ArrowLeft':
-        nextWidth = currentWidth + (side === 'left' ? -keyboardStep : keyboardStep);
+      case 'ArrowUp':
+        nextWidth = currentWidth + (leading ? -keyboardStep : keyboardStep);
         break;
       case 'Home':
         nextWidth = minWidth;
@@ -98,13 +104,14 @@
 <div
   class="resize-handle"
   class:dragging
+  class:vertical
   on:mousedown={onMouseDown}
   on:dblclick={onDoubleClick}
   on:keydown={onKeydown}
   role="separator"
   tabindex="0"
   aria-label={`Resize ${side} panel`}
-  aria-orientation="vertical"
+  aria-orientation={vertical ? 'horizontal' : 'vertical'}
   aria-valuenow={currentWidth}
   aria-valuemin={minWidth}
   aria-valuemax={maxWidth}
@@ -156,5 +163,29 @@
   .resize-handle:focus-visible {
     outline: 1px solid var(--vscode-focusBorder, #007acc);
     outline-offset: -1px;
+  }
+
+  /* Same handle turned on its side: full width, 4px tall, dragged up/down. */
+  .resize-handle.vertical {
+    width: auto;
+    height: 4px;
+    cursor: row-resize;
+  }
+
+  .resize-handle.vertical::before {
+    top: -3px;
+    bottom: -3px;
+    left: 0;
+    right: 0;
+    cursor: row-resize;
+  }
+
+  .resize-handle.vertical::after {
+    top: 1px;
+    bottom: auto;
+    left: 0;
+    right: 0;
+    width: auto;
+    height: 2px;
   }
 </style>

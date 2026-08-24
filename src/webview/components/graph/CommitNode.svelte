@@ -13,7 +13,7 @@
   export let startRow: number = 0;
 
   const dispatch = createEventDispatcher();
-  const NODE_RADIUS = 5;
+  const NODE_RADIUS = 3.5;
   const HIT_RADIUS = 14; // larger invisible hit target
 
   $: cx = paddingLeft + lane * laneWidth;
@@ -45,7 +45,7 @@
     r={isMerge ? NODE_RADIUS + 1 : NODE_RADIUS}
     fill={isMerge ? 'var(--vscode-editor-background, #1e1e1e)' : fillColor}
     stroke={fillColor}
-    stroke-width={isMerge ? 2 : 0}
+    stroke-width={isMerge ? 1.25 : 0}
     class="node-circle"
   />
 </g>

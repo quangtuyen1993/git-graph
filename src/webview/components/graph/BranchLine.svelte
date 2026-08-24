@@ -33,7 +33,7 @@
 <path
   d={pathD}
   stroke={strokeColor}
-  stroke-width="2"
+  stroke-width="1.25"
   fill="none"
   stroke-linecap="round"
 />
