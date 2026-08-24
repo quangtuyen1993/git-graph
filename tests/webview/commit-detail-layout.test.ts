@@ -80,13 +80,27 @@ describe('CommitDetail layout', () => {
 describe('CommitDetail grouping', () => {
   afterEach(cleanup);
 
-  it('keeps author, sha and message together in the lower pane', () => {
+  it('keeps the subject, byline and body together in the lower pane', () => {
     const { container } = render(CommitDetail, { commit, files, loading: false });
     const meta = container.querySelector('.detail-meta')!;
 
-    expect(meta.querySelector('.detail-author')).toBeTruthy();
-    expect(meta.querySelector('.detail-refs')).toBeTruthy();
+    expect(meta.querySelector('.detail-subject')).toHaveTextContent('Add the thing');
+    expect(meta.querySelector('.detail-byline')).toBeTruthy();
     expect(meta.querySelector('.detail-message')).toBeTruthy();
+  });
+
+  it('states the sha, author and date on one byline instead of an avatar block', () => {
+    const { container } = render(CommitDetail, { commit, files, loading: false });
+
+    expect(container.querySelector('.detail-byline')).toHaveTextContent(/^aaaaaaa Tuyen on 2026-08-24/);
+    expect(container.querySelector('.detail-author')).toBeNull();
+  });
+
+  it('does not repeat the subject inside the body', () => {
+    const { container } = render(CommitDetail, { commit, files, loading: false });
+
+    expect(container.querySelector('.detail-message')).not.toHaveTextContent('Add the thing');
+    expect(container.querySelector('.detail-message')).toHaveTextContent('longer body');
   });
 
   it('leaves the files header as the very first row of the panel', () => {
@@ -94,5 +108,47 @@ describe('CommitDetail grouping', () => {
     const panel = container.querySelector('.detail-panel')!;
 
     expect(panel.firstElementChild).toHaveClass('detail-files-header');
+  });
+});
+
+describe('CommitDetail changed files', () => {
+  afterEach(cleanup);
+
+  const nested = [
+    { path: 'images/icon.png', oldPath: null, status: 'added', additions: 0, deletions: 0, binary: true },
+    { path: 'src/lib/a.ts', oldPath: null, status: 'modified', additions: 3, deletions: 1, binary: false },
+  ];
+
+  it('groups files by folder and counts what each folder holds', () => {
+    const { container, getByRole } = render(CommitDetail, { commit, files: nested, loading: false });
+
+    const folder = getByRole('button', { name: 'Folder images' });
+    expect(folder).toHaveTextContent('images');
+    expect(folder).toHaveTextContent('1 file');
+    expect(container.querySelector('.file-label')).toHaveTextContent('icon.png');
+  });
+
+  it('collapses a folder and hides the files beneath it', async () => {
+    const { queryByText, getByRole } = render(CommitDetail, { commit, files: nested, loading: false });
+    expect(queryByText('icon.png')).toBeTruthy();
+
+    await fireEvent.click(getByRole('button', { name: 'Folder images' }));
+
+    expect(queryByText('icon.png')).toBeNull();
+  });
+
+  it('switches to a flat list without folder rows', async () => {
+    const { queryByRole, getByRole } = render(CommitDetail, { commit, files: nested, loading: false });
+    expect(queryByRole('button', { name: 'Folder images' })).toBeTruthy();
+
+    await fireEvent.click(getByRole('button', { name: 'Show files as a flat list' }));
+
+    expect(queryByRole('button', { name: 'Folder images' })).toBeNull();
+  });
+
+  it('labels the section CHANGED FILES', () => {
+    const { container } = render(CommitDetail, { commit, files: nested, loading: false });
+
+    expect(container.querySelector('.files-title')).toHaveTextContent('CHANGED FILES');
   });
 });

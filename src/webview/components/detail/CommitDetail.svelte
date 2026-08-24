@@ -1,7 +1,9 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import Avatar from '../common/Avatar.svelte';
+  import Icon from '../common/Icon.svelte';
   import ResizeHandle from '../layout/ResizeHandle.svelte';
+  import FileTreeList from './FileTreeList.svelte';
+  import { buildPathTree } from '../../lib/path-tree';
 
   /*
    * The files list takes the remaining space and the message sits below it at a
@@ -39,29 +41,33 @@
 
   let filterText = '';
 
+  /** Grouped by folder, or one flat row per file. */
+  let viewMode: 'tree' | 'flat' = 'tree';
+  let collapsedFolders: Record<string, boolean> = {};
+
+  function toggleFolder(path: string): void {
+    collapsedFolders = { ...collapsedFolders, [path]: !collapsedFolders[path] };
+  }
+
   $: filteredFiles = files?.filter(f =>
     f.path.toLowerCase().includes(filterText.toLowerCase())
   ) ?? [];
 
   $: totalAdditions = files?.reduce((sum, f) => sum + f.additions, 0) ?? 0;
   $: totalDeletions = files?.reduce((sum, f) => sum + f.deletions, 0) ?? 0;
+  $: fileTree = buildPathTree(filteredFiles ?? [], (file) => file.path);
+  $: bodyText = (commit?.message ?? '').slice((commit?.subject ?? '').length).trim();
 
-  function formatRelativeTime(dateStr: string): string {
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffSec = Math.floor(diffMs / 1000);
-    if (diffSec < 60) return 'just now';
-    const diffMin = Math.floor(diffSec / 60);
-    if (diffMin < 60) return `${diffMin} minute${diffMin === 1 ? '' : 's'} ago`;
-    const diffHr = Math.floor(diffMin / 60);
-    if (diffHr < 24) return `${diffHr} hour${diffHr === 1 ? '' : 's'} ago`;
-    const diffDay = Math.floor(diffHr / 24);
-    if (diffDay < 30) return `${diffDay} day${diffDay === 1 ? '' : 's'} ago`;
-    const diffMonth = Math.floor(diffDay / 30);
-    if (diffMonth < 12) return `${diffMonth} month${diffMonth === 1 ? '' : 's'} ago`;
-    return `${Math.floor(diffMonth / 12)} year${Math.floor(diffMonth / 12) === 1 ? '' : 's'} ago`;
+  /** `d1ade48 black on 2026-05-25 16:03` — one line instead of an avatar block. */
+  function formatMeta(hash: string, author: string, isoDate: string): string {
+    const date = new Date(isoDate);
+    const stamp = Number.isNaN(date.getTime())
+      ? isoDate
+      : `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+        + ` ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+    return `${hash} ${author} on ${stamp}`;
   }
+
 
   function getStatusLetter(status: string): string {
     switch (status) {
@@ -90,13 +96,33 @@
   </div>
 {:else}
   <div class="detail-panel">
-    <!-- Files changed header -->
+    <!-- Changed files header -->
     <div class="detail-files-header">
-      <span class="files-title">FILES CHANGED</span>
+      <span class="files-title">CHANGED FILES</span>
       <span class="files-count-badge">{files?.length ?? 0}</span>
       <span class="files-total-stats">
         {#if totalAdditions > 0}<span class="total-add">+{totalAdditions}</span>{/if}
         {#if totalDeletions > 0}<span class="total-del">-{totalDeletions}</span>{/if}
+      </span>
+      <span class="view-toggle">
+        <button
+          type="button"
+          class="view-button"
+          class:active={viewMode === 'tree'}
+          aria-label="Group files by folder"
+          aria-pressed={viewMode === 'tree'}
+          title="Group by folder"
+          on:click={() => { viewMode = 'tree'; }}
+        ><Icon name="list-tree" /></button>
+        <button
+          type="button"
+          class="view-button"
+          class:active={viewMode === 'flat'}
+          aria-label="Show files as a flat list"
+          aria-pressed={viewMode === 'flat'}
+          title="Flat list"
+          on:click={() => { viewMode = 'flat'; }}
+        ><Icon name="list-flat" /></button>
       </span>
     </div>
 
@@ -115,6 +141,19 @@
       <div class="files-loading">Loading file changes...</div>
     {:else}
       <div class="file-list">
+        {#if viewMode === 'tree'}
+          <FileTreeList
+            nodes={fileTree}
+            {collapsedFolders}
+            on:folderToggle={(event) => toggleFolder(event.detail.path)}
+            on:openFile={(event) => dispatch('openFile', {
+              path: event.detail.path,
+              oldPath: event.detail.oldPath,
+              hash: commit.hash,
+              status: event.detail.status,
+            })}
+          />
+        {:else}
         {#each filteredFiles as file}
           <button
             class="file-entry"
@@ -134,6 +173,7 @@
             </span>
           </button>
         {/each}
+        {/if}
       </div>
     {/if}
 
@@ -147,26 +187,13 @@
       on:reset={() => { messageHeight = DEFAULT_MESSAGE_HEIGHT; }}
     />
 
-    <!-- Who, what and why travel together, below the files -->
+    <!-- Subject, then one line of who and when -->
     <div class="detail-meta" style="height: {messageHeight}px">
-      <div class="detail-author">
-        <Avatar name={commit.author} email={commit.authorEmail} size={32} />
-        <div class="author-info">
-          <span class="author-name">{commit.author}</span>
-          <span class="author-date">{formatRelativeTime(commit.authorDate)}</span>
-        </div>
-      </div>
-
-      <div class="detail-refs">
-        <code class="detail-sha">{commit.abbreviatedHash}</code>
-        {#each commit.refs as ref}
-          <span class="detail-ref-badge">{ref.replace(/^HEAD -> /, '')}</span>
-        {/each}
-      </div>
-
-      <div class="detail-message">
-        {commit.message || commit.subject}
-      </div>
+      <div class="detail-subject">{commit.subject}</div>
+      <div class="detail-byline">{formatMeta(commit.abbreviatedHash, commit.author, commit.authorDate)}</div>
+      {#if bodyText}
+        <div class="detail-message">{bodyText}</div>
+      {/if}
     </div>
   </div>
 {/if}
@@ -254,13 +281,67 @@
     padding-top: 12px;
   }
 
+  .detail-subject {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.4;
+    color: var(--vscode-foreground, #cccccc);
+    word-break: break-word;
+  }
+
+  /* `d1ade48 black on 2026-05-25 16:03` */
+  .detail-byline {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground, #767676);
+  }
+
   .detail-message {
+    margin-top: 12px;
     padding-bottom: 16px;
     font-size: 13px;
     line-height: 1.5;
     white-space: pre-wrap;
     word-break: break-word;
     color: var(--vscode-foreground, #ccc);
+  }
+
+  .view-toggle {
+    margin-left: auto;
+    display: flex;
+    gap: 2px;
+    flex-shrink: 0;
+  }
+
+  .view-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: none;
+    color: var(--vscode-icon-foreground, #cccccc);
+    cursor: pointer;
+    opacity: 0.75;
+  }
+
+  .view-button:hover {
+    opacity: 1;
+    background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+  }
+
+  .view-button.active {
+    opacity: 1;
+    background: var(--vscode-inputOption-activeBackground, rgba(0, 122, 204, 0.25));
+    color: var(--vscode-inputOption-activeForeground, inherit);
+  }
+
+  .view-button:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007acc);
+    outline-offset: -1px;
   }
 
   /* Files header — now the first row in the panel */
@@ -346,8 +427,8 @@
     display: flex;
     flex-direction: column;
     gap: 1px;
-    flex: 1;
-    min-height: 120px;
+    flex: 1 1 0;
+    min-height: 160px;
     overflow-y: auto;
   }
 
