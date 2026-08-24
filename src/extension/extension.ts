@@ -388,7 +388,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     });
 
-    router.setPanel(panel);
+    router.setHost(panel);
     void bindGitWatcher();
 
     panel.onDidDispose(() => {
