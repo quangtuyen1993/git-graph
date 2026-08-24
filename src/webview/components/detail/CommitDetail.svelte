@@ -8,9 +8,9 @@
    * height the user can drag. Both keep a floor so neither can be collapsed to
    * nothing by accident.
    */
-  const DEFAULT_MESSAGE_HEIGHT = 120;
-  const MIN_MESSAGE_HEIGHT = 60;
-  const MAX_MESSAGE_HEIGHT = 480;
+  const DEFAULT_MESSAGE_HEIGHT = 160;
+  const MIN_MESSAGE_HEIGHT = 96;
+  const MAX_MESSAGE_HEIGHT = 520;
   let messageHeight = DEFAULT_MESSAGE_HEIGHT;
 
   export let commit: {
@@ -90,23 +90,6 @@
   </div>
 {:else}
   <div class="detail-panel">
-    <!-- Author section -->
-    <div class="detail-author">
-      <Avatar name={commit.author} email={commit.authorEmail} size={32} />
-      <div class="author-info">
-        <span class="author-name">{commit.author}</span>
-        <span class="author-date">{formatRelativeTime(commit.authorDate)}</span>
-      </div>
-    </div>
-
-    <!-- SHA + refs -->
-    <div class="detail-refs">
-      <code class="detail-sha">{commit.abbreviatedHash}</code>
-      {#each commit.refs as ref}
-        <span class="detail-ref-badge">{ref.replace(/^HEAD -> /, '')}</span>
-      {/each}
-    </div>
-
     <!-- Files changed header -->
     <div class="detail-files-header">
       <span class="files-title">FILES CHANGED</span>
@@ -164,9 +147,26 @@
       on:reset={() => { messageHeight = DEFAULT_MESSAGE_HEIGHT; }}
     />
 
-    <!-- Commit message: below the files, since the files are what you came for -->
-    <div class="detail-message" style="height: {messageHeight}px">
-      {commit.message || commit.subject}
+    <!-- Who, what and why travel together, below the files -->
+    <div class="detail-meta" style="height: {messageHeight}px">
+      <div class="detail-author">
+        <Avatar name={commit.author} email={commit.authorEmail} size={32} />
+        <div class="author-info">
+          <span class="author-name">{commit.author}</span>
+          <span class="author-date">{formatRelativeTime(commit.authorDate)}</span>
+        </div>
+      </div>
+
+      <div class="detail-refs">
+        <code class="detail-sha">{commit.abbreviatedHash}</code>
+        {#each commit.refs as ref}
+          <span class="detail-ref-badge">{ref.replace(/^HEAD -> /, '')}</span>
+        {/each}
+      </div>
+
+      <div class="detail-message">
+        {commit.message || commit.subject}
+      </div>
     </div>
   </div>
 {/if}
@@ -247,11 +247,15 @@
   }
 
   /* Commit message */
-  /* Height is driven by the splitter; scrolls when the message is long. */
-  .detail-message {
+  /* Height is driven by the splitter; the pane scrolls as one block. */
+  .detail-meta {
     flex-shrink: 0;
     overflow-y: auto;
-    padding: 8px 0 16px;
+    padding-top: 12px;
+  }
+
+  .detail-message {
+    padding-bottom: 16px;
     font-size: 13px;
     line-height: 1.5;
     white-space: pre-wrap;
@@ -259,9 +263,10 @@
     color: var(--vscode-foreground, #ccc);
   }
 
-  /* Files header */
+  /* Files header — now the first row in the panel */
   .detail-files-header {
     flex-shrink: 0;
+    margin-top: 0;
     display: flex;
     align-items: center;
     gap: 8px;

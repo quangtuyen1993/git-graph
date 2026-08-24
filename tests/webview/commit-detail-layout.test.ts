@@ -25,7 +25,7 @@ function renderDetail() {
 describe('CommitDetail layout', () => {
   afterEach(cleanup);
 
-  it('puts the changed files above the commit message', () => {
+  it('puts the changed files above the author, refs and message', () => {
     const { container } = renderDetail();
     const filesHeader = container.querySelector('.detail-files-header')!;
     const message = container.querySelector('.detail-message')!;
@@ -45,7 +45,7 @@ describe('CommitDetail layout', () => {
   it('resizes the message and refuses to shrink it past its minimum', async () => {
     const { getByRole, container } = renderDetail();
     const handle = getByRole('separator');
-    const message = container.querySelector('.detail-message') as HTMLElement;
+    const message = container.querySelector('.detail-meta') as HTMLElement;
     const startingHeight = Number.parseInt(message.style.height, 10);
 
     // Dragging up grows the message, since it sits below the handle.
@@ -58,21 +58,41 @@ describe('CommitDetail layout', () => {
     await fireEvent.mouseDown(handle, { clientY: 0 });
     await fireEvent.mouseMove(document, { clientY: 5000 });
     await fireEvent.mouseUp(document);
-    expect(Number.parseInt(message.style.height, 10)).toBe(60);
+    expect(Number.parseInt(message.style.height, 10)).toBe(96);
   });
 
   it('restores the default split on a double-click', async () => {
     const { getByRole, container } = renderDetail();
     const handle = getByRole('separator');
-    const message = container.querySelector('.detail-message') as HTMLElement;
+    const message = container.querySelector('.detail-meta') as HTMLElement;
 
     await fireEvent.mouseDown(handle, { clientY: 0 });
     await fireEvent.mouseMove(document, { clientY: -60 });
     await fireEvent.mouseUp(document);
-    expect(Number.parseInt(message.style.height, 10)).not.toBe(120);
+    expect(Number.parseInt(message.style.height, 10)).not.toBe(160);
 
     await fireEvent.dblClick(handle);
 
-    expect(Number.parseInt(message.style.height, 10)).toBe(120);
+    expect(Number.parseInt(message.style.height, 10)).toBe(160);
+  });
+});
+
+describe('CommitDetail grouping', () => {
+  afterEach(cleanup);
+
+  it('keeps author, sha and message together in the lower pane', () => {
+    const { container } = render(CommitDetail, { commit, files, loading: false });
+    const meta = container.querySelector('.detail-meta')!;
+
+    expect(meta.querySelector('.detail-author')).toBeTruthy();
+    expect(meta.querySelector('.detail-refs')).toBeTruthy();
+    expect(meta.querySelector('.detail-message')).toBeTruthy();
+  });
+
+  it('leaves the files header as the very first row of the panel', () => {
+    const { container } = render(CommitDetail, { commit, files, loading: false });
+    const panel = container.querySelector('.detail-panel')!;
+
+    expect(panel.firstElementChild).toHaveClass('detail-files-header');
   });
 });
