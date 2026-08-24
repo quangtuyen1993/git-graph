@@ -142,6 +142,73 @@ describe('ReviewApp', () => {
     await waitFor(() => expect(rendered.getByText('main ← feat/x')).toBeInTheDocument());
   });
 
+  it('a repo.changed event re-inits against the new repo', async () => {
+    stub();
+    const rendered = render(ReviewApp);
+    await waitFor(() => expect(rendered.getByText('src/a.ts')).toBeInTheDocument());
+    send.mockClear();
+
+    const newBranches = [
+      { name: 'main', current: false },
+      { name: 'feature/new', current: true },
+    ];
+    send.mockImplementation(async (method: string) => {
+      switch (method) {
+        case 'git.branches': return newBranches;
+        case 'ai.providers': return [{ id: 'claude', name: 'Claude', available: true, group: 'cli' }];
+        case 'ui.getState': return null;
+        case 'review.getTarget': return null;
+        case 'review.list': return [doneEntry];
+        case 'review.compare': return { files: [
+          { path: 'src/b.ts', oldPath: null, status: 'modified', additions: 1, deletions: 0, binary: false },
+        ] };
+        default: return null;
+      }
+    });
+
+    eventHandler('repo.changed')({});
+
+    await waitFor(() => expect(rendered.getByText('src/b.ts')).toBeInTheDocument());
+    expect(send).toHaveBeenCalledWith('git.branches');
+    expect(send).toHaveBeenCalledWith('review.list');
+    expect(send).toHaveBeenCalledWith('review.compare',
+      expect.objectContaining({ kind: 'branch', baseRef: 'main', headRef: 'feature/new' }));
+    const base = rendered.getByLabelText('Base branch') as HTMLSelectElement;
+    const head = rendered.getByLabelText('Head branch') as HTMLSelectElement;
+    expect(head.value).toBe('feature/new');
+    expect(base.value).toBe('main');
+  });
+
+  it('a range chip renders a swap button that reverses base and head', async () => {
+    stub();
+    const rendered = render(ReviewApp);
+    await waitFor(() => expect(rendered.getByLabelText('Base branch')).toBeInTheDocument());
+
+    eventHandler('review.target')({ kind: 'range', baseRef: 'main', headRef: 'feat/x' });
+
+    await waitFor(() => expect(rendered.getByText('main..feat/x')).toBeInTheDocument());
+    send.mockClear();
+
+    await fireEvent.click(rendered.getByRole('button', { name: 'Swap base and head' }));
+
+    await waitFor(() => expect(send).toHaveBeenCalledWith('review.compare',
+      expect.objectContaining({ kind: 'range', baseRef: 'feat/x', headRef: 'main' })));
+    await waitFor(() => expect(rendered.getByText('feat/x..main')).toBeInTheDocument());
+  });
+
+  it('a commit chip does not render a swap button', async () => {
+    stub();
+    const rendered = render(ReviewApp);
+    await waitFor(() => expect(rendered.getByLabelText('Base branch')).toBeInTheDocument());
+
+    eventHandler('review.target')({
+      kind: 'commit', baseRef: 'c'.repeat(40), headRef: SHA_B, subject: 'fix: y',
+    });
+
+    await waitFor(() => expect(rendered.getByText(`${SHA_B.slice(0, 7)} "fix: y"`)).toBeInTheDocument());
+    expect(rendered.queryByRole('button', { name: 'Swap base and head' })).toBeNull();
+  });
+
   it('a failed compare shows the error instead of dying silently', async () => {
     stub();
     send.mockImplementation(async (method: string) => {

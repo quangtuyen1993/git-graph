@@ -48,6 +48,16 @@
       error = '';
       void compare();
     }));
+    // The review webview is retainContextWhenHidden and never re-resolved, so
+    // a host-side repo switch (graph's repo picker) never reaches it on its
+    // own. Drop the stale branch list/target/files and re-run the same
+    // initialization used at mount, against the newly active repo.
+    unsubscribers.push(bridge.on('repo.changed', () => {
+      targetOverridden = false;
+      files = null;
+      error = '';
+      void init();
+    }));
     void init();
   });
 
@@ -254,6 +264,10 @@
     {:else}
       <span class="chip">
         {chipLabel(target)}
+        {#if target.kind === 'range'}
+          <button class="icon-btn" title="Swap base and head" aria-label="Swap base and head"
+            on:click={swap}>⇄</button>
+        {/if}
         <button class="icon-btn" title="Back to branch compare" aria-label="Back to branch compare"
           on:click={clearChip}>✕</button>
       </span>

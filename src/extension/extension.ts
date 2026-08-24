@@ -235,6 +235,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const run = async () => {
         const result = await session.handleRepo('repo.switch', params);
         await bindGitWatcher();
+        // The review webview is retainContextWhenHidden and never re-resolved,
+        // so it never sees a fresh repo.switch response of its own. Broadcast
+        // so it can drop its stale branch list/reviews/target and re-init.
+        routers.broadcast('repo.changed', {});
         return result;
       };
       const result = repositorySwitchQueue.then(run, run);

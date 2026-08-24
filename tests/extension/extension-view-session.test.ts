@@ -330,6 +330,17 @@ describe('extension view sessions', () => {
     expect(reboundWatcher.dispose).toHaveBeenCalledTimes(1);
   });
 
+  it('broadcasts repo.changed after a successful repo.switch so the review tab can refresh', async () => {
+    const view = await activateAndResolveView();
+    await vi.waitFor(() => expect(hostMocks.createFileSystemWatcher).toHaveBeenCalledTimes(1));
+    view.webview.postMessage.mockClear();
+
+    view.receive({ id: 'switch', type: 'request', method: 'repo.switch', params: { path: '/repo/other' } });
+
+    await responseFor(view, 'switch');
+    expect(sentEvents(view)).toContain('repo.changed');
+  });
+
   it('warns about initial and rebind watcher failures without delaying repo.switch for warning dismissal', async () => {
     hostMocks.gitDirectory.mockRejectedValueOnce(new Error('initial watcher failed'));
     const view = await activateAndResolveView();
@@ -427,10 +438,12 @@ describe('extension view sessions', () => {
     await responseFor(view, 'switch');
     await vi.advanceTimersByTimeAsync(500);
 
-    const events = view.webview.postMessage.mock.calls
-      .map(([message]) => message as { type: string })
-      .filter(message => message.type === 'event');
-    expect(events).toEqual([]);
+    // The switch itself legitimately broadcasts repo.changed; what must NOT
+    // fire is the stale debounced watcher invalidation (git.refsChanged /
+    // graph.invalidated) that the pre-switch fireChange() queued up.
+    const events = sentEvents(view);
+    expect(events).not.toContain('git.refsChanged');
+    expect(events).not.toContain('graph.invalidated');
   });
 
   it('switches the session to a submodule instead of opening another view', async () => {
