@@ -410,11 +410,9 @@
     padding: 8px 0;
     user-select: none;
     font-size: 13px;
-    background: linear-gradient(180deg, 
-      var(--vscode-sideBar-background, #1e1e1e) 0%, 
-      rgba(255, 255, 255, 0.01) 50%, 
-      var(--vscode-sideBar-background, #1e1e1e) 100%
-    );
+    /* Flat, not a gradient: the old middle stop was raw white, which washed
+       out the panel on light themes and belonged to no theme token. */
+    background: var(--vscode-sideBar-background, #1e1e1e);
   }
 
   .section {
@@ -466,7 +464,7 @@
     color: var(--vscode-badge-foreground, #ffffff);
     padding: 1px 6px;
     border-radius: 8px;
-    font-size: 10px;
+    font-size: 11px;
     min-width: 16px;
     text-align: center;
   }
@@ -531,7 +529,6 @@
     margin: 1px 0;
     width: 100%;
     border: none;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
     background: none;
     color: inherit;
     font: inherit;
@@ -611,14 +608,14 @@
     flex-shrink: 0;
     color: var(--vscode-descriptionForeground, #aaaaaa);
     font-family: var(--vscode-editor-font-family, monospace);
-    font-size: 10px;
+    font-size: 11px;
   }
 
   .ahead-behind {
     margin-left: auto;
     display: flex;
     gap: 4px;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     flex-shrink: 0;
     padding-right: 8px;

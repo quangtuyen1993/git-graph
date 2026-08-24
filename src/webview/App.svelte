@@ -1730,7 +1730,7 @@
     margin-left: auto;
     padding-right: 4px;
     font-size: 11px;
-    opacity: 0.6;
+    color: var(--vscode-descriptionForeground, #767676);
     white-space: nowrap;
   }
 
@@ -1832,7 +1832,7 @@
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
-    opacity: 0.5;
+    color: var(--vscode-descriptionForeground, #767676);
     flex-shrink: 0;
     user-select: none;
   }
@@ -1978,7 +1978,7 @@
     min-width: 80px;
     padding-left: 8px;
     font-size: 11px;
-    opacity: 0.6;
+    color: var(--vscode-descriptionForeground, #767676);
     white-space: nowrap;
   }
 
@@ -2055,7 +2055,7 @@
   .loading {
     padding: 32px;
     text-align: center;
-    opacity: 0.5;
+    color: var(--vscode-descriptionForeground, #767676);
   }
 
   /* The bottom Panel opens around 250px tall. Chrome that reads as breathing

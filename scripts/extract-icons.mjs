@@ -18,6 +18,7 @@ const WANTED = {
   'circle-filled': 'circle-filled',
   'circle-large-outline': 'circle-outline',
   'circle-small': 'circle-small',
+  'check': 'check',
   'tag': 'tag',
   'archive': 'archive',
   'folder': 'folder',
