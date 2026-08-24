@@ -1200,8 +1200,12 @@
     aiReviewLoading = true;
     aiReviewError = '';
     try {
-      const started = await bridge.send('review.start', { sourceBranch, targetBranch, provider, model }) as { id: string };
+      const started = await bridge.send('review.start', { sourceBranch, targetBranch, provider, model }) as { id: string; cached: boolean };
       aiReviewJobId = started.id;
+      // A cache hit resolves an already-`done` run and opens its document on the
+      // host side without any status transition — no review.changed will ever
+      // fire for it, so nothing else will clear the spinner.
+      if (started.cached) aiReviewLoading = false;
     } catch (e) {
       aiReviewError = e instanceof Error ? e.message : String(e);
       aiReviewLoading = false;
