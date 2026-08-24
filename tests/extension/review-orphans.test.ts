@@ -64,4 +64,13 @@ describe('ReviewStore.reconcileOrphans', () => {
   it('is a no-op when nothing has ever been stored', async () => {
     expect(await store.reconcileOrphans()).toEqual([]);
   });
+
+  it('never throws when the root directory does not exist', async () => {
+    // Create a ReviewStore pointing to a path that was never created
+    const nonexistentRoot = join(tmpdir(), 'nonexistent-root-' + Math.random().toString(36));
+    const orphanStore = new ReviewStore(nonexistentRoot);
+
+    // reconcileOrphans must never throw at activation, even with missing root
+    expect(await orphanStore.reconcileOrphans()).toEqual([]);
+  });
 });

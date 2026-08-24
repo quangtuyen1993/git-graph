@@ -155,32 +155,48 @@ describe('ReviewStore', () => {
   });
 
   it('does not deadlock when a critical section rejects', async () => {
-    // Create initial entries
+    // Create an initial entry
     await store.create(REPO, entry('one'));
-    await store.create(REPO, entry('two'));
 
-    // Spy on writeIndex to make it throw on the first call
+    // Store the original writeIndex implementation
+    const originalWriteIndex = (store as any).writeIndex;
+
+    // Spy on writeIndex to track calls and selectively reject
     const writeIndexSpy = vi.spyOn(store as any, 'writeIndex');
-    writeIndexSpy.mockRejectedValueOnce(new Error('Simulated write failure'));
+    let callCount = 0;
+    writeIndexSpy.mockImplementation(async (repoId: string, entries: any) => {
+      callCount++;
+      if (callCount === 1) {
+        // Still write the file, then reject to simulate a write that fails mid-operation
+        await originalWriteIndex.call(store, repoId, entries);
+        throw new Error('Simulated write failure on first call');
+      }
+      // On subsequent calls, use the original implementation
+      return originalWriteIndex.call(store, repoId, entries);
+    });
 
-    // Try to finish 'one' - this should throw because writeIndex fails
+    // First finish: writeIndex will reject even though it still tries to write
     try {
       await store.finish(REPO, 'one', { status: 'done' });
-      throw new Error('Expected first finish to throw');
+      throw new Error('Expected first finish to reject');
     } catch (err) {
-      if ((err as any).message === 'Expected first finish to throw') throw err;
-      // Expected - the write failed
+      if ((err as any).message === 'Expected first finish to reject') throw err;
+      // Expected - writeIndex rejected
     }
 
-    // Restore the spy so writeIndex works again
-    writeIndexSpy.mockRestore();
+    // Second finish: this tests that the critical section still runs despite the prior rejection.
+    // Without the error handler in current.then(() => fn(), () => fn()), the second finish's
+    // fn() would never execute because current would be a rejected promise with no recovery path.
+    await store.finish(REPO, 'one', { status: 'done', finishedAt: '2026-08-24T00:05:00.000Z' });
 
-    // A subsequent operation on the same repo should still work.
-    // This proves the mutex chain was not poisoned by the rejection.
-    // If the chain was poisoned (without the rejection guard), this second finish would hang or fail.
-    await store.finish(REPO, 'two', { status: 'done', finishedAt: '2026-08-24T00:05:00.000Z' });
-
-    const finished = await store.get(REPO, 'two');
+    // Verify the second finish actually ran by checking the entry was updated
+    const finished = await store.get(REPO, 'one');
     expect(finished?.status).toBe('done');
+    expect(finished?.finishedAt).toBe('2026-08-24T00:05:00.000Z');
+
+    // Verify both critical sections actually tried to write (first rejected, second succeeded)
+    expect(callCount).toBe(2);
+
+    writeIndexSpy.mockRestore();
   });
 });
