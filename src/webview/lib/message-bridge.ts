@@ -18,10 +18,10 @@ const UNBOUNDED_REQUEST_METHODS = new Set([
   'graph.build',
   'ui.confirm',
   'ui.inputBox',
-  // AI review shells out to a CLI/LLM: reasoning models routinely take several
-  // minutes on a large diff. The host applies its own configurable timeout.
-  'ai.review',
-  'ai.reviewDiff',
+  // ai.review / ai.reviewDiff used to shell out to a CLI and block for minutes.
+  // They are gone: the host owns review runs now, and review.start returns as
+  // soon as the entry exists. ai.compare and ai.providers still touch git and
+  // the filesystem, so the host keeps owning their duration.
   'ai.compare',
   'ai.providers',
 ]);
