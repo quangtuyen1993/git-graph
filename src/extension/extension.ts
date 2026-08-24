@@ -131,7 +131,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // session left `rerun` a silent no-op whenever the graph was closed. Both the
   // webview router and the tree view now call this same handler, and it
   // resolves the repository through activeRepo rather than a session.
-  const reviewTargets = new ReviewTargetState();
+  // Backed by globalState so a window reload reopens on the last compare pair.
+  const reviewTargets = new ReviewTargetState({
+    get: (key) => context.globalState.get(key),
+    update: (key, value) => context.globalState.update(key, value),
+  });
   const reviewHandler = createReviewHandler({
     store: reviewStore,
     runner: reviewRunner,

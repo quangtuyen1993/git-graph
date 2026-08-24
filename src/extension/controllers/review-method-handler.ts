@@ -141,6 +141,24 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
         return { success: true };
       }
 
+      // The pickers save every change so a window reload reopens on the same
+      // pair. Unlike setTarget this neither resolves refs (the branch may be
+      // half-typed state), nor focuses the view, nor broadcasts — it is a
+      // write-behind, not a navigation.
+      case 'review.saveTarget': {
+        const kind = p.kind as ReviewTargetKind;
+        const baseRef = (p.baseRef as string) ?? '';
+        const headRef = p.headRef as string;
+        if (!['branch', 'commit', 'range'].includes(kind) || typeof headRef !== 'string' || !headRef) {
+          throw new Error('Invalid review target');
+        }
+        deps.targets.set(repoId, {
+          kind, baseRef, headRef,
+          ...(typeof p.subject === 'string' && p.subject ? { subject: p.subject } : {}),
+        });
+        return { success: true };
+      }
+
       case 'review.getTarget':
         return deps.targets.get(repoId);
 

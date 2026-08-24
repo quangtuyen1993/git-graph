@@ -216,3 +216,37 @@ describe('review namespace', () => {
     expect(git.diff).toHaveBeenCalledWith('main', 'feat/x');
   });
 });
+
+describe('review.saveTarget', () => {
+  it('stores the target without resolving refs, focusing, or broadcasting', async () => {
+    const { handler, targets, focusReviewView, broadcast, git } = harness();
+
+    const result = await handler('review.saveTarget', {
+      kind: 'branch', baseRef: 'main', headRef: 'feat/x',
+    });
+
+    expect(result).toEqual({ success: true });
+    expect(targets.get('repo-a')).toMatchObject({ kind: 'branch', baseRef: 'main', headRef: 'feat/x' });
+    expect(git.revParse).not.toHaveBeenCalled();
+    expect(focusReviewView).not.toHaveBeenCalled();
+    expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it('keeps the subject so a persisted commit chip can still render', async () => {
+    const { handler, targets } = harness();
+
+    await handler('review.saveTarget', {
+      kind: 'commit', baseRef: 'c'.repeat(40), headRef: 'b'.repeat(40), subject: 'fix: y',
+    });
+
+    expect(targets.get('repo-a')?.subject).toBe('fix: y');
+  });
+
+  it('rejects a malformed target instead of persisting garbage', async () => {
+    const { handler, targets } = harness();
+
+    await expect(handler('review.saveTarget', { kind: 'nope', headRef: 'x' }))
+      .rejects.toThrow();
+    expect(targets.get('repo-a')).toBeNull();
+  });
+});

@@ -65,19 +65,50 @@ export async function resolveReviewTarget(git: TargetGit, target: ReviewTarget):
   };
 }
 
+/** The slice of vscode.Memento this state needs — injectable for tests. */
+export interface TargetStorage {
+  get(key: string): unknown;
+  update(key: string, value: unknown): Thenable<void> | Promise<void>;
+}
+
+const KINDS: ReadonlySet<string> = new Set(['branch', 'commit', 'range']);
+
+function isReviewTarget(value: unknown): value is ReviewTarget {
+  const t = value as ReviewTarget | null;
+  return !!t
+    && typeof t === 'object'
+    && KINDS.has(t.kind as string)
+    && typeof t.baseRef === 'string'
+    && typeof t.headRef === 'string';
+}
+
 /**
- * The compare pair currently on the pickers. Host-owned and in-memory: a
- * webview rebuilt by hide/show asks for it back; a new window starts fresh by
- * design.
+ * The compare pair currently on the pickers. Host-owned, memory-first, and —
+ * when storage is provided — persisted per repo so a window reload reopens on
+ * the pair the user was comparing. A storage write failure only costs the
+ * next session its default; it must never break the current one.
  */
 export class ReviewTargetState {
   private readonly targets = new Map<string, ReviewTarget>();
 
+  constructor(private readonly storage?: TargetStorage) {}
+
   public set(repoId: string, target: ReviewTarget): void {
     this.targets.set(repoId, target);
+    void Promise.resolve(this.storage?.update(this.storageKey(repoId), target)).catch(() => {});
   }
 
   public get(repoId: string): ReviewTarget | null {
-    return this.targets.get(repoId) ?? null;
+    const inMemory = this.targets.get(repoId);
+    if (inMemory) return inMemory;
+
+    const stored = this.storage?.get(this.storageKey(repoId));
+    if (!isReviewTarget(stored)) return null;
+    this.targets.set(repoId, stored);
+    return stored;
+  }
+
+  private storageKey(repoId: string): string {
+    return `review.target.${repoId}`;
   }
 }

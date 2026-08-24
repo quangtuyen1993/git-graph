@@ -61,3 +61,53 @@ describe('ReviewTargetState', () => {
     expect(state.get('repo-c')).toBeNull();
   });
 });
+
+describe('ReviewTargetState with storage', () => {
+  function fakeStorage(initial: Record<string, unknown> = {}) {
+    const data = new Map(Object.entries(initial));
+    return {
+      get: vi.fn((key: string) => data.get(key)),
+      update: vi.fn(async (key: string, value: unknown) => { data.set(key, value); }),
+      data,
+    };
+  }
+
+  it('writes each target to storage under a per-repo key', () => {
+    const storage = fakeStorage();
+    const state = new ReviewTargetState(storage);
+
+    state.set('repo-a', { kind: 'branch', baseRef: 'main', headRef: 'feat/x' });
+
+    expect(storage.update).toHaveBeenCalledWith('review.target.repo-a',
+      { kind: 'branch', baseRef: 'main', headRef: 'feat/x' });
+  });
+
+  it('falls back to storage on a memory miss and hydrates memory', () => {
+    const storage = fakeStorage({
+      'review.target.repo-a': { kind: 'branch', baseRef: 'main', headRef: 'feat/x' },
+    });
+    const state = new ReviewTargetState(storage);
+
+    expect(state.get('repo-a')).toEqual({ kind: 'branch', baseRef: 'main', headRef: 'feat/x' });
+    storage.get.mockClear();
+    expect(state.get('repo-a')?.headRef).toBe('feat/x');
+    expect(storage.get).not.toHaveBeenCalled(); // hydrated — second read is memory
+  });
+
+  it('still returns null when neither memory nor storage has the repo', () => {
+    const state = new ReviewTargetState(fakeStorage());
+    expect(state.get('repo-x')).toBeNull();
+  });
+
+  it('ignores a malformed stored value instead of returning garbage', () => {
+    const storage = fakeStorage({ 'review.target.repo-a': { nonsense: true } });
+    const state = new ReviewTargetState(storage);
+    expect(state.get('repo-a')).toBeNull();
+  });
+
+  it('works without storage exactly as before', () => {
+    const state = new ReviewTargetState();
+    state.set('repo-a', { kind: 'branch', baseRef: 'main', headRef: 'feat/x' });
+    expect(state.get('repo-a')?.baseRef).toBe('main');
+  });
+});
