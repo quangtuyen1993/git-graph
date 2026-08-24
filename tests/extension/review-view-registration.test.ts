@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { registerReviewView } from '../../src/extension/providers/review-view-registration';
 
-function harness() {
+function harness(getRepoId: () => string | undefined = () => 'repo-a') {
   const disposables: unknown[] = [];
   const commands = new Map<string, (...args: unknown[]) => unknown>();
   const tree = { refresh: vi.fn() };
@@ -11,7 +11,7 @@ function harness() {
     tree: tree as never,
     runner: runner as never,
     store: store as never,
-    getRepoId: () => 'repo-a',
+    getRepoId,
     openBody: vi.fn(async () => {}),
     rerun: vi.fn(async () => {}),
     registerCommand: (id: string, fn: (...args: unknown[]) => unknown) => {
@@ -26,6 +26,13 @@ function harness() {
 }
 
 const entry = { id: 'rev-1', status: 'done' } as never;
+
+const commandIds = [
+  'gitGraphPro.review.cancel',
+  'gitGraphPro.review.delete',
+  'gitGraphPro.review.open',
+  'gitGraphPro.review.rerun',
+];
 
 describe('registerReviewView', () => {
   it('registers the tree view under the contributed id', () => {
@@ -69,29 +76,33 @@ describe('registerReviewView', () => {
     expect(tree.refresh).toHaveBeenCalled();
   });
 
-  it('commands are a no-op when no repository is active', async () => {
-    const disposables: unknown[] = [];
-    const commands = new Map<string, (...args: unknown[]) => unknown>();
-    const tree = { refresh: vi.fn() };
-    const runner = { cancel: vi.fn(() => true) };
-    const store = { remove: vi.fn(async () => {}) };
-    registerReviewView({
-      tree: tree as never,
-      runner: runner as never,
-      store: store as never,
-      getRepoId: () => undefined,
-      openBody: vi.fn(async () => {}),
-      rerun: vi.fn(async () => {}),
-      registerCommand: (id: string, fn: (...args: unknown[]) => unknown) => {
-        commands.set(id, fn);
-        return { dispose: vi.fn() };
-      },
-      registerTreeView: vi.fn(() => ({ dispose: vi.fn() })),
-      subscribe: (d: unknown) => disposables.push(d),
-    });
+  it.each(commandIds)('%s is a no-op when no repository is active', async (commandId) => {
+    const { commands, runner, store, deps, tree } = harness(() => undefined);
 
-    await expect(commands.get('gitGraphPro.review.cancel')?.(entry)).resolves.not.toThrow();
+    await expect(commands.get(commandId)?.(entry)).resolves.not.toThrow();
+
     expect(runner.cancel).not.toHaveBeenCalled();
+    expect(store.remove).not.toHaveBeenCalled();
+    expect(deps.openBody).not.toHaveBeenCalled();
+    expect(deps.rerun).not.toHaveBeenCalled();
+    expect(tree.refresh).not.toHaveBeenCalled();
+  });
+
+  it.each(commandIds)('%s is a no-op when getRepoId throws', async (commandId) => {
+    const getRepoId = () => {
+      throw new Error('ENOENT: repo directory gone');
+    };
+    const { commands, runner, store, deps, tree } = harness(getRepoId);
+
+    // Must resolve, not reject: VS Code invokes a tree item's command with no
+    // .catch, so a rejection here would surface as an unhandled rejection on
+    // a routine click.
+    await expect(commands.get(commandId)?.(entry)).resolves.not.toThrow();
+
+    expect(runner.cancel).not.toHaveBeenCalled();
+    expect(store.remove).not.toHaveBeenCalled();
+    expect(deps.openBody).not.toHaveBeenCalled();
+    expect(deps.rerun).not.toHaveBeenCalled();
     expect(tree.refresh).not.toHaveBeenCalled();
   });
 

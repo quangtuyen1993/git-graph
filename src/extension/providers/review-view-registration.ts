@@ -23,7 +23,18 @@ export function registerReviewView(deps: ReviewViewDeps): void {
 
   const withRepo = (fn: (repoId: string, entry: ReviewEntry) => Promise<void> | void) =>
     async (entry: ReviewEntry) => {
-      const repoId = deps.getRepoId();
+      let repoId: string | undefined;
+      try {
+        // getRepoId() resolves the real filesystem path (realpathSync) under
+        // the hood — a repo deleted, renamed or unmounted while its row is
+        // still on screen makes this throw. A row command must be a no-op in
+        // that case, not an unhandled rejection on a routine click.
+        repoId = deps.getRepoId();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[review-view] Failed to resolve active repository: ${message}`);
+        return;
+      }
       if (!repoId) return;
       await fn(repoId, entry);
       deps.tree.refresh();

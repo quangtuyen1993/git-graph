@@ -503,7 +503,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     getRepoId,
     openBody,
     rerun: async (entry) => {
-      const repoId = getRepoId();
+      let repoId: string | undefined;
+      try {
+        // Same hazard as syncTicker above: getRepoId() can throw if the repo
+        // path is gone. Rerun must be a no-op then, not an unhandled rejection.
+        repoId = getRepoId();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[extension] Failed to resolve repo for rerun: ${message}`);
+        return;
+      }
       if (!repoId || !activeReviewHandler) return;
       await reviewStore.remove(repoId, entry.id);
       await activeReviewHandler('review.start', {
