@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import BranchTreeList from './BranchTreeList.svelte';
+  import Icon from '../common/Icon.svelte';
   import { activeBranchGroupPaths, buildBranchTree, type BranchTreeNode } from '../../lib/branch-tree';
 
   interface Branch {
@@ -196,7 +197,7 @@
       class="section-header"
       on:click={() => { localExpanded = !localExpanded; }}
     >
-      <span class="chevron" class:collapsed={!localExpanded}>▶</span>
+      <span class="chevron" class:collapsed={!localExpanded}><Icon name="chevron-right" /></span>
       <span class="section-title">LOCAL</span>
       <span class="section-count">{localBranches.length}</span>
     </button>
@@ -221,7 +222,7 @@
       class="section-header"
       on:click={() => { remoteExpanded = !remoteExpanded; }}
     >
-      <span class="chevron" class:collapsed={!remoteExpanded}>▶</span>
+      <span class="chevron" class:collapsed={!remoteExpanded}><Icon name="chevron-right" /></span>
       <span class="section-title">REMOTE</span>
       <span class="section-count">{remoteBranches.length}</span>
     </button>
@@ -235,7 +236,7 @@
             aria-expanded={expandedRemotes[remote] === true}
             on:click={() => toggleRemote(remote)}
           >
-            <span class="chevron" class:collapsed={expandedRemotes[remote] !== true}>▶</span>
+            <span class="chevron" class:collapsed={expandedRemotes[remote] !== true}><Icon name="chevron-right" /></span>
             <span class="remote-name">{remote}</span>
             <span class="section-count">{group.branches.length}</span>
           </button>
@@ -264,7 +265,7 @@
       class="section-header"
       on:click={() => { tagsExpanded = !tagsExpanded; }}
     >
-      <span class="chevron" class:collapsed={!tagsExpanded}>▶</span>
+      <span class="chevron" class:collapsed={!tagsExpanded}><Icon name="chevron-right" /></span>
       <span class="section-title">TAGS</span>
       <span class="section-count">{tags.length}</span>
     </button>
@@ -281,7 +282,7 @@
               on:contextmenu={(e) => handleTagContextMenu(e, tag)}
               on:keydown={(e) => handleTagKeydown(e, tag)}
             >
-              <span class="branch-icon">🏷</span>
+              <span class="branch-icon"><Icon name="tag" /></span>
               <span class="branch-name">{tag.name}</span>
             </button>
           </li>
@@ -296,7 +297,7 @@
       class="section-header"
       on:click={() => { stashesExpanded = !stashesExpanded; }}
     >
-      <span class="chevron" class:collapsed={!stashesExpanded}>▶</span>
+      <span class="chevron" class:collapsed={!stashesExpanded}><Icon name="chevron-right" /></span>
       <span class="section-title">STASHES</span>
       <span class="section-count">{stashes.length}</span>
     </button>
@@ -313,7 +314,7 @@
               on:contextmenu={(e) => handleStashContextMenu(e, stash)}
               on:keydown={(e) => handleStashKeydown(e, stash)}
             >
-              <span class="branch-icon">📦</span>
+              <span class="branch-icon"><Icon name="archive" /></span>
               <span class="branch-name" title={stash.message}>
                 {stash.message || `stash@{${stash.index}}`}
               </span>
@@ -330,7 +331,7 @@
       class="section-header"
       on:click={() => { worktreesExpanded = !worktreesExpanded; }}
     >
-      <span class="chevron" class:collapsed={!worktreesExpanded}>▶</span>
+      <span class="chevron" class:collapsed={!worktreesExpanded}><Icon name="chevron-right" /></span>
       <span class="section-title">WORKTREES</span>
       <span class="section-count">{worktrees.length}</span>
     </button>
@@ -348,7 +349,7 @@
               on:contextmenu={(e) => handleWorktreeContextMenu(e, wt)}
               on:keydown={(e) => handleWorktreeKeydown(e, wt)}
             >
-              <span class="branch-icon">{wt.isMain ? '🏠' : '📂'}</span>
+              <span class="branch-icon"><Icon name={wt.isMain ? 'root-folder' : 'folder'} /></span>
               <span class="branch-name" title={wt.path}>
                 {wt.branch ?? wt.head?.substring(0, 7) ?? '???'}
               </span>
@@ -365,7 +366,7 @@
       class="section-header"
       on:click={() => { submodulesExpanded = !submodulesExpanded; }}
     >
-      <span class="chevron" class:collapsed={!submodulesExpanded}>▶</span>
+      <span class="chevron" class:collapsed={!submodulesExpanded}><Icon name="chevron-right" /></span>
       <span class="section-title">SUBMODULES</span>
       <span class="section-count">{submodules.length}</span>
     </button>
@@ -382,7 +383,7 @@
               on:click={() => dispatch('submoduleOpen', { path: submodule.path })}
               on:keydown={(event) => handleSubmoduleKeydown(event, submodule)}
             >
-              <span class="branch-icon">{submodule.state === 'initialized' ? '◈' : '◇'}</span>
+              <span class="branch-icon"><Icon name="file-submodule" /></span>
               <span class="branch-name">{submodule.name}</span>
               {#if submodule.head}
                 <span class="submodule-head">{submodule.head.substring(0, 7)}</span>
@@ -421,7 +422,8 @@
     align-items: center;
     gap: 6px;
     width: 100%;
-    padding: 4px 12px;
+    height: 22px;
+    padding: 0 12px;
     border: none;
     background: none;
     color: var(--vscode-sideBarSectionHeader-foreground, #bbbbbb);
@@ -439,12 +441,15 @@
   }
 
   .chevron {
-    display: inline-block;
-    font-size: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    opacity: 0.8;
     transition: transform 0.15s ease;
     transform: rotate(90deg);
-    width: 10px;
-    text-align: center;
   }
 
   .chevron.collapsed {
@@ -485,7 +490,8 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 4px 12px 4px 20px;
+    min-height: 22px;
+    padding: 2px 12px 2px 20px;
     cursor: pointer;
     white-space: nowrap;
     overflow: hidden;
@@ -520,10 +526,12 @@
   }
 
   .branch-icon {
-    font-size: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
     flex-shrink: 0;
-    width: 12px;
-    text-align: center;
     color: var(--vscode-descriptionForeground, #888);
   }
 
@@ -535,10 +543,6 @@
 
   .branch-item.remote .branch-name {
     color: var(--vscode-descriptionForeground, #aaaaaa);
-  }
-
-  .branch-item.tag .branch-icon {
-    font-size: 11px;
   }
 
   .branch-item.tag .branch-name {

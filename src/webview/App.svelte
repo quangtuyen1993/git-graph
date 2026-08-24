@@ -7,10 +7,11 @@
   import type { MenuItem } from './types/menu.types';
   import { getColorRgb } from './lib/graph-colors';
   import Avatar from './components/common/Avatar.svelte';
+  import Icon from './components/common/Icon.svelte';
   import { hasWorkingTreeChanges, type WorkingTreeStatus } from './lib/git-status';
   import { LatestRequestGate, LatestWindowRequestCoordinator } from './lib/latest-request';
   import { MutationGate } from './lib/mutation-gate';
-  import { calculatePanelLayout, resizePanel, type PanelLayout, type PanelSide } from './lib/panel-layout';
+  import { calculatePanelLayout, defaultPanelWidths, type PanelSide } from './lib/panel-layout';
   import CommitDetail from './components/detail/CommitDetail.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
   import ResizeHandle from './components/layout/ResizeHandle.svelte';
@@ -155,12 +156,26 @@
   let leftSidebarOpen = true;
   let rightPanelOpen = false;
   let rightPanelMode: 'detail' | 'review' = 'detail';
-  let leftSidebarWidth = 200;
-  let rightPanelWidth = 340;
-  let leftPanelMinWidth = 0;
-  let leftPanelMaxWidth = 400;
-  let rightPanelMinWidth = 0;
-  let rightPanelMaxWidth = 600;
+  // The widths the user asked for. Only a drag, a reset or a restore writes
+  // these; the rendered widths below are derived, so a transient narrow
+  // viewport squeezes the panels without destroying the request.
+  let desiredLeftWidth = defaultPanelWidths.left;
+  let desiredRightWidth = defaultPanelWidths.right;
+  let viewportWidth = typeof window === 'undefined' ? 1400 : window.innerWidth;
+
+  $: panelLayout = calculatePanelLayout({
+    leftWidth: desiredLeftWidth,
+    rightWidth: desiredRightWidth,
+    viewportWidth,
+    leftOpen: leftSidebarOpen,
+    rightOpen: rightPanelOpen,
+  });
+  $: leftSidebarWidth = panelLayout.left.width;
+  $: rightPanelWidth = panelLayout.right.width;
+  $: leftPanelMinWidth = panelLayout.left.minWidth;
+  $: leftPanelMaxWidth = panelLayout.left.maxWidth;
+  $: rightPanelMinWidth = panelLayout.right.minWidth;
+  $: rightPanelMaxWidth = panelLayout.right.maxWidth;
 
   // AI Review state
   let aiProviders: { id: string; name: string; available: boolean; group: 'cli' | 'api' }[] = [];
@@ -196,6 +211,7 @@
       // Restore cached provider/model selection
       savedProvider = await bridge.send('ui.getState', { key: 'aiReview.provider' }) as string | null ?? '';
       savedModel = await bridge.send('ui.getState', { key: 'aiReview.model' }) as string | null ?? '';
+      await restorePanelState();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       status = 'Error';
@@ -207,46 +223,63 @@
   });
 
   onMount(() => {
-    clampSidePanelWidths();
-    window.addEventListener('resize', clampSidePanelWidths);
+    const trackViewportWidth = () => { viewportWidth = window.innerWidth; };
+    trackViewportWidth();
+    window.addEventListener('resize', trackViewportWidth);
 
     return () => {
-      window.removeEventListener('resize', clampSidePanelWidths);
+      window.removeEventListener('resize', trackViewportWidth);
+      if (panelStateSaveTimer) clearTimeout(panelStateSaveTimer);
     };
   });
 
-  function clampSidePanelWidths() {
-    applyPanelLayout(calculatePanelLayout({
-      leftWidth: leftSidebarWidth,
-      rightWidth: rightPanelWidth,
-      viewportWidth: window.innerWidth,
-      leftOpen: leftSidebarOpen,
-      rightOpen: rightPanelOpen,
-    }));
+  let panelStateSaveTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function savePanelState() {
+    if (panelStateSaveTimer) clearTimeout(panelStateSaveTimer);
+    panelStateSaveTimer = setTimeout(() => {
+      panelStateSaveTimer = undefined;
+      bridge.send('ui.setState', { key: 'layout.leftWidth', value: desiredLeftWidth });
+      bridge.send('ui.setState', { key: 'layout.rightWidth', value: desiredRightWidth });
+      bridge.send('ui.setState', { key: 'layout.leftSidebarOpen', value: leftSidebarOpen });
+    }, 200);
   }
 
-  function applyPanelLayout(layout: PanelLayout) {
-    leftSidebarWidth = layout.left.width;
-    rightPanelWidth = layout.right.width;
-    leftPanelMinWidth = layout.left.minWidth;
-    leftPanelMaxWidth = layout.left.maxWidth;
-    rightPanelMinWidth = layout.right.minWidth;
-    rightPanelMaxWidth = layout.right.maxWidth;
+  async function restorePanelState() {
+    const [storedLeft, storedRight, storedOpen] = await Promise.all([
+      bridge.send('ui.getState', { key: 'layout.leftWidth' }),
+      bridge.send('ui.getState', { key: 'layout.rightWidth' }),
+      bridge.send('ui.getState', { key: 'layout.leftSidebarOpen' }),
+    ]);
+    if (typeof storedLeft === 'number') desiredLeftWidth = storedLeft;
+    if (typeof storedRight === 'number') desiredRightWidth = storedRight;
+    if (typeof storedOpen === 'boolean') leftSidebarOpen = storedOpen;
   }
 
   function handlePanelResize(side: PanelSide, event: CustomEvent<{ width: number }>) {
-    applyPanelLayout(resizePanel({
-      leftWidth: leftSidebarWidth,
-      rightWidth: rightPanelWidth,
-      viewportWidth: window.innerWidth,
-      leftOpen: leftSidebarOpen,
-      rightOpen: rightPanelOpen,
-    }, side, event.detail.width));
+    const range = side === 'left' ? panelLayout.left : panelLayout.right;
+    const width = Math.max(range.minWidth, Math.min(range.maxWidth, event.detail.width));
+
+    if (side === 'left') {
+      desiredLeftWidth = width;
+    } else {
+      desiredRightWidth = width;
+    }
+    savePanelState();
+  }
+
+  function handlePanelReset(side: PanelSide) {
+    if (side === 'left') {
+      desiredLeftWidth = defaultPanelWidths.left;
+    } else {
+      desiredRightWidth = defaultPanelWidths.right;
+    }
+    savePanelState();
   }
 
   function toggleLeftSidebar() {
     leftSidebarOpen = !leftSidebarOpen;
-    clampSidePanelWidths();
+    savePanelState();
   }
 
   async function switchRepo(path: string) {
@@ -406,7 +439,6 @@
     if (hash && hash !== 'WORKING') {
       rightPanelOpen = true;
       rightPanelMode = 'detail';
-      clampSidePanelWidths();
       fetchCommitDetail(hash);
     } else {
       detailCommit = null;
@@ -416,7 +448,6 @@
 
   function closeRightPanel() {
     rightPanelOpen = false;
-    clampSidePanelWidths();
     selectedHash = null;
     selectedHashes = new Set();
     detailCommit = null;
@@ -1143,7 +1174,6 @@
     compareFiles = null;
     rightPanelOpen = true;
     rightPanelMode = 'review';
-    clampSidePanelWidths();
     aiReviewResult = null;
     aiReviewError = '';
 
@@ -1229,35 +1259,61 @@
     <button
       class="toolbar-icon-btn"
       class:active={leftSidebarOpen}
-      on:click={toggleLeftSidebar}
+      aria-pressed={leftSidebarOpen}
+      aria-label="Toggle branches panel"
       title="Toggle branches panel"
-    >☰</button>
-    <h1>Git Graph</h1>
-    {#if repos.length > 1}
+      on:click={toggleLeftSidebar}
+    ><Icon name="layout-sidebar-left" /></button>
+
+    <div class="toolbar-group" class:static={repos.length <= 1}>
+      <span class="toolbar-glyph"><Icon name="repo" /></span>
+      {#if repos.length > 1}
+        <select
+          class="toolbar-select"
+          aria-label="Repository"
+          on:change={(e) => switchRepo(e.currentTarget.value)}
+        >
+          {#each repos as repo}
+            <option value={repo.path} selected={repo.active}>{repo.name}</option>
+          {/each}
+        </select>
+      {:else if activeRepoName}
+        <span class="repo-name">{activeRepoName}</span>
+      {/if}
+    </div>
+
+    <div class="toolbar-group">
+      <span class="toolbar-glyph"><Icon name="git-branch" /></span>
       <select
-        class="repo-selector"
-        aria-label="Repository"
-        on:change={(e) => switchRepo(e.currentTarget.value)}
+        class="toolbar-select graph-branch-filter"
+        aria-label="Filter graph by branch"
+        value={selectedBranchFilter ?? ''}
+        on:change={(event) => handleGraphBranchFilter(event.currentTarget.value)}
       >
-        {#each repos as repo}
-          <option value={repo.path} selected={repo.active}>{repo.name}</option>
+        <option value="">All branches</option>
+        {#each branches as branch (branch.name)}
+          <option value={branch.name}>{branch.name}</option>
         {/each}
       </select>
-    {:else if activeRepoName}
-      <span class="repo-name">{activeRepoName}</span>
-    {/if}
-    <select
-      class="graph-branch-filter"
-      aria-label="Filter graph by branch"
-      value={selectedBranchFilter ?? ''}
-      on:change={(event) => handleGraphBranchFilter(event.currentTarget.value)}
-    >
-      <option value="">All branches</option>
-      {#each branches as branch (branch.name)}
-        <option value={branch.name}>{branch.name}</option>
-      {/each}
-    </select>
+    </div>
+
     <span class="status">{status}</span>
+
+    <button
+      class="toolbar-icon-btn"
+      aria-label="Refresh"
+      title="Refresh"
+      on:click={() => refreshGraph()}
+    ><Icon name="refresh" /></button>
+    <button
+      class="toolbar-icon-btn"
+      class:active={rightPanelOpen}
+      aria-pressed={rightPanelOpen}
+      aria-label="Toggle detail panel"
+      title="Toggle detail panel"
+      disabled={!rightPanelOpen}
+      on:click={closeRightPanel}
+    ><Icon name="layout-sidebar-right" /></button>
   </header>
 
   {#if error}
@@ -1294,6 +1350,7 @@
         minWidth={leftPanelMinWidth}
         maxWidth={leftPanelMaxWidth}
         on:resize={(event) => handlePanelResize('left', event)}
+        on:reset={() => handlePanelReset('left')}
       />
     {/if}
 
@@ -1387,11 +1444,12 @@
         minWidth={rightPanelMinWidth}
         maxWidth={rightPanelMaxWidth}
         on:resize={(event) => handlePanelResize('right', event)}
+        on:reset={() => handlePanelReset('right')}
       />
       <aside class="right-panel" style="width: {rightPanelWidth}px;">
         <div class="right-panel-header">
           <span class="right-panel-title">{rightPanelMode === 'review' ? 'COMPARE' : 'COMMIT'}</span>
-          <button class="close-btn" on:click={closeRightPanel} title="Close panel">×</button>
+          <button class="close-btn" aria-label="Close panel" title="Close panel" on:click={closeRightPanel}><Icon name="close" /></button>
         </div>
         {#if rightPanelMode === 'review'}
           <AIReviewPanel
@@ -1451,70 +1509,118 @@
 
   /* Toolbar */
   .toolbar {
-    padding: 6px 12px;
+    height: 32px;
+    padding: 0 6px;
     border-bottom: 1px solid var(--vscode-panel-border, #2b2b2b);
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 4px;
     flex-shrink: 0;
-    background: var(--vscode-titleBar-activeBackground, #1e1e1e);
+    background: var(--vscode-sideBar-background, #1e1e1e);
   }
 
-  .toolbar h1 {
-    font-size: 13px;
-    font-weight: 600;
-    margin: 0;
-  }
-
+  /* 24px hit area around a 16px glyph, the VS Code toolbar button metric. */
   .toolbar-icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
     background: none;
-    border: none;
-    color: var(--vscode-foreground, #cccccc);
-    font-size: 16px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    color: var(--vscode-icon-foreground, #cccccc);
     cursor: pointer;
-    padding: 2px 6px;
-    border-radius: 3px;
-    opacity: 0.7;
+    opacity: 0.85;
   }
 
-  .toolbar-icon-btn:hover,
-  .toolbar-icon-btn.active {
+  .toolbar-icon-btn:hover:not(:disabled) {
     opacity: 1;
     background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.1));
   }
 
-  .status {
-    font-size: 11px;
-    opacity: 0.6;
-    margin-left: auto;
+  .toolbar-icon-btn.active {
+    opacity: 1;
+    background: var(--vscode-inputOption-activeBackground, rgba(0, 122, 204, 0.25));
+    border-color: var(--vscode-inputOption-activeBorder, transparent);
+    color: var(--vscode-inputOption-activeForeground, #ffffff);
   }
 
-  .repo-selector,
-  .graph-branch-filter {
-    padding: 2px 6px;
-    border: 1px solid var(--vscode-dropdown-border, #3c3c3c);
-    background: var(--vscode-dropdown-background, #1e1e1e);
-    color: var(--vscode-dropdown-foreground, #cccccc);
-    font-size: 12px;
-    border-radius: 3px;
-    outline: none;
-    cursor: pointer;
+  .toolbar-icon-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
   }
 
-  .repo-selector:focus,
-  .graph-branch-filter:focus {
+  .toolbar-icon-btn:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007acc);
+    outline-offset: -1px;
+  }
+
+  .toolbar-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    padding: 0 4px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    min-width: 0;
+  }
+
+  .toolbar-group:hover,
+  .toolbar-group:focus-within {
+    background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.06));
+  }
+
+  .toolbar-group:focus-within {
     border-color: var(--vscode-focusBorder, #007acc);
   }
 
+  /* A lone repository name is a label, not a control: no hover affordance. */
+  .toolbar-group.static:hover {
+    background: none;
+  }
+
+  .toolbar-glyph {
+    display: flex;
+    align-items: center;
+    color: var(--vscode-icon-foreground, #cccccc);
+    opacity: 0.7;
+  }
+
+  /* Quiet until touched: the group above supplies hover and focus affordance. */
+  .toolbar-select {
+    max-width: 220px;
+    padding: 0 2px;
+    border: none;
+    background: none;
+    color: var(--vscode-foreground, #cccccc);
+    font-family: inherit;
+    font-size: 12px;
+    outline: none;
+    cursor: pointer;
+    text-overflow: ellipsis;
+  }
+
   .graph-branch-filter {
-    min-width: 140px;
-    max-width: 240px;
+    min-width: 110px;
   }
 
   .repo-name {
     font-size: 12px;
-    opacity: 0.8;
     font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .status {
+    margin-left: auto;
+    padding-right: 4px;
+    font-size: 11px;
+    opacity: 0.6;
+    white-space: nowrap;
   }
 
   .error-banner {
@@ -1565,7 +1671,8 @@
   .right-panel-header {
     display: flex;
     align-items: center;
-    padding: 8px 12px;
+    height: 32px;
+    padding: 0 6px 0 12px;
     border-bottom: 1px solid var(--vscode-panel-border, #2b2b2b);
     flex-shrink: 0;
   }
@@ -1579,16 +1686,24 @@
   }
 
   .close-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
     margin-left: auto;
+    padding: 0;
     background: none;
     border: none;
-    color: var(--vscode-foreground, #cccccc);
-    font-size: 18px;
+    border-radius: 5px;
+    color: var(--vscode-icon-foreground, #cccccc);
     cursor: pointer;
-    padding: 0 4px;
-    line-height: 1;
-    border-radius: 3px;
-    opacity: 0.6;
+    opacity: 0.7;
+  }
+
+  .close-btn:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007acc);
+    outline-offset: -1px;
   }
 
   .close-btn:hover {
@@ -1600,7 +1715,7 @@
   .table-header {
     display: flex;
     align-items: center;
-    height: 28px;
+    height: 24px;
     padding: 0;
     border-bottom: 1px solid var(--vscode-panel-border, #2b2b2b);
     font-size: 11px;

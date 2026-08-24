@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy } from 'svelte';
   import type { BranchTreeNode } from '../../lib/branch-tree';
+  import Icon from '../common/Icon.svelte';
 
   interface Branch {
     name: string;
@@ -76,7 +77,7 @@
           aria-expanded={expandedGroups[groupKey(node.path)] === true}
           on:click={() => dispatch('groupToggle', { key: groupKey(node.path) })}
         >
-          <span class="chevron" class:collapsed={expandedGroups[groupKey(node.path)] !== true}>▶</span>
+          <span class="chevron" class:collapsed={expandedGroups[groupKey(node.path)] !== true}><Icon name="chevron-right" /></span>
           <span class="group-name">{node.label}</span>
         </button>
       {/if}
@@ -101,7 +102,7 @@
           on:dblclick={() => checkout(node.branch)}
           on:keydown={(event) => handleKeydown(event, node.branch)}
         >
-          <span class="branch-icon">{node.branch.current ? '●' : '○'}</span>
+          <span class="branch-icon"><Icon name={node.branch.current ? 'circle-filled' : 'circle-outline'} size={12} /></span>
           <span class="branch-name">{node.label}</span>
           {#if node.branch.ahead > 0 || node.branch.behind > 0}
             <span class="ahead-behind">
@@ -152,13 +153,15 @@
   }
 
   .branch-group {
-    padding: 4px 12px 4px calc(var(--sidebar-gutter, 12px) + var(--tree-indent));
+    min-height: 22px;
+    padding: 2px 12px 2px calc(var(--sidebar-gutter, 12px) + var(--tree-indent));
     color: var(--vscode-descriptionForeground, #999999);
     cursor: pointer;
   }
 
   .branch-item {
-    padding: 4px 12px 4px calc(var(--sidebar-gutter, 12px) + 8px + var(--tree-indent));
+    min-height: 22px;
+    padding: 2px 12px 2px calc(var(--sidebar-gutter, 12px) + 8px + var(--tree-indent));
     border-bottom: 1px solid rgba(255, 255, 255, 0.03);
     cursor: pointer;
     white-space: nowrap;
@@ -177,10 +180,13 @@
   }
 
   .chevron {
-    display: inline-block;
-    width: 10px;
-    font-size: 9px;
-    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    opacity: 0.8;
     transform: rotate(90deg);
     transition: transform 0.15s ease;
   }
@@ -206,11 +212,13 @@
   }
 
   .branch-icon {
-    width: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
     flex-shrink: 0;
     color: var(--vscode-descriptionForeground, #888888);
-    font-size: 10px;
-    text-align: center;
   }
 
   .branch-item.current .branch-icon {

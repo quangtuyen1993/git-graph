@@ -64,6 +64,7 @@
   },
   "scripts": {
     "icon": "node scripts/make-icon.mjs resources/icon.png",
+    "icons": "node scripts/extract-icons.mjs",
     "dev": "concurrently \"npm run dev:host\" \"npm run dev:webview\"",
     "dev:host": "esbuild src/extension/extension.ts --bundle --outfile=dist/extension.cjs --external:vscode --format=cjs --platform=node --sourcemap --watch",
     "dev:webview": "vite build --watch --mode development",
@@ -85,6 +86,7 @@
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
     "@vitest/coverage-v8": "^2.1.9",
+    "@vscode/codicons": "^0.0.46-24",
     "@vscode/vsce": "^2.32.0",
     "concurrently": "^8.2.0",
     "dagre": "^0.8.5",

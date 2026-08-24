@@ -22,6 +22,11 @@
     dispatch('resize', { width: nextWidth });
   }
 
+  function onDoubleClick(event: MouseEvent) {
+    event.preventDefault();
+    dispatch('reset');
+  }
+
   function onMouseDown(event: MouseEvent) {
     event.preventDefault();
     dragging = true;
@@ -94,6 +99,7 @@
   class="resize-handle"
   class:dragging
   on:mousedown={onMouseDown}
+  on:dblclick={onDoubleClick}
   on:keydown={onKeydown}
   role="separator"
   tabindex="0"
@@ -105,6 +111,11 @@
 ></div>
 
 <style>
+  /*
+   * The element keeps a 4px footprint so the layout maths stay honest, while
+   * ::before widens the grab zone past its own box and ::after draws the 1px
+   * divider that makes the handle findable at rest.
+   */
   .resize-handle {
     width: 4px;
     cursor: col-resize;
@@ -112,16 +123,37 @@
     flex-shrink: 0;
     position: relative;
     z-index: 10;
+  }
+
+  .resize-handle::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -3px;
+    right: -3px;
+    cursor: col-resize;
+  }
+
+  .resize-handle::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 1px;
+    width: 2px;
+    border-radius: 1px;
+    background: var(--vscode-panel-border, #2b2b2b);
     transition: background 0.15s ease;
   }
 
-  .resize-handle:hover,
-  .resize-handle.dragging {
+  .resize-handle:hover::after,
+  .resize-handle.dragging::after,
+  .resize-handle:focus-visible::after {
     background: var(--vscode-focusBorder, #007acc);
   }
 
   .resize-handle:focus-visible {
-    background: var(--vscode-focusBorder, #007acc);
     outline: 1px solid var(--vscode-focusBorder, #007acc);
     outline-offset: -1px;
   }

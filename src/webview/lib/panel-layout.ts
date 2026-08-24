@@ -27,11 +27,24 @@ export interface PanelLayout {
 
 const defaultMinimumCenterWidth = 300;
 const defaultHandleWidth = 4;
-const defaultLeftMinimumWidth = 300;
+const defaultLeftMinimumWidth = 180;
 const defaultRightMinimumWidth = 280;
-const defaultLeftMaximumWidth = 400;
-const defaultRightMaximumWidth = 600;
+const defaultLeftMaximumWidth = 460;
+const defaultRightMaximumWidth = 900;
 
+/**
+ * Widths a panel opens at, and returns to when its handle is double-clicked.
+ * The right panel carries commit detail and diffs, so it starts wider.
+ */
+export const defaultPanelWidths = { left: 260, right: 480 };
+
+/**
+ * Derives the rendered panel widths from the widths the user asked for.
+ *
+ * This is a pure projection: the requested widths are never rewritten, so a
+ * transient narrow viewport (a diff editor opening beside the webview) squeezes
+ * the panels without destroying what the user dragged them to.
+ */
 export function calculatePanelLayout({
   viewportWidth,
   leftOpen,
@@ -45,21 +58,26 @@ export function calculatePanelLayout({
 }: PanelLayoutInput): PanelLayout {
   const visibleHandleWidth = (leftOpen ? handleWidth : 0) + (rightOpen ? handleWidth : 0);
   const availablePanelWidth = Math.max(0, viewportWidth - minimumCenterWidth - visibleHandleWidth);
-  const widths = clampPanelWidths({
-    leftWidth,
-    rightWidth,
-    viewportWidth: viewportWidth - visibleHandleWidth,
-    minimumCenterWidth,
-    leftOpen,
-    rightOpen,
-  });
-  const historicalMinimumWidth = (leftOpen ? defaultLeftMinimumWidth : 0)
+  const requiredMinimumWidth = (leftOpen ? defaultLeftMinimumWidth : 0)
     + (rightOpen ? defaultRightMinimumWidth : 0);
-  const preservesHistoricalMinimums = availablePanelWidth >= historicalMinimumWidth;
-  const leftMinimumWidth = leftOpen && preservesHistoricalMinimums ? defaultLeftMinimumWidth : 0;
-  const rightMinimumWidth = rightOpen && preservesHistoricalMinimums ? defaultRightMinimumWidth : 0;
+  const fundsBothMinimums = availablePanelWidth >= requiredMinimumWidth;
+  const leftMinimumWidth = leftOpen && fundsBothMinimums ? defaultLeftMinimumWidth : 0;
+  const rightMinimumWidth = rightOpen && fundsBothMinimums ? defaultRightMinimumWidth : 0;
   const maximumLeftWidth = leftOpen ? Math.min(leftMaximumWidth, availablePanelWidth) : 0;
   const maximumRightWidth = rightOpen ? Math.min(rightMaximumWidth, availablePanelWidth) : 0;
+
+  // Below both minimums there is nothing left to prioritise, so split what
+  // remains proportionally rather than letting one open panel vanish.
+  const widths = fundsBothMinimums
+    ? { leftWidth, rightWidth }
+    : clampPanelWidths({
+      leftWidth,
+      rightWidth,
+      viewportWidth: viewportWidth - visibleHandleWidth,
+      minimumCenterWidth,
+      leftOpen,
+      rightOpen,
+    });
 
   let visibleLeftWidth = leftOpen
     ? Math.min(maximumLeftWidth, Math.max(leftMinimumWidth, widths.leftWidth))
@@ -67,15 +85,19 @@ export function calculatePanelLayout({
   let visibleRightWidth = rightOpen
     ? Math.min(maximumRightWidth, Math.max(rightMinimumWidth, widths.rightWidth))
     : 0;
-  const overflow = visibleLeftWidth + visibleRightWidth - availablePanelWidth;
+
+  // The right panel holds commit detail and diffs, so the left panel gives up
+  // space first and the right only shrinks once the left is at its minimum.
+  let overflow = visibleLeftWidth + visibleRightWidth - availablePanelWidth;
 
   if (overflow > 0) {
     const leftReduction = Math.min(overflow, visibleLeftWidth - leftMinimumWidth);
     visibleLeftWidth -= leftReduction;
-    visibleRightWidth -= Math.min(
-      overflow - leftReduction,
-      visibleRightWidth - rightMinimumWidth,
-    );
+    overflow -= leftReduction;
+  }
+
+  if (overflow > 0) {
+    visibleRightWidth -= Math.min(overflow, visibleRightWidth - rightMinimumWidth);
   }
 
   return {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calculatePanelLayout, resizePanel } from '../../src/webview/lib/panel-layout';
+import { calculatePanelLayout, defaultPanelWidths, resizePanel } from '../../src/webview/lib/panel-layout';
 
 const narrowLayout = {
   viewportWidth: 600,
@@ -22,26 +22,58 @@ function panelTotal(layout: ReturnType<typeof calculatePanelLayout>) {
 }
 
 describe('panel layout coordinator', () => {
-  it('advertises a 300px left minimum when a wide viewport has enough panel budget', () => {
+  it('opens the right panel wider than the left by default', () => {
+    expect(defaultPanelWidths.right).toBeGreaterThan(defaultPanelWidths.left);
+    expect(defaultPanelWidths).toEqual({ left: 260, right: 480 });
+  });
+
+  it('advertises the panel minimums when a wide viewport has enough panel budget', () => {
     const layout = calculatePanelLayout(wideLayout);
 
-    expect(layout.left.minWidth).toBe(300);
+    expect(layout.left.minWidth).toBe(180);
     expect(layout.right.minWidth).toBe(280);
   });
 
-  it('does not resize either wide panel below its historical minimum', () => {
+  it('gives the right panel a higher ceiling than the left', () => {
+    const layout = calculatePanelLayout({ ...wideLayout, viewportWidth: 2000 });
+
+    expect(layout.left.maxWidth).toBe(460);
+    expect(layout.right.maxWidth).toBe(900);
+  });
+
+  it('does not resize either wide panel below its minimum', () => {
     const afterLeftHome = resizePanel(wideLayout, 'left', 0);
     const afterRightMouseResize = resizePanel(wideLayout, 'right', 0);
 
-    expect(afterLeftHome.left.width).toBe(300);
+    expect(afterLeftHome.left.width).toBe(180);
     expect(afterRightMouseResize.right.width).toBe(280);
   });
 
-  it('keeps values valid at the smallest viewport that supports both panel minima', () => {
+  it('drains the left panel before the right when both cannot keep their width', () => {
+    const layout = calculatePanelLayout({
+      ...wideLayout,
+      viewportWidth: 1200,
+      leftWidth: 400,
+      rightWidth: 700,
+    });
+
+    expect(layout.right.width).toBe(700);
+    expect(layout.left.width).toBe(192);
+  });
+
+  it('keeps both panels visible when the viewport cannot fund either minimum', () => {
+    const layout = calculatePanelLayout(narrowLayout);
+
+    expect(layout.left.width).toBeGreaterThan(0);
+    expect(layout.right.width).toBeGreaterThan(0);
+    expect(panelTotal(layout)).toBeLessThanOrEqual(292);
+  });
+
+  it('shrinks the advertised maximums to fit the remaining budget', () => {
     const layout = calculatePanelLayout({ ...wideLayout, viewportWidth: 888 });
 
-    expect(layout.left).toMatchObject({ width: 300, minWidth: 300, maxWidth: 300 });
-    expect(layout.right).toMatchObject({ width: 280, minWidth: 280, maxWidth: 280 });
+    expect(layout.left).toMatchObject({ width: 200, minWidth: 180, maxWidth: 240 });
+    expect(layout.right).toMatchObject({ width: 340, minWidth: 280, maxWidth: 380 });
   });
 
   it('keeps each separator value inside its advertised range in a narrow viewport', () => {
@@ -70,8 +102,19 @@ describe('panel layout coordinator', () => {
       ...narrowLayout,
       leftWidth: afterHome.left.width,
       rightWidth: afterHome.right.width,
-    }, 'right', 600);
+    }, 'right', 900);
 
     expect(panelTotal(afterEnd)).toBeLessThanOrEqual(292);
+  });
+
+  it('restores the requested width once a transient narrow viewport widens again', () => {
+    const desired = { leftWidth: 380, rightWidth: 640 };
+
+    const squeezed = calculatePanelLayout({ ...wideLayout, ...desired, viewportWidth: 760 });
+    const restored = calculatePanelLayout({ ...wideLayout, ...desired, viewportWidth: 1400 });
+
+    expect(squeezed.left.width).toBeLessThan(380);
+    expect(restored.left.width).toBe(380);
+    expect(restored.right.width).toBe(640);
   });
 });

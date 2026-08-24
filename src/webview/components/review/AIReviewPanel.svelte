@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '../common/Icon.svelte';
   import { createEventDispatcher, onDestroy } from 'svelte';
   import { marked } from 'marked';
 
@@ -287,7 +288,7 @@
         aria-expanded={filesExpanded}
         on:click={() => { filesExpanded = !filesExpanded; }}
       >
-        <span class="chevron" class:collapsed={!filesExpanded}>▶</span>
+        <span class="chevron" class:collapsed={!filesExpanded}><Icon name="chevron-right" /></span>
         <span class="files-title">FILES CHANGED</span>
         <span class="files-count">{compareFiles.length}</span>
         <span class="files-stats">
@@ -345,7 +346,7 @@
           aria-expanded={reviewExpanded}
           on:click={() => { reviewExpanded = !reviewExpanded; }}
         >
-          <span class="chevron" class:collapsed={!reviewExpanded}>▶</span>
+          <span class="chevron" class:collapsed={!reviewExpanded}><Icon name="chevron-right" /></span>
           <span class="result-title">REVIEW</span>
         </button>
         <span class="result-meta">{reviewResult.provider}/{reviewResult.model}</span>
@@ -528,13 +529,15 @@
   }
 
   .chevron {
-    display: inline-block;
-    font-size: 9px;
-    width: 10px;
-    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    opacity: 0.8;
     transform: rotate(90deg);
     transition: transform 0.15s ease;
-    flex-shrink: 0;
   }
 
   .chevron.collapsed {

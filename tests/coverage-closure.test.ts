@@ -40,7 +40,7 @@ describe('coverage closure helpers', () => {
     expect(getTotalHeight(3)).toBe(96);
     const narrow = calculatePanelLayout({ viewportWidth: 400, leftOpen: true, rightOpen: true, leftWidth: 350, rightWidth: 350 });
     expect(narrow.left.width + narrow.right.width).toBeLessThanOrEqual(96);
-    expect(resizePanel({ viewportWidth: 1200, leftOpen: true, rightOpen: false, leftWidth: 200, rightWidth: 300 }, 'left', 999).left.width).toBe(400);
+    expect(resizePanel({ viewportWidth: 1200, leftOpen: true, rightOpen: false, leftWidth: 200, rightWidth: 300 }, 'left', 999).left.width).toBe(460);
 
   });
 
