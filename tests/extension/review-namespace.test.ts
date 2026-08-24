@@ -8,7 +8,11 @@ function harness(over: Record<string, unknown> = {}) {
     remove: vi.fn(async () => {}),
     bodyPath: vi.fn(() => '/tmp/body.md'),
   };
-  const runner = { start: vi.fn(async () => 'new-id'), cancel: vi.fn(() => true) };
+  const runner = {
+    start: vi.fn(async () => 'new-id'),
+    cancel: vi.fn(() => true),
+    isRunning: vi.fn(() => true),
+  };
   const git = {
     revParse: vi.fn(async (ref: string) => (ref === 'main' ? 'a'.repeat(40) : 'b'.repeat(40))),
     getDiff: vi.fn(async () => 'diff --git a/x b/x'),
@@ -121,4 +125,20 @@ describe('review namespace', () => {
       expect(runner.cancel).not.toHaveBeenCalled();
     },
   );
+  it('restarts a `running` entry the runner is not actually working on', async () => {
+    // I4: a run dies with the window. Trusting the persisted status hands back
+    // an id nothing is working on — the row spins forever, the 1 Hz ticker
+    // never stops, and that review can never be restarted.
+    const { handler, runner, store } = harness();
+    store.get.mockResolvedValue({ id: 'aaaaaaa..bbbbbbb.claude.sonnet', status: 'running' } as never);
+    runner.isRunning.mockReturnValue(false);
+
+    const result = await handler('review.start', {
+      sourceBranch: 'main', targetBranch: 'feat/x', provider: 'claude', model: 'sonnet',
+    });
+
+    expect(runner.isRunning).toHaveBeenCalledWith('aaaaaaa..bbbbbbb.claude.sonnet');
+    expect(runner.start).toHaveBeenCalledOnce();
+    expect(result).toEqual({ id: 'new-id', cached: false });
+  });
 });

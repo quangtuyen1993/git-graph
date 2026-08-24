@@ -72,7 +72,11 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
           await deps.openBody(repoId, id);
           return { id, cached: true };
         }
-        if (existing?.status === 'running') {
+        // Only if the runner really is working on it. A `running` row whose run
+        // died with the previous window (or was never reconciled) would
+        // otherwise be handed back forever: the row spins, the 1 Hz tree ticker
+        // never stops, and the user cannot restart that review at all.
+        if (existing?.status === 'running' && deps.runner.isRunning(id)) {
           return { id, cached: false };
         }
 
