@@ -100,8 +100,8 @@
     align-items: center;
     gap: 6px;
     width: 100%;
-    min-height: 24px;
-    padding: 2px 8px 2px calc(8px + var(--file-indent));
+    min-height: 26px;
+    padding: 3px var(--detail-gutter, 16px) 3px calc(var(--detail-gutter, 16px) + var(--file-indent));
     border: none;
     border-radius: 3px;
     background: none;
@@ -143,7 +143,7 @@
   }
 
   .folder-name {
-    font-size: 13px;
+    font-size: 14px;
     color: var(--vscode-foreground, #cccccc);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -152,7 +152,7 @@
 
   /* File names are the actionable thing here, so they read as links. */
   .file-label {
-    font-size: 13px;
+    font-size: 14px;
     color: var(--vscode-textLink-foreground, #3794ff);
     overflow: hidden;
     text-overflow: ellipsis;

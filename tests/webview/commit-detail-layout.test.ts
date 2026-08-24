@@ -1,3 +1,5 @@
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import { cleanup, fireEvent, render } from '@testing-library/svelte';
 import { afterEach, describe, expect, it } from 'vitest';
 import CommitDetail from '../../src/webview/components/detail/CommitDetail.svelte';
@@ -150,5 +152,36 @@ describe('CommitDetail changed files', () => {
     const { container } = render(CommitDetail, { commit, files: nested, loading: false });
 
     expect(container.querySelector('.files-title')).toHaveTextContent('CHANGED FILES');
+  });
+});
+
+describe('CommitDetail alignment', () => {
+  /*
+   * jsdom does not resolve Svelte's scoped <style>, so getComputedStyle returns
+   * empty for these rules and a CSS assertion would pass no matter what. The
+   * regression that keeps recurring is a row hardcoding its own inset on top of
+   * the panel's, so assert the source derives every inset from one gutter.
+   */
+  const root = resolve(__dirname, '../../src/webview/components/detail');
+  const panelSource = readFileSync(resolve(root, 'CommitDetail.svelte'), 'utf8');
+  const treeSource = readFileSync(resolve(root, 'FileTreeList.svelte'), 'utf8');
+
+  it('gives the panel a single gutter that its blocks read from', () => {
+    expect(panelSource).toMatch(/--detail-gutter:\s*16px/);
+    // The panel must not pad horizontally itself, or blocks stack on top of it.
+    expect(panelSource).toMatch(/\.detail-panel\s*\{[^}]*padding:\s*0;/);
+  });
+
+  it('insets the header, filter and lower pane by that gutter', () => {
+    for (const selector of ['.detail-files-header', '.detail-filter', '.detail-meta']) {
+      const rule = panelSource.slice(panelSource.indexOf(selector));
+      expect(rule.slice(0, 220)).toContain('var(--detail-gutter)');
+    }
+  });
+
+  it('starts a top-level file row on the gutter rather than inside it', () => {
+    expect(treeSource).toContain('calc(var(--detail-gutter, 16px) + var(--file-indent))');
+    // The old rule added a bare 8px, which is what pushed rows out of line.
+    expect(treeSource).not.toMatch(/padding:\s*\d+px 8px \d+px calc\(8px/);
   });
 });

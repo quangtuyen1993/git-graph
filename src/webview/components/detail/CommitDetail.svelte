@@ -209,9 +209,10 @@
   }
 
   .detail-panel {
+    --detail-gutter: 16px;
     display: flex;
     flex-direction: column;
-    padding: 16px 16px 0;
+    padding: 0;
     height: 100%;
     overflow: hidden;
     color: var(--vscode-foreground, #ccc);
@@ -278,11 +279,11 @@
   .detail-meta {
     flex-shrink: 0;
     overflow-y: auto;
-    padding-top: 12px;
+    padding: 12px var(--detail-gutter) 0;
   }
 
   .detail-subject {
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 600;
     line-height: 1.4;
     color: var(--vscode-foreground, #cccccc);
@@ -347,12 +348,10 @@
   /* Files header — now the first row in the panel */
   .detail-files-header {
     flex-shrink: 0;
-    margin-top: 0;
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 0;
-    border-top: 1px solid var(--vscode-panel-border, #333);
+    padding: 12px var(--detail-gutter) 8px;
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
@@ -391,7 +390,8 @@
 
   /* Filter */
   .detail-filter {
-    margin: 8px 0;
+    margin: 0 0 8px;
+    padding: 0 var(--detail-gutter);
   }
 
   .filter-input {
@@ -433,6 +433,8 @@
   }
 
   .file-entry {
+    padding-left: var(--detail-gutter);
+    padding-right: var(--detail-gutter);
     display: flex;
     align-items: center;
     gap: 6px;
