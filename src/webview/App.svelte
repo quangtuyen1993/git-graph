@@ -682,6 +682,9 @@
       { label: 'Copy SHA', action: 'copySha' },
       { label: '', action: '', divider: true },
       { label: 'Review this commit', action: 'reviewCommit' },
+      ...(selectedForCompare && selectedForCompare !== hash
+        ? [{ label: `Review with selected ${selectedForCompare.slice(0, 7)}`, action: 'reviewWithSelected' }]
+        : []),
       selectedForCompare && selectedForCompare !== hash
         ? { label: `Compare with selected ${selectedForCompare.slice(0, 7)}`, action: 'compareWithSelected' }
         : { label: 'Select for compare', action: 'selectForCompare' },
@@ -1128,6 +1131,12 @@
           case 'reviewCommit':
             await bridge.send('review.setTarget', { kind: 'commit', headRef: hash });
             break;
+          case 'reviewWithSelected':
+            if (selectedForCompare) {
+              await bridge.send('review.setTarget', { kind: 'range', baseRef: selectedForCompare, headRef: hash });
+              selectedForCompare = null;
+            }
+            break;
           case 'selectForCompare':
             selectedForCompare = hash;
             break;
@@ -1340,7 +1349,7 @@
         }
       }
 
-      return action !== 'copySha' && action !== 'copyShas' && action !== 'reviewCommit' && action !== 'selectForCompare' && action !== 'compareWithSelected';
+      return action !== 'copySha' && action !== 'copyShas' && action !== 'reviewCommit' && action !== 'selectForCompare' && action !== 'compareWithSelected' && action !== 'reviewWithSelected';
     } finally {
       contextMenuTarget = null;
     }

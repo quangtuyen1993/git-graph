@@ -96,4 +96,24 @@ describe('review entry points from the graph', () => {
     await contextMenuOnCommit(rendered, 'first');
     await waitFor(() => expect(rendered.getByRole('menuitem', { name: 'Select for compare' })).toBeInTheDocument());
   });
+
+  it('"Review with selected" sends a range target using the previously selected commit', async () => {
+    stubApp();
+    const rendered = render(App);
+
+    // First: select a commit for compare via right-click
+    await contextMenuOnCommit(rendered, 'first');
+    await waitFor(() => expect(rendered.getByRole('menuitem', { name: 'Select for compare' })).toBeInTheDocument());
+    await fireEvent.click(rendered.getByRole('menuitem', { name: 'Select for compare' }));
+
+    // Second: right-click another commit — "Review with selected" should appear
+    await contextMenuOnCommit(rendered, 'second');
+    const label = `Review with selected ${SHA_1.slice(0, 7)}`;
+    await waitFor(() => expect(rendered.getByRole('menuitem', { name: label })).toBeInTheDocument());
+    await fireEvent.click(rendered.getByRole('menuitem', { name: label }));
+
+    await waitFor(() => expect(send).toHaveBeenCalledWith('review.setTarget', {
+      kind: 'range', baseRef: SHA_1, headRef: SHA_2,
+    }));
+  });
 });
