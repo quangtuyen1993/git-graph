@@ -11,7 +11,7 @@
   import { hasWorkingTreeChanges, type WorkingTreeStatus } from './lib/git-status';
   import { LatestRequestGate, LatestWindowRequestCoordinator } from './lib/latest-request';
   import { MutationGate } from './lib/mutation-gate';
-  import { calculatePanelLayout, defaultPanelWidths, type PanelSide } from './lib/panel-layout';
+  import { calculateDensity, calculatePanelLayout, defaultPanelWidths, type PanelSide } from './lib/panel-layout';
   import CommitDetail from './components/detail/CommitDetail.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
   import ResizeHandle from './components/layout/ResizeHandle.svelte';
@@ -162,6 +162,9 @@
   let desiredLeftWidth = defaultPanelWidths.left;
   let desiredRightWidth = defaultPanelWidths.right;
   let viewportWidth = typeof window === 'undefined' ? 1400 : window.innerWidth;
+  let windowHeight = typeof window === 'undefined' ? 800 : window.innerHeight;
+
+  $: density = calculateDensity({ viewportHeight: windowHeight });
 
   $: panelLayout = calculatePanelLayout({
     leftWidth: desiredLeftWidth,
@@ -197,6 +200,10 @@
   // Computed graph column width
   $: graphColWidth = (maxLane + 1) * 16 + 24;
 
+  // Uninitialised submodules have no repository on disk to show.
+  $: openableSubmodules = submodules.filter((submodule) => submodule.state !== 'uninitialized');
+  $: repoOptionCount = repos.length + openableSubmodules.length;
+
   onMount(async () => {
     try {
       await bridge.send('ping.hello');
@@ -228,12 +235,15 @@
   });
 
   onMount(() => {
-    const trackViewportWidth = () => { viewportWidth = window.innerWidth; };
-    trackViewportWidth();
-    window.addEventListener('resize', trackViewportWidth);
+    const trackViewport = () => {
+      viewportWidth = window.innerWidth;
+      windowHeight = window.innerHeight;
+    };
+    trackViewport();
+    window.addEventListener('resize', trackViewport);
 
     return () => {
-      window.removeEventListener('resize', trackViewportWidth);
+      window.removeEventListener('resize', trackViewport);
       if (panelStateSaveTimer) clearTimeout(panelStateSaveTimer);
     };
   });
@@ -287,15 +297,23 @@
     savePanelState();
   }
 
-  async function switchRepo(path: string) {
+  /**
+   * One reset path for every repository change. The repo list is re-fetched
+   * rather than patched locally: opening a submodule adds an entry the webview
+   * has never seen.
+   */
+  async function applyRepositoryChange(
+    request: () => Promise<{ name: string; path: string }>,
+  ) {
     graphRefreshGate.issue();
     graphWindowRequestGate.issue();
     loading = false;
     try {
-      const result = await bridge.send('repo.switch', { path }) as { name: string };
+      const result = await request();
       branches = [];
       activeRepoName = result.name;
-      repos = repos.map(r => ({ ...r, active: r.path === path }));
+      const repoResult = await bridge.send('repo.list') as { repos: RepoEntry[] };
+      repos = repoResult.repos;
       selectedBranchFilter = null;
       clearBranchHighlight();
       selectedHash = null;
@@ -308,6 +326,23 @@
       error = e instanceof Error ? e.message : String(e);
       setTimeout(() => { error = ''; }, 5000);
     }
+  }
+
+  async function switchRepo(path: string) {
+    await applyRepositoryChange(
+      () => bridge.send('repo.switch', { path }) as Promise<{ name: string; path: string }>,
+    );
+  }
+
+  async function openSubmodule(path: string) {
+    await applyRepositoryChange(
+      () => bridge.send('ui.openSubmodule', { path }) as Promise<{ name: string; path: string }>,
+    );
+  }
+
+  function selectRepoOption(value: string) {
+    if (value.startsWith('submodule:')) return openSubmodule(value.slice('submodule:'.length));
+    if (value.startsWith('repo:')) return switchRepo(value.slice('repo:'.length));
   }
 
   async function refreshGraph() {
@@ -807,12 +842,7 @@
   }
 
   async function handleSidebarSubmoduleOpen(event: CustomEvent<{ path: string }>) {
-    try {
-      await bridge.send('ui.openSubmodule', { path: event.detail.path });
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-      setTimeout(() => { error = ''; }, 5000);
-    }
+    await openSubmodule(event.detail.path);
   }
 
   const mutationLabels: Record<string, string> = {
@@ -1258,7 +1288,7 @@
   }
 </script>
 
-<div class="container">
+<div class="container" class:compact={density === 'compact'}>
   {#if mutationProgress}
     <div class="mutation-progress" aria-live="polite">{mutationProgress}</div>
   {/if}
@@ -1272,17 +1302,26 @@
       on:click={toggleLeftSidebar}
     ><Icon name="layout-sidebar-left" /></button>
 
-    <div class="toolbar-group" class:static={repos.length <= 1}>
+    <div class="toolbar-group" class:static={repoOptionCount <= 1}>
       <span class="toolbar-glyph"><Icon name="repo" /></span>
-      {#if repos.length > 1}
+      {#if repoOptionCount > 1}
         <select
           class="toolbar-select"
           aria-label="Repository"
-          on:change={(e) => switchRepo(e.currentTarget.value)}
+          on:change={(e) => selectRepoOption(e.currentTarget.value)}
         >
-          {#each repos as repo}
-            <option value={repo.path} selected={repo.active}>{repo.name}</option>
-          {/each}
+          <optgroup label="Repositories">
+            {#each repos as repo (repo.path)}
+              <option value="repo:{repo.path}" selected={repo.active}>{repo.name}</option>
+            {/each}
+          </optgroup>
+          {#if openableSubmodules.length > 0}
+            <optgroup label="Submodules">
+              {#each openableSubmodules as submodule (submodule.path)}
+                <option value="submodule:{submodule.path}">{submodule.name}</option>
+              {/each}
+            </optgroup>
+          {/if}
         </select>
       {:else if activeRepoName}
         <span class="repo-name">{activeRepoName}</span>
@@ -1951,5 +1990,23 @@
     padding: 32px;
     text-align: center;
     opacity: 0.5;
+  }
+
+  /* The bottom Panel opens around 250px tall. Chrome that reads as breathing
+     room in an editor tab costs a whole commit row down here. */
+  .container.compact .toolbar {
+    height: 24px;
+  }
+
+  .container.compact .status {
+    display: none;
+  }
+
+  .container.compact .table-header {
+    display: none;
+  }
+
+  .container.compact .right-panel-header {
+    height: 24px;
   }
 </style>

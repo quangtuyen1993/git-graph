@@ -2,11 +2,9 @@ import { realpathSync } from 'fs';
 import * as vscode from 'vscode';
 import { MessageRouter } from './controllers/message-router';
 import { RepositorySession, type RepositoryInfo } from './controllers/repository-session';
-import {
-  GitGraphWebviewProvider,
-  type PanelRequest,
-} from './providers/webview-provider';
+import { GitGraphWebviewProvider } from './providers/webview-provider';
 import { GitService } from './services/git.service';
+import type { WebviewHost } from './types/webview-host.types';
 
 let webviewProvider: GitGraphWebviewProvider;
 
@@ -77,19 +75,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let reviewTree: { refresh(): void } | undefined;
   let syncTicker: (() => Promise<void>) | undefined;
 
-  function createPanelSession(panel: vscode.WebviewPanel, request: PanelRequest): void {
+  function createSession(host: WebviewHost): () => void {
     const panelSessionId = ++nextPanelSessionId;
     let virtualDocumentRequestSequence = 0;
     const router = new MessageRouter();
-    const session = request.kind === 'root'
-      ? new RepositorySession({
-          initialRepository: repos[0] ?? null,
-          repositories: repos,
-        })
-      : new RepositorySession({
-          initialRepository: { name: request.repoName, path: request.repoPath },
-          repositories: [{ name: request.repoName, path: request.repoPath }],
-        });
+    const session = new RepositorySession({
+      initialRepository: repos[0] ?? null,
+      repositories: repos,
+    });
 
     let gitWatcher: vscode.FileSystemWatcher | undefined;
     let debounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -135,17 +128,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }
 
-    router.register('repo', async (method: string, params: unknown) => {
-      if (request.kind === 'root' && method === 'repo.switch') {
-        const switchRepository = async () => {
-          const result = await session.handleRepo(method, params);
-          await bindGitWatcher();
-          return result;
-        };
-        const result = repositorySwitchQueue.then(switchRepository, switchRepository);
-        repositorySwitchQueue = result.then(() => undefined, () => undefined);
+    /**
+     * Every repository change goes through here: the switch itself, then the
+     * watcher rebind. Queued, because two switches racing would leave the
+     * watcher pointing at the loser's .git directory.
+     */
+    function queueRepositorySwitch(params: unknown): Promise<unknown> {
+      const run = async () => {
+        const result = await session.handleRepo('repo.switch', params);
+        await bindGitWatcher();
         return result;
-      }
+      };
+      const result = repositorySwitchQueue.then(run, run);
+      repositorySwitchQueue = result.then(() => undefined, () => undefined);
+      return result;
+    }
+
+    router.register('repo', async (method: string, params: unknown) => {
+      if (method === 'repo.switch') return queueRepositorySwitch(params);
       return session.handleRepo(method, params);
     });
     router.register('git', (method: string, params: unknown) => session.handleGit(method, params));
@@ -258,7 +258,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
           await vscode.languages.setTextDocumentLanguage(doc, 'markdown');
           await vscode.window.showTextDocument(doc, {
-            viewColumn: vscode.ViewColumn.Beside,
+            viewColumn: vscode.ViewColumn.Active,
             preview: false,
           });
           return { success: true, path: file };
@@ -333,8 +333,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           const gitService = session.getGitService();
           if (!gitService) throw new Error('No git repository found');
           const submodule = await gitService.resolveSubmodule(p.path as string);
-          await webviewProvider.openRepositoryPanel(submodule.absolutePath, submodule.name);
-          return { success: true };
+          const added = await session.addRepository({
+            name: submodule.name,
+            path: submodule.absolutePath,
+          });
+          return queueRepositorySwitch({ path: added.path });
         }
         default:
           throw new Error(`Unknown method: ${method}`);
@@ -392,10 +395,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     router.register('review', reviewHandler);
 
-    router.setPanel(panel);
+    router.setHost(host);
     void bindGitWatcher();
 
-    panel.onDidDispose(() => {
+    const dispose = () => {
+      if (disposed) return;
       disposed = true;
       watcherGeneration += 1;
       if (debounceTimer) clearTimeout(debounceTimer);
@@ -403,16 +407,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       gitWatcher?.dispose();
       gitWatcher = undefined;
       router.dispose();
-    });
+    };
+
+    host.onDidDispose(dispose);
+
+    return dispose;
   }
 
   webviewProvider = new GitGraphWebviewProvider(
     context.extensionUri,
-    (panel, request) => createPanelSession(panel, request),
+    (host) => createSession(host),
+  );
+
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(
+      GitGraphWebviewProvider.viewType,
+      webviewProvider,
+      { webviewOptions: { retainContextWhenHidden: true } },
+    ),
   );
 
   const openCommand = vscode.commands.registerCommand('gitGraphPro.open', () => {
-    webviewProvider.openPanel();
+    void vscode.commands.executeCommand('gitGraphPro.graph.focus');
   });
   context.subscriptions.push(openCommand);
 }

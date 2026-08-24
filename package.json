@@ -18,6 +18,11 @@
     "viewsContainers": {
       "panel": [
         {
+          "id": "gitGraphPro",
+          "title": "Git Graph",
+          "icon": "resources/icon.svg"
+        },
+        {
           "id": "gitGraphProReview",
           "title": "Code Review",
           "icon": "resources/review.svg"
@@ -25,6 +30,16 @@
       ]
     },
     "views": {
+      "gitGraphPro": [
+        {
+          "type": "webview",
+          "id": "gitGraphPro.graph",
+          "name": "Git Graph",
+          "webviewOptions": {
+            "retainContextWhenHidden": true
+          }
+        }
+      ],
       "gitGraphProReview": [
         {
           "id": "gitGraphPro.reviews",

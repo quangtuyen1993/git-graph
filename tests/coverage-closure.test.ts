@@ -3,7 +3,7 @@ import { GraphService } from '../src/extension/services/graph.service';
 import { BRANCH_COLORS, getColor } from '../src/webview/lib/graph-colors';
 import { getGravatarUrl, md5 } from '../src/webview/lib/gravatar';
 import { calculateVisibleRange, getTotalHeight } from '../src/webview/lib/virtual-scroll';
-import { calculatePanelLayout, resizePanel } from '../src/webview/lib/panel-layout';
+import { calculateDensity, calculatePanelLayout, resizePanel } from '../src/webview/lib/panel-layout';
 import { GitService } from '../src/extension/services/git.service';
 import type { Commit } from '../src/extension/types/git.types';
 import { BRANCH_FORMAT, TAG_FORMAT, LOG_FORMAT } from '../src/extension/utils/git-parser';
@@ -41,6 +41,8 @@ describe('coverage closure helpers', () => {
     const narrow = calculatePanelLayout({ viewportWidth: 400, leftOpen: true, rightOpen: true, leftWidth: 350, rightWidth: 350 });
     expect(narrow.left.width + narrow.right.width).toBeLessThanOrEqual(96);
     expect(resizePanel({ viewportWidth: 1200, leftOpen: true, rightOpen: false, leftWidth: 200, rightWidth: 300 }, 'left', 999).left.width).toBe(460);
+    expect(calculateDensity({ viewportHeight: 240 })).toBe('compact');
+    expect(calculateDensity({ viewportHeight: 900 })).toBe('normal');
 
   });
 

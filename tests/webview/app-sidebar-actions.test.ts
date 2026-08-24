@@ -49,7 +49,11 @@ describe('App sidebar primary actions', () => {
         case 'repo.list': return { repos };
         case 'repo.switch': {
           const path = (params as { path: string }).path;
-          return { name: repos.find(repo => repo.path === path)?.name ?? '' };
+          return { name: repos.find(repo => repo.path === path)?.name ?? '', path };
+        }
+        case 'ui.openSubmodule': {
+          const path = (params as { path: string }).path;
+          return { success: true, name: path.split('/').pop() ?? path, path };
         }
         case 'git.branches': return [branch];
         case 'git.tags': return [{ name: 'v1.0.0', hash: 'b'.repeat(40), message: null, taggerDate: null }];
@@ -200,7 +204,7 @@ describe('App sidebar primary actions', () => {
     const buildCount = send.mock.calls.filter(([method]) => method === 'graph.build').length;
     await fireEvent.change(
       getByRole('combobox', { name: 'Repository' }),
-      { target: { value: '/repo-two' } },
+      { target: { value: 'repo:/repo-two' } },
     );
 
     await waitFor(() => {

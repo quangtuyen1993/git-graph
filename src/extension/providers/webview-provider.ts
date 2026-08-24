@@ -1,81 +1,43 @@
 import * as vscode from 'vscode';
-import { realpath } from 'fs/promises';
+import type { WebviewHost } from '../types/webview-host.types';
 
-export type PanelRequest =
-  | { kind: 'root' }
-  | { kind: 'repository'; repoPath: string; repoName: string };
+export type CreateSession = (host: WebviewHost) => () => void;
 
-export type CreatePanelSession = (panel: vscode.WebviewPanel, request: PanelRequest) => void;
+export class GitGraphWebviewProvider implements vscode.WebviewViewProvider {
+  public static readonly viewType = 'gitGraphPro.graph';
 
-export class GitGraphWebviewProvider {
-  private rootPanel: vscode.WebviewPanel | undefined;
-  private readonly repositoryPanels = new Map<string, vscode.WebviewPanel>();
+  private disposeSession: (() => void) | undefined;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
-    private readonly createPanelSession: CreatePanelSession,
-    private readonly canonicalizePath: (repoPath: string) => Promise<string> = realpath,
+    private readonly createSession: CreateSession,
   ) {}
 
-  public openPanel(): vscode.WebviewPanel {
-    if (this.rootPanel) {
-      this.rootPanel.reveal();
-      return this.rootPanel;
-    }
+  /**
+   * Called again every time the user hides and re-shows the view, so the
+   * previous session must go first: otherwise its file watcher survives and
+   * every hide/show doubles the refresh traffic.
+   */
+  public resolveWebviewView(view: vscode.WebviewView): void {
+    this.disposeSession?.();
+    this.disposeSession = undefined;
 
-    const panel = this.createPanel('Git Graph Pro');
-    this.rootPanel = panel;
-    this.createPanelSession(panel, { kind: 'root' });
-
-    panel.onDidDispose(() => {
-      if (this.rootPanel === panel) this.rootPanel = undefined;
-    });
-
-    return panel;
-  }
-
-  public async openRepositoryPanel(repoPath: string, repoName: string): Promise<vscode.WebviewPanel> {
-    const canonicalPath = await this.canonicalizePath(repoPath);
-    const existing = this.repositoryPanels.get(canonicalPath);
-    if (existing) {
-      existing.reveal();
-      return existing;
-    }
-
-    const panel = this.createPanel(`Git Graph: ${repoName}`);
-    this.repositoryPanels.set(canonicalPath, panel);
-    this.createPanelSession(panel, { kind: 'repository', repoPath: canonicalPath, repoName });
-    panel.onDidDispose(() => {
-      if (this.repositoryPanels.get(canonicalPath) === panel) {
-        this.repositoryPanels.delete(canonicalPath);
-      }
-    });
-
-    return panel;
-  }
-
-  private createPanel(title: string): vscode.WebviewPanel {
-    const panel = vscode.window.createWebviewPanel(
-      'gitGraphPro',
-      title,
-      vscode.ViewColumn.One,
-      {
-        enableScripts: true,
-        localResourceRoots: [
-          vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview'),
-          vscode.Uri.joinPath(this.extensionUri, 'resources')
-        ],
-        retainContextWhenHidden: true
-      }
-    );
-
-    panel.iconPath = {
-      light: vscode.Uri.joinPath(this.extensionUri, 'resources', 'icon.svg'),
-      dark: vscode.Uri.joinPath(this.extensionUri, 'resources', 'icon.svg'),
+    view.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [
+        vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview'),
+        vscode.Uri.joinPath(this.extensionUri, 'resources'),
+      ],
     };
+    view.webview.html = this.getHtmlContent(view.webview);
 
-    panel.webview.html = this.getHtmlContent(panel.webview);
-    return panel;
+    const dispose = this.createSession(view);
+    this.disposeSession = dispose;
+
+    view.onDidDispose(() => {
+      if (this.disposeSession === dispose) this.disposeSession = undefined;
+      dispose();
+    });
   }
 
   private getHtmlContent(webview: vscode.Webview): string {

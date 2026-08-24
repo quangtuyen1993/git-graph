@@ -1,18 +1,19 @@
 import * as vscode from 'vscode';
 import type { Request, Response, Event } from '../types/messages.types';
+import type { WebviewHost } from '../types/webview-host.types';
 
 export type MethodHandler = (method: string, params: unknown) => Promise<unknown>;
 
 export class MessageRouter {
   private handlers = new Map<string, MethodHandler>();
-  private panel: vscode.WebviewPanel | undefined;
+  private host: WebviewHost | undefined;
   private receiveSubscription: vscode.Disposable | undefined;
 
-  public setPanel(panel: vscode.WebviewPanel): void {
+  public setHost(host: WebviewHost): void {
     this.receiveSubscription?.dispose();
-    this.panel = panel;
+    this.host = host;
 
-    this.receiveSubscription = panel.webview.onDidReceiveMessage((message: Request) => {
+    this.receiveSubscription = host.webview.onDidReceiveMessage((message: Request) => {
       if (message.type === 'request') {
         this.handleMessage(message);
       }
@@ -24,9 +25,9 @@ export class MessageRouter {
   }
 
   public sendEvent(event: string, data?: unknown): void {
-    if (this.panel) {
+    if (this.host) {
       const msg: Event = { type: 'event', event, data };
-      this.panel.webview.postMessage(msg);
+      this.host.webview.postMessage(msg);
     }
   }
 
@@ -34,7 +35,7 @@ export class MessageRouter {
     this.receiveSubscription?.dispose();
     this.receiveSubscription = undefined;
     this.handlers.clear();
-    this.panel = undefined;
+    this.host = undefined;
   }
 
   private async handleMessage(request: Request): Promise<void> {
@@ -63,6 +64,6 @@ export class MessageRouter {
       }
     }
 
-    this.panel?.webview.postMessage(response);
+    this.host?.webview.postMessage(response);
   }
 }

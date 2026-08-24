@@ -1,39 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const vscodeMocks = vi.hoisted(() => ({
-  createWebviewPanel: vi.fn(),
-}));
-
 vi.mock('vscode', () => ({
   Uri: {
     joinPath: (...parts: Array<{ toString(): string } | string>) => ({
       toString: () => parts.map(String).join('/'),
     }),
   },
-  ViewColumn: { One: 1 },
-  window: { createWebviewPanel: vscodeMocks.createWebviewPanel },
 }));
 
 import { GitGraphWebviewProvider } from '../../src/extension/providers/webview-provider';
 
-interface FakePanel {
-  iconPath?: { light: unknown; dark: unknown };
-  reveal: ReturnType<typeof vi.fn>;
+interface FakeView {
   webview: {
     html: string;
+    options: unknown;
     cspSource: string;
     asWebviewUri: ReturnType<typeof vi.fn>;
   };
   onDidDispose: (callback: () => void) => { dispose(): void };
-  disposePanel: () => void;
+  disposeView: () => void;
 }
 
-function createFakePanel(): FakePanel {
+function createFakeView(): FakeView {
   const disposalCallbacks: Array<() => void> = [];
   return {
-    reveal: vi.fn(),
     webview: {
       html: '',
+      options: undefined,
       cspSource: 'test-csp',
       asWebviewUri: vi.fn((uri: { toString(): string }) => uri),
     },
@@ -41,72 +34,54 @@ function createFakePanel(): FakePanel {
       disposalCallbacks.push(callback);
       return { dispose: vi.fn() };
     },
-    disposePanel() {
+    disposeView() {
       for (const callback of disposalCallbacks) callback();
     },
   };
 }
 
 describe('GitGraphWebviewProvider', () => {
+  let createSession: ReturnType<typeof vi.fn>;
+  let disposers: Array<ReturnType<typeof vi.fn>>;
+
   beforeEach(() => {
-    vscodeMocks.createWebviewPanel.mockReset();
-    vscodeMocks.createWebviewPanel.mockImplementation(() => createFakePanel());
+    disposers = [];
+    createSession = vi.fn(() => {
+      const dispose = vi.fn();
+      disposers.push(dispose);
+      return dispose;
+    });
   });
 
-  it('reuses the root panel without conflating it with repository panels', async () => {
-    const createSession = vi.fn();
-    const provider = new GitGraphWebviewProvider(
-      { toString: () => '/extension' } as never,
-      createSession,
-      async (repoPath) => repoPath,
-    );
+  it('scripts the view and hands it a session', () => {
+    const provider = new GitGraphWebviewProvider({ toString: () => '/extension' } as never, createSession);
+    const view = createFakeView();
 
-    const rootA = provider.openPanel() as unknown as FakePanel;
-    const rootB = provider.openPanel() as unknown as FakePanel;
-    const child = await provider.openRepositoryPanel('/real/sdk', 'sdk') as unknown as FakePanel;
+    provider.resolveWebviewView(view as never);
 
-    expect(rootB).toBe(rootA);
-    expect(rootA.reveal).toHaveBeenCalledTimes(1);
-    expect(child).not.toBe(rootA);
-    expect(createSession).toHaveBeenCalledWith(rootA, { kind: 'root' });
-    expect(createSession).toHaveBeenCalledWith(child, {
-      kind: 'repository',
-      repoPath: '/real/sdk',
-      repoName: 'sdk',
-    });
-    expect(rootA.iconPath).toBeDefined();
-    expect(child.iconPath).toBeDefined();
-
-    child.disposePanel();
-
-    expect(provider.openPanel()).toBe(rootA);
-    expect(rootA.reveal).toHaveBeenCalledTimes(2);
+    expect(view.webview.options).toMatchObject({ enableScripts: true });
+    expect(view.webview.html).toContain('<div id="app">');
+    expect(createSession).toHaveBeenCalledWith(view);
   });
 
-  it('deduplicates repository panels by canonical path and forgets disposed panels', async () => {
-    const createSession = vi.fn();
-    const provider = new GitGraphWebviewProvider(
-      { toString: () => '/extension' } as never,
-      createSession,
-      async (repoPath) => repoPath === '/alias/sdk' ? '/real/sdk' : repoPath,
-    );
+  it('disposes the previous session when the view is resolved again', () => {
+    const provider = new GitGraphWebviewProvider({ toString: () => '/extension' } as never, createSession);
 
-    const childA = await provider.openRepositoryPanel('/alias/sdk', 'sdk') as unknown as FakePanel;
-    const childB = await provider.openRepositoryPanel('/real/sdk', 'sdk') as unknown as FakePanel;
+    provider.resolveWebviewView(createFakeView() as never);
+    provider.resolveWebviewView(createFakeView() as never);
 
-    expect(childB).toBe(childA);
-    expect(childA.reveal).toHaveBeenCalledTimes(1);
-    expect(createSession).toHaveBeenCalledTimes(1);
-    expect(createSession).toHaveBeenCalledWith(childA, {
-      kind: 'repository',
-      repoPath: '/real/sdk',
-      repoName: 'sdk',
-    });
-
-    childA.disposePanel();
-    const reopened = await provider.openRepositoryPanel('/real/sdk', 'sdk') as unknown as FakePanel;
-
-    expect(reopened).not.toBe(childA);
     expect(createSession).toHaveBeenCalledTimes(2);
+    expect(disposers[0]).toHaveBeenCalledTimes(1);
+    expect(disposers[1]).not.toHaveBeenCalled();
+  });
+
+  it('disposes the session when the view itself goes away', () => {
+    const provider = new GitGraphWebviewProvider({ toString: () => '/extension' } as never, createSession);
+    const view = createFakeView();
+
+    provider.resolveWebviewView(view as never);
+    view.disposeView();
+
+    expect(disposers[0]).toHaveBeenCalledTimes(1);
   });
 });

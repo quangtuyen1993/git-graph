@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calculatePanelLayout, defaultPanelWidths, resizePanel } from '../../src/webview/lib/panel-layout';
+import { calculateDensity, calculatePanelLayout, defaultPanelWidths, resizePanel } from '../../src/webview/lib/panel-layout';
 
 const narrowLayout = {
   viewportWidth: 600,
@@ -116,5 +116,13 @@ describe('panel layout coordinator', () => {
     expect(squeezed.left.width).toBeLessThan(380);
     expect(restored.left.width).toBe(380);
     expect(restored.right.width).toBe(640);
+  });
+});
+
+describe('calculateDensity', () => {
+  it('switches to compact only below the threshold', () => {
+    expect(calculateDensity({ viewportHeight: 319 })).toBe('compact');
+    expect(calculateDensity({ viewportHeight: 320 })).toBe('normal');
+    expect(calculateDensity({ viewportHeight: 321 })).toBe('normal');
   });
 });
