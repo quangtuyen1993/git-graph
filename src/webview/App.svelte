@@ -181,7 +181,7 @@
   let aiProviders: { id: string; name: string; available: boolean; group: 'cli' | 'api' }[] = [];
   let savedProvider = '';
   let savedModel = '';
-  let aiReviewResult: { content: string; provider: string; model: string; timestamp: string } | null = null;
+  let aiReviewJobId: string | null = null;
   let aiReviewLoading = false;
   let aiReviewError = '';
 
@@ -219,6 +219,11 @@
 
     bridge.on('graph.invalidated', () => {
       refreshGraph();
+    });
+
+    bridge.on('review.changed', (data) => {
+      const changed = data as { id: string };
+      if (changed.id === aiReviewJobId) aiReviewLoading = false;
     });
   });
 
@@ -1174,7 +1179,6 @@
     compareFiles = null;
     rightPanelOpen = true;
     rightPanelMode = 'review';
-    aiReviewResult = null;
     aiReviewError = '';
 
     // If both branches set, fetch comparison immediately
@@ -1195,12 +1199,11 @@
     const { sourceBranch, targetBranch, provider, model } = event.detail;
     aiReviewLoading = true;
     aiReviewError = '';
-    aiReviewResult = null;
     try {
-      aiReviewResult = await bridge.send('ai.review', { sourceBranch, targetBranch, provider, model }) as typeof aiReviewResult;
+      const started = await bridge.send('review.start', { sourceBranch, targetBranch, provider, model }) as { id: string };
+      aiReviewJobId = started.id;
     } catch (e) {
       aiReviewError = e instanceof Error ? e.message : String(e);
-    } finally {
       aiReviewLoading = false;
     }
   }
@@ -1461,7 +1464,6 @@
             initialTarget={compareTarget}
             initialProvider={savedProvider}
             initialModel={savedModel}
-            reviewResult={aiReviewResult}
             reviewLoading={aiReviewLoading}
             error={aiReviewError}
             on:compare={(e) => compareBranches(e.detail.sourceBranch, e.detail.targetBranch)}
