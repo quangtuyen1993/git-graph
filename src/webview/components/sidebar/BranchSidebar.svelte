@@ -476,7 +476,7 @@
     align-items: center;
     gap: 6px;
     width: 100%;
-    height: 22px;
+    height: 26px;
     padding: 0 12px 0 24px;
     border: none;
     background: none;
@@ -516,8 +516,8 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    min-height: 22px;
-    padding: 2px 12px 2px 20px;
+    min-height: 26px;
+    padding: 4px 12px 4px 20px;
     cursor: pointer;
     white-space: nowrap;
     overflow: hidden;

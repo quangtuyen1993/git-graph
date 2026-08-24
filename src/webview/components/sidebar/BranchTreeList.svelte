@@ -102,7 +102,7 @@
           on:dblclick={() => checkout(node.branch)}
           on:keydown={(event) => handleKeydown(event, node.branch)}
         >
-          <span class="branch-icon"><Icon name={node.branch.current ? 'circle-filled' : 'circle-outline'} size={12} /></span>
+          <span class="branch-icon"><Icon name={node.branch.current ? 'circle-filled' : 'circle-small'} size={node.branch.current ? 12 : 10} /></span>
           <span class="branch-name">{node.label}</span>
           {#if node.branch.ahead > 0 || node.branch.behind > 0}
             <span class="ahead-behind">
@@ -153,15 +153,15 @@
   }
 
   .branch-group {
-    min-height: 22px;
-    padding: 2px 12px 2px calc(var(--sidebar-gutter, 12px) + var(--tree-indent));
+    min-height: 26px;
+    padding: 4px 12px 4px calc(var(--sidebar-gutter, 12px) + var(--tree-indent));
     color: var(--vscode-descriptionForeground, #999999);
     cursor: pointer;
   }
 
   .branch-item {
-    min-height: 22px;
-    padding: 2px 12px 2px calc(var(--sidebar-gutter, 12px) + 8px + var(--tree-indent));
+    min-height: 26px;
+    padding: 4px 12px 4px calc(var(--sidebar-gutter, 12px) + 8px + var(--tree-indent));
     border-bottom: 1px solid rgba(255, 255, 255, 0.03);
     cursor: pointer;
     white-space: nowrap;
@@ -219,6 +219,12 @@
     height: 16px;
     flex-shrink: 0;
     color: var(--vscode-descriptionForeground, #888888);
+    opacity: 0.7;
+  }
+
+  .branch-item.current .branch-icon,
+  .branch-item.selected .branch-icon {
+    opacity: 1;
   }
 
   .branch-item.current .branch-icon {
