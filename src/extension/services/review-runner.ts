@@ -93,29 +93,22 @@ export class ReviewRunner {
   }
 
   private async run(id: string, input: StartReviewInput, controller: AbortController): Promise<void> {
-    // Chunks are written straight through; the store appends, so an open editor
-    // tab sees the review grow.
-    const writes: Promise<void>[] = [];
-    let writeError: string | undefined;
-    const onChunk = (text: string) => {
-      // A failed write (disk full, permissions) must not abort the run, but it
-      // must not vanish either — the first failure is captured and the entry is
-      // finished as `failed`, not silently reported `done`.
-      writes.push(this.store.appendBody(input.repoId, id, text).catch((err: unknown) => {
-        writeError ??= err instanceof Error ? err.message : String(err);
-      }));
-    };
+    const body = new BodyStream(this.store, input.repoId, id);
 
     try {
-      await this.service.review({
+      const result = await this.service.review({
         diff: '',
         payloadText: input.payloadText,
         provider: input.provider,
         model: input.model,
-        onChunk,
+        onChunk: (text: string) => body.push(text),
         signal: controller.signal,
       });
-      await Promise.all(writes);
+      // The stream is raw CLI stdout: codex emits a whole terminal transcript,
+      // deepseek a JSON envelope, and the control-character sanitisation lives
+      // on the returned value too. Streaming stays the live preview; the
+      // finished document is rewritten from the processed content.
+      const writeError = await body.finalize(result?.content);
       // A store write failure must not be reported as `done` — a review whose
       // text never reached disk is a lie. Surface it as `failed` instead of
       // swallowing it.
@@ -125,16 +118,18 @@ export class ReviewRunner {
         error: writeError,
       });
     } catch (err) {
-      await Promise.all(writes);
       if (err instanceof ReviewCancelledError) {
-        // The partial body stays on disk: half a review is often still useful.
+        // The partial body stays on disk: half a review is often still useful,
+        // so the buffered tail must be flushed before the entry is finished.
+        await body.drain();
         await this.finishSafely(input.repoId, id, {
           status: 'cancelled',
           finishedAt: new Date().toISOString(),
         });
       } else {
         const message = err instanceof Error ? err.message : String(err);
-        await this.store.appendBody(input.repoId, id, `\n\n---\n\n**Review failed:** ${message}\n`).catch(() => {});
+        body.push(`\n\n---\n\n**Review failed:** ${message}\n`);
+        await body.drain();
         await this.finishSafely(input.repoId, id, {
           status: 'failed',
           finishedAt: new Date().toISOString(),
@@ -173,5 +168,82 @@ export class ReviewRunner {
     } catch (err) {
       console.error(`[ReviewRunner] finish(${repoId}, ${id}) failed:`, err);
     }
+  }
+}
+
+/** Buffered writes are flushed on this cadence, per the design's ~1/second. */
+export const BODY_FLUSH_INTERVAL_MS = 1000;
+
+/**
+ * One writer per body file. Chunks are accumulated and flushed on a timer
+ * rather than written one syscall per chunk: that is the design's ~1/second
+ * cadence, it removes the write amplification of a mkdir+open+write+close per
+ * chunk, and it stops every chunk re-triggering a reload of the open editor
+ * tab. Writes are chained, so what lands on disk is always in arrival order.
+ */
+class BodyStream {
+  private buffer = '';
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private chain: Promise<void> = Promise.resolve();
+  private error: string | undefined;
+
+  constructor(
+    private readonly store: ReviewStore,
+    private readonly repoId: string,
+    private readonly id: string,
+  ) {}
+
+  public push(text: string): void {
+    if (!text) return;
+    this.buffer += text;
+    if (this.timer) return;
+    this.timer = setTimeout(() => this.flush(), BODY_FLUSH_INTERVAL_MS);
+    // A pending preview flush must never hold the host (or a test runner) open.
+    this.timer.unref?.();
+  }
+
+  /** Flush the buffered tail and wait for every queued write to land. */
+  public async drain(): Promise<string | undefined> {
+    this.flush();
+    await this.chain;
+    return this.error;
+  }
+
+  /**
+   * Replace the streamed preview with the processed review. Anything still
+   * buffered is superseded by `content` and dropped rather than appended after
+   * it. A run that produced no content (shouldn't happen, but a service stub
+   * or a future provider could) keeps whatever streamed.
+   */
+  public async finalize(content: string | undefined): Promise<string | undefined> {
+    if (typeof content !== 'string') return this.drain();
+    this.buffer = '';
+    this.clearTimer();
+    this.enqueue(() => this.store.writeBody(this.repoId, this.id, content));
+    await this.chain;
+    return this.error;
+  }
+
+  private flush(): void {
+    this.clearTimer();
+    if (!this.buffer) return;
+    const chunk = this.buffer;
+    this.buffer = '';
+    this.enqueue(() => this.store.appendBody(this.repoId, this.id, chunk));
+  }
+
+  private enqueue(write: () => Promise<void>): void {
+    // A failed write (disk full, permissions) must not abort the run, but it
+    // must not vanish either — the first failure is captured so the entry is
+    // finished as `failed` rather than silently reported `done`.
+    this.chain = this.chain.then(write).catch((err: unknown) => {
+      this.error ??= err instanceof Error ? err.message : String(err);
+    });
+  }
+
+  private clearTimer(): void {
+    if (!this.timer) return;
+    clearTimeout(this.timer);
+    this.timer = undefined;
   }
 }

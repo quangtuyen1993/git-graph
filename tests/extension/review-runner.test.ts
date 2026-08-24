@@ -187,4 +187,70 @@ describe('ReviewRunner', () => {
     expect((await store.get(REPO, idA))?.status).toBe('cancelled');
     expect(await store.readBody(REPO, idA)).toBe('first run body');
   });
+
+  it('replaces the streamed stdout with the processed result', async () => {
+    // C1: the stream is raw CLI stdout. Only the value the service returns has
+    // been through the provider's post-processing (codex transcript slicing,
+    // deepseek JSON unwrapping) and the control-character sanitisation.
+    const { service, captured, settle } = deferredService();
+    const runner = new ReviewRunner(store, service as never, () => {});
+    const id = await runner.start(input);
+
+    captured.onChunk?.('\u001b[32mraw terminal transcript\u001b[0m\n');
+    captured.onChunk?.('tokens used\n1234\n');
+    settle('## The processed review');
+    await waitFor(() => runner.isRunning(id) === false);
+
+    expect(await store.readBody(REPO, id)).toBe('## The processed review');
+  });
+
+  it('keeps unawaited chunks in arrival order', async () => {
+    // C2: the runner used to fire each append concurrently and only await the
+    // pile at the end, so the libuv threadpool decided the on-disk order.
+    const { service, captured, settle } = deferredService();
+    const runner = new ReviewRunner(store, service as never, () => {});
+    const id = await runner.start(input);
+
+    const chunks = Array.from({ length: 32 }, (_, i) => `part-${i};`);
+    for (const chunk of chunks) captured.onChunk?.(chunk);
+    // No content: the streamed text is all this run produced.
+    settle(undefined as never);
+    await waitFor(() => runner.isRunning(id) === false);
+
+    expect(await store.readBody(REPO, id)).toBe(chunks.join(''));
+  });
+
+  it('batches chunks instead of writing one file operation per chunk', async () => {
+    // I9: every chunk used to be its own mkdir+open+write+close, and every
+    // write re-triggered a reload of the open editor tab.
+    const { service, captured, settle } = deferredService();
+    const append = vi.spyOn(store, 'appendBody');
+    const runner = new ReviewRunner(store, service as never, () => {});
+    const id = await runner.start(input);
+
+    for (let i = 0; i < 10; i++) captured.onChunk?.(`chunk ${i} `);
+    settle(undefined as never);
+    await waitFor(() => runner.isRunning(id) === false);
+
+    expect(append).toHaveBeenCalledTimes(1);
+    append.mockRestore();
+  });
+
+  it('flushes the buffered tail before the entry is marked finished', async () => {
+    const { service, captured, settle } = deferredService();
+    const seenAtFinish: string[] = [];
+    const runner = new ReviewRunner(store, service as never, () => {});
+    const finish = vi.spyOn(store, 'finish').mockImplementation(async (repoId, entryId, patch) => {
+      seenAtFinish.push(await store.readBody(repoId, entryId));
+      finish.mockRestore();
+      return store.finish(repoId, entryId, patch);
+    });
+    const id = await runner.start(input);
+
+    captured.onChunk?.('streamed tail');
+    settle(undefined as never);
+    await waitFor(() => runner.isRunning(id) === false);
+
+    expect(seenAtFinish).toEqual(['streamed tail']);
+  });
 });
