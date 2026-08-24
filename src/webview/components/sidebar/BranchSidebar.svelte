@@ -2,6 +2,7 @@
   import { createEventDispatcher } from 'svelte';
   import BranchTreeList from './BranchTreeList.svelte';
   import Icon from '../common/Icon.svelte';
+  import type { SidebarPersistedState } from '../../lib/sidebar-state';
   import { activeBranchGroupPaths, buildBranchTree, type BranchTreeNode } from '../../lib/branch-tree';
 
   interface Branch {
@@ -151,6 +152,56 @@
   let expandedGroups: Record<string, boolean> = {};
   let branchGroupsInitialized = false;
 
+  /**
+   * Last persisted expand/collapse snapshot, injected by the shell that owns
+   * storage. Applied whenever a new object arrives (repo switch included);
+   * null resets to the defaults above. While applied state stands, the
+   * active-branch auto-expansion below is skipped — the user's own layout
+   * outranks the heuristic.
+   */
+  export let initialState: SidebarPersistedState | null = null;
+
+  let appliedState: SidebarPersistedState | null = null;
+  $: if (initialState !== appliedState) {
+    appliedState = initialState;
+    if (initialState) {
+      localExpanded = initialState.sections.local ?? true;
+      remoteExpanded = initialState.sections.remote ?? false;
+      tagsExpanded = initialState.sections.tags ?? false;
+      stashesExpanded = initialState.sections.stashes ?? false;
+      worktreesExpanded = initialState.sections.worktrees ?? false;
+      submodulesExpanded = initialState.sections.submodules ?? false;
+      expandedRemotes = { ...initialState.expandedRemotes };
+      expandedGroups = { ...initialState.expandedGroups };
+      branchGroupsInitialized = true;
+    } else {
+      localExpanded = true;
+      remoteExpanded = false;
+      tagsExpanded = false;
+      stashesExpanded = false;
+      worktreesExpanded = false;
+      submodulesExpanded = false;
+      expandedRemotes = {};
+      expandedGroups = {};
+      branchGroupsInitialized = false;
+    }
+  }
+
+  function emitState() {
+    dispatch('stateChange', {
+      sections: {
+        local: localExpanded,
+        remote: remoteExpanded,
+        tags: tagsExpanded,
+        stashes: stashesExpanded,
+        worktrees: worktreesExpanded,
+        submodules: submodulesExpanded,
+      },
+      expandedRemotes,
+      expandedGroups,
+    } satisfies SidebarPersistedState);
+  }
+
   $: if (!branchGroupsInitialized && localBranches.length > 0) {
     const activeBranch = localBranches.find(branch => branch.current)?.name;
     expandedGroups = Object.fromEntries(
@@ -161,10 +212,12 @@
 
   function toggleRemote(remote: string) {
     expandedRemotes = { ...expandedRemotes, [remote]: !expandedRemotes[remote] };
+    emitState();
   }
 
   function toggleBranchGroup(key: string) {
     expandedGroups = { ...expandedGroups, [key]: !expandedGroups[key] };
+    emitState();
   }
 
   function handleTagContextMenu(event: MouseEvent, tag: Tag) {
@@ -296,7 +349,7 @@
   <div class="section">
     <button
       class="section-header"
-      on:click={() => { localExpanded = !localExpanded; }}
+      on:click={() => { localExpanded = !localExpanded; emitState(); }}
     >
       <span class="chevron" class:collapsed={!sectionOpen.local}><Icon name="chevron-right" /></span>
       <span class="section-title">LOCAL</span>
@@ -325,7 +378,7 @@
   <div class="section">
     <button
       class="section-header"
-      on:click={() => { remoteExpanded = !remoteExpanded; }}
+      on:click={() => { remoteExpanded = !remoteExpanded; emitState(); }}
     >
       <span class="chevron" class:collapsed={!sectionOpen.remote}><Icon name="chevron-right" /></span>
       <span class="section-title">REMOTE</span>
@@ -370,7 +423,7 @@
   <div class="section">
     <button
       class="section-header"
-      on:click={() => { tagsExpanded = !tagsExpanded; }}
+      on:click={() => { tagsExpanded = !tagsExpanded; emitState(); }}
     >
       <span class="chevron" class:collapsed={!sectionOpen.tags}><Icon name="chevron-right" /></span>
       <span class="section-title">TAGS</span>
@@ -404,7 +457,7 @@
   <div class="section">
     <button
       class="section-header"
-      on:click={() => { stashesExpanded = !stashesExpanded; }}
+      on:click={() => { stashesExpanded = !stashesExpanded; emitState(); }}
     >
       <span class="chevron" class:collapsed={!sectionOpen.stashes}><Icon name="chevron-right" /></span>
       <span class="section-title">STASHES</span>
@@ -440,7 +493,7 @@
   <div class="section">
     <button
       class="section-header"
-      on:click={() => { worktreesExpanded = !worktreesExpanded; }}
+      on:click={() => { worktreesExpanded = !worktreesExpanded; emitState(); }}
     >
       <span class="chevron" class:collapsed={!sectionOpen.worktrees}><Icon name="chevron-right" /></span>
       <span class="section-title">WORKTREES</span>
@@ -477,7 +530,7 @@
   <div class="section">
     <button
       class="section-header"
-      on:click={() => { submodulesExpanded = !submodulesExpanded; }}
+      on:click={() => { submodulesExpanded = !submodulesExpanded; emitState(); }}
     >
       <span class="chevron" class:collapsed={!sectionOpen.submodules}><Icon name="chevron-right" /></span>
       <span class="section-title">SUBMODULES</span>

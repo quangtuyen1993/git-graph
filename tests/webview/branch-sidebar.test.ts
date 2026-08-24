@@ -327,3 +327,65 @@ describe('BranchSidebar', () => {
     }
   });
 });
+
+describe('sidebar state persistence contract', () => {
+  it('applies the sections named by initialState', () => {
+    const { container } = render(BranchSidebar, {
+      branches: groupedBranches, tags, stashes, worktrees, submodules,
+      initialState: {
+        sections: { local: false, remote: false, tags: true, stashes: false, worktrees: false, submodules: false },
+        expandedRemotes: {},
+        expandedGroups: {},
+      },
+    });
+
+    // TAGS mở nên tag row hiện; LOCAL đóng nên branch (không phải HEAD row) không hiện
+    expect(container.textContent).toContain('v1.0.0');
+    expect(container.textContent).not.toContain('abce');
+  });
+
+  it('applies stored group expansion instead of the active-branch default', () => {
+    const { container } = render(BranchSidebar, {
+      branches: groupedBranches, tags: [], stashes: [], worktrees: [], submodules: [],
+      initialState: {
+        sections: { local: true, remote: false, tags: false, stashes: false, worktrees: false, submodules: false },
+        expandedRemotes: {},
+        expandedGroups: { 'local:feat': true, 'local:feat/team': true },
+      },
+    });
+
+    expect(container.textContent).toContain('two');       // feat/team mở theo stored
+    expect(container.textContent).not.toContain('abce');  // fix/abc KHÔNG auto-mở theo current branch (HEAD row vẫn hiện tên branch hiện tại)
+  });
+
+  it('dispatches stateChange with the full snapshot when a section toggles', async () => {
+    const rendered = render(BranchSidebar, { branches, tags, stashes, worktrees, submodules });
+    const seen: unknown[] = [];
+    rendered.component.$on('stateChange', (event: CustomEvent) => { seen.push(event.detail); });
+
+    await expandSections(rendered.container, 'REMOTE');
+
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen[seen.length - 1]).toMatchObject({
+      sections: expect.objectContaining({ local: true, remote: true }),
+      expandedGroups: expect.any(Object),
+      expandedRemotes: expect.any(Object),
+    });
+  });
+
+  it('dispatches stateChange when a branch group is toggled', async () => {
+    const rendered = render(BranchSidebar, {
+      branches: groupedBranches, tags: [], stashes: [], worktrees: [], submodules: [],
+    });
+    const seen: CustomEvent[] = [];
+    rendered.component.$on('stateChange', (event: CustomEvent) => { seen.push(event); });
+
+    const group = [...rendered.container.querySelectorAll('button')]
+      .find((candidate) => candidate.textContent?.includes('other'));
+    expect(group).toBeDefined();
+    await fireEvent.click(group!);
+
+    const last = seen[seen.length - 1]?.detail as { expandedGroups: Record<string, boolean> };
+    expect(last.expandedGroups['local:fix/other']).toBe(true);
+  });
+});

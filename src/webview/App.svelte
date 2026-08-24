@@ -4,6 +4,7 @@
   import { calculateVisibleRange, getTotalHeight, ROW_HEIGHT, BUFFER_ROWS } from './lib/virtual-scroll';
   import GraphCanvas from './components/graph/GraphCanvas.svelte';
   import ContextMenu from './components/actions/ContextMenu.svelte';
+  import { isSidebarPersistedState, type SidebarPersistedState } from './lib/sidebar-state';
   import type { MenuItem } from './types/menu.types';
   import { getColorRgb } from './lib/graph-colors';
   import Avatar from './components/common/Avatar.svelte';
@@ -122,6 +123,31 @@
       ? favourites.filter((candidate) => candidate !== name)
       : [...favourites, name];
     if (favouritesKey) bridge.send('ui.setState', { key: favouritesKey, value: favourites });
+  }
+
+  // Same per-repo pattern as favourites: the sidebar reopens the way the user
+  // left it for THIS repo. Saves are debounced — a burst of toggles is one write.
+  let sidebarState: SidebarPersistedState | null = null;
+  let sidebarStateKey = '';
+  let sidebarSaveTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function loadSidebarState(repoPath: string | undefined): Promise<void> {
+    sidebarStateKey = repoPath ? `sidebarState:${repoPath}` : '';
+    if (!sidebarStateKey) {
+      sidebarState = null;
+      return;
+    }
+    const stored = await bridge.send('ui.getState', { key: sidebarStateKey });
+    sidebarState = isSidebarPersistedState(stored) ? stored : null;
+  }
+
+  function handleSidebarStateChange(state: SidebarPersistedState): void {
+    if (!sidebarStateKey) return;
+    if (sidebarSaveTimer) clearTimeout(sidebarSaveTimer);
+    sidebarSaveTimer = setTimeout(() => {
+      sidebarSaveTimer = undefined;
+      bridge.send('ui.setState', { key: sidebarStateKey, value: state });
+    }, 300);
   }
 
   // Graph state
@@ -255,6 +281,7 @@
       const active = repos.find(r => r.active);
       activeRepoName = active?.name ?? repos[0]?.name ?? '';
       await loadFavourites(active?.path ?? repos[0]?.path);
+      await loadSidebarState(active?.path ?? repos[0]?.path);
       await refreshGraph();
       await restorePanelState();
     } catch (e) {
@@ -359,6 +386,7 @@
       repos = repoResult.repos;
       workspaceSubmodules = repoResult.submodules ?? [];
       await loadFavourites(repoResult.repos.find((repo) => repo.active)?.path);
+      await loadSidebarState(repoResult.repos.find((repo) => repo.active)?.path);
       selectedBranchFilter = null;
       clearBranchHighlight();
       selectedHash = null;
@@ -1439,6 +1467,8 @@
             {worktrees}
             {submodules}
             selectedBranch={selectedSidebarBranch}
+            initialState={sidebarState}
+            on:stateChange={(event) => handleSidebarStateChange(event.detail)}
             on:branchSelect={handleBranchSelect}
             on:branchContextMenu={handleBranchContextMenu}
             on:tagContextMenu={handleTagContextMenu}
