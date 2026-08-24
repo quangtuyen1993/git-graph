@@ -293,7 +293,7 @@ export class AIReviewService {
    * runtime, so a model that keeps emitting output is never killed mid-answer.
    */
   private armInactivityTimeout(
-    proc: ReturnType<typeof spawn>,
+    kill: () => void,
     onTimeout: (idleMs: number) => void,
   ): { bump: () => void; clear: () => void } {
     const idleMs = this.getTimeoutMs();
@@ -302,7 +302,10 @@ export class AIReviewService {
     let timer: ReturnType<typeof setTimeout>;
     const arm = () => {
       timer = setTimeout(() => {
-        proc.kill('SIGTERM');
+        // The CLI's own grandchildren keep running (and billing) after the
+        // direct child dies, so the timeout path must kill the whole tree,
+        // not just proc — the same reason a cancel is a tree-kill.
+        kill();
         onTimeout(idleMs);
       }, idleMs);
     };
@@ -322,6 +325,14 @@ export class AIReviewService {
     const resolvedCommand = this.commandPaths.get(command) || command;
     console.log(`[AIReview] Spawning: ${resolvedCommand} ${args.join(' ')}`);
     return new Promise((resolve, reject) => {
+      // A signal that is already aborted before we even spawn must not start
+      // the CLI at all — otherwise a cancel-before-start silently runs (and
+      // pays for) a full review.
+      if (hooks.signal?.aborted) {
+        reject(new ReviewCancelledError());
+        return;
+      }
+
       // detached puts the CLI in its own process group so a cancel reaches the
       // grandchildren these tools spawn, not just the process we started.
       const proc = spawn(resolvedCommand, args, {
@@ -333,7 +344,13 @@ export class AIReviewService {
       let stdout = '';
       let stderr = '';
       let cancelled = false;
+      let sigkillTimer: ReturnType<typeof setTimeout> | undefined;
       const startedAt = Date.now();
+
+      const clearSigkillTimer = () => {
+        if (sigkillTimer) clearTimeout(sigkillTimer);
+        sigkillTimer = undefined;
+      };
 
       const killTree = () => {
         if (proc.pid === undefined) return;
@@ -346,21 +363,27 @@ export class AIReviewService {
         } catch {
           proc.kill('SIGTERM');
         }
-        setTimeout(() => {
+        sigkillTimer = setTimeout(() => {
           try { process.kill(-proc.pid!, 'SIGKILL'); } catch { /* already gone */ }
-        }, 5000).unref();
+        }, 5000);
+        sigkillTimer.unref();
       };
 
       const onAbort = () => {
         cancelled = true;
+        idle.clear();
         killTree();
         reject(new ReviewCancelledError());
       };
       hooks.signal?.addEventListener('abort', onAbort, { once: true });
       const cleanup = () => hooks.signal?.removeEventListener('abort', onAbort);
 
-      const idle = this.armInactivityTimeout(proc, (idleMs) => {
-        cleanup();
+      // The timeout path must kill the whole tree too — it exists for exactly
+      // the same "grandchildren keep running" reason a cancel does. It does
+      // NOT remove the abort listener: killTree() here already stops the
+      // tree, but leaving cancel wired up means a later abort (e.g. a user
+      // pressing Cancel right after a timeout) is never a silent no-op.
+      const idle = this.armInactivityTimeout(killTree, (idleMs) => {
         reject(new Error(
           `${command} produced no output for ${Math.round(idleMs / 1000)}s and was stopped. ` +
           `Raise gitGraphPro.aiReview.timeoutSeconds (0 disables the timeout).`
@@ -370,8 +393,16 @@ export class AIReviewService {
       proc.stdout.on('data', (data: Buffer) => {
         const text = data.toString();
         stdout += text;
-        hooks.onChunk?.(text);
+        // Any output means the model is still working — push the deadline
+        // out before touching caller code, so a throwing onChunk can never
+        // cause a live run to be killed for "no output".
         idle.bump();
+        try {
+          hooks.onChunk?.(text);
+        } catch {
+          // onChunk is caller-supplied (e.g. a webview panel that may have
+          // been disposed) — its failure is not this run's failure.
+        }
       });
       proc.stderr.on('data', (data: Buffer) => { stderr += data.toString(); idle.bump(); });
 
@@ -382,6 +413,7 @@ export class AIReviewService {
 
       proc.on('close', (code) => {
         idle.clear();
+        clearSigkillTimer();
         cleanup();
         if (cancelled) return;
         const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
@@ -395,6 +427,7 @@ export class AIReviewService {
 
       proc.on('error', (err) => {
         idle.clear();
+        clearSigkillTimer();
         cleanup();
         if (cancelled) return;
         reject(new Error(`Failed to run ${command}: ${err.message}`));
