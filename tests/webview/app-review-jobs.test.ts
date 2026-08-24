@@ -6,12 +6,21 @@ vi.mock('../../src/webview/lib/message-bridge', () => ({ bridge: { send, on } })
 
 import App from '../../src/webview/App.svelte';
 
+const SHA_1 = '1'.repeat(40);
+const SHA_2 = '2'.repeat(40);
 const branches = [
   { name: 'main', current: true, hash: 'a'.repeat(40), remote: null, upstream: null, ahead: 0, behind: 0 },
   { name: 'feature', current: false, hash: 'b'.repeat(40), remote: null, upstream: null, ahead: 0, behind: 0 },
 ];
+const nodes = [
+  { hash: SHA_1, abbreviatedHash: SHA_1.slice(0, 7), subject: 'first', author: 'a', authorEmail: '',
+    authorDate: '2026-08-24T00:00:00.000Z', refs: [], row: 0, lane: 0, color: 0, parents: [] },
+  { hash: SHA_2, abbreviatedHash: SHA_2.slice(0, 7), subject: 'second', author: 'a', authorEmail: '',
+    authorDate: '2026-08-24T00:00:00.000Z', refs: [], row: 1, lane: 0, color: 0, parents: [] },
+];
 
-function stub(reviewStartResult: { id: string; cached: boolean } = { id: 'rev-1', cached: false }) {
+function stubApp() {
+  vi.stubGlobal('acquireVsCodeApi', () => ({ postMessage: vi.fn(), getState: () => null, setState: vi.fn() }));
   send.mockImplementation(async (method: string) => {
     switch (method) {
       case 'ping.hello': return { ok: true };
@@ -19,85 +28,72 @@ function stub(reviewStartResult: { id: string; cached: boolean } = { id: 'rev-1'
       case 'git.branches': return branches;
       case 'git.tags': case 'git.stashList': case 'git.worktreeList': case 'git.submoduleList': return [];
       case 'git.status': return { staged: [], unstaged: [], untracked: [], conflicted: [] };
-      case 'graph.build': return { totalRows: 0, maxLane: 0, layoutVersion: 1 };
-      case 'graph.getWindow': return { nodes: [], edges: [], startRow: 0, endRow: 0, maxLane: 0, layoutVersion: 1 };
-      case 'ai.providers': return [{ id: 'claude', name: 'Claude', available: true, group: 'cli' }];
-      case 'ai.compare': return { files: [] };
-      case 'review.start': return reviewStartResult;
+      case 'git.isOnCurrentBranch': return { onBranch: false };
+      case 'graph.build': return { totalRows: 2, maxLane: 0, layoutVersion: 1 };
+      case 'graph.getWindow': return { nodes, edges: [], startRow: 0, endRow: 2, maxLane: 0, layoutVersion: 1 };
+      case 'review.setTarget': return { success: true };
       default: return null;
     }
   });
 }
 
-afterEach(() => { cleanup(); send.mockReset(); on.mockClear(); });
+afterEach(() => { cleanup(); send.mockReset(); on.mockClear(); vi.unstubAllGlobals(); });
 
-// Drives the real path a user takes to reach the review button: right-click a
-// non-current branch (Shift+F10, same as the existing branch-sidebar keyboard
-// context-menu tests), choose "Compare with...", then wait for the review
-// panel to mount with both branches wired up and a provider auto-selected so
-// the "Review Changes" button is actually clickable. No internals are reached
-// into — every step goes through a real DOM event, the same way BranchSidebar
-// and ContextMenu are already exercised elsewhere in this suite.
-async function openReviewPanel() {
-  vi.stubGlobal('acquireVsCodeApi', () => ({ postMessage: vi.fn(), getState: () => null, setState: vi.fn() }));
-  const rendered = render(App);
-  await waitFor(() => expect(rendered.getByRole('button', { name: 'feature' })).toBeInTheDocument());
-
-  await fireEvent.keyDown(rendered.getByRole('button', { name: 'feature' }), { key: 'F10', shiftKey: true });
-  await waitFor(() => expect(rendered.getByRole('menuitem', { name: 'Compare with...' })).toBeInTheDocument());
-  await fireEvent.click(rendered.getByRole('menuitem', { name: 'Compare with...' }));
-
-  await waitFor(() => expect(rendered.getByRole('button', { name: /Review Changes/ })).toBeEnabled());
-  return rendered;
+async function contextMenuOnCommit(rendered: ReturnType<typeof render>, subject: string) {
+  await waitFor(() => expect(rendered.getByText(subject)).toBeInTheDocument());
+  await fireEvent.contextMenu(rendered.getByText(subject));
 }
 
-describe('App review jobs', () => {
-  it('drives the real review UI flow into review.start and never the removed blocking ai.review', async () => {
-    stub({ id: 'rev-1', cached: false });
-    const { getByRole } = await openReviewPanel();
-    const reviewButton = getByRole('button', { name: /Review Changes/ });
+describe('review entry points from the graph', () => {
+  it('branch context "Compare with..." sends review.setTarget with base=clicked, head=current', async () => {
+    stubApp();
+    const rendered = render(App);
+    await waitFor(() => expect(rendered.getByRole('button', { name: 'feature' })).toBeInTheDocument());
 
-    await fireEvent.click(reviewButton);
+    // Shift+F10 opens the context menu via keyboard — the suite's established
+    // pattern for branch rows (see tests/webview/app-sidebar-actions.test.ts).
+    await fireEvent.keyDown(rendered.getByRole('button', { name: 'feature' }), { key: 'F10', shiftKey: true });
+    await waitFor(() => expect(rendered.getByRole('menuitem', { name: 'Compare with...' })).toBeInTheDocument());
+    await fireEvent.click(rendered.getByRole('menuitem', { name: 'Compare with...' }));
 
-    await waitFor(() => expect(send).toHaveBeenCalledWith('review.start', {
-      kind: 'branch',
-      baseRef: 'feature',
-      headRef: 'main',
-      provider: 'claude',
-      model: 'default',
+    await waitFor(() => expect(send).toHaveBeenCalledWith('review.setTarget', {
+      kind: 'branch', baseRef: 'feature', headRef: 'main',
     }));
-    expect(send.mock.calls.map(c => c[0])).not.toContain('ai.review');
-    expect(send.mock.calls.map(c => c[0])).not.toContain('ai.reviewDiff');
-    // Loading kicked in for the still-running job (proves the click actually
-    // did something rather than the assertion above being vacuously true).
-    expect(reviewButton).toHaveTextContent(/Reviewing/);
   });
 
-  it('subscribes to review.changed so a finished run can surface', async () => {
-    stub();
-    vi.stubGlobal('acquireVsCodeApi', () => ({ postMessage: vi.fn(), getState: () => null, setState: vi.fn() }));
-    render(App);
+  it('"Review this commit" sends a commit target', async () => {
+    stubApp();
+    const rendered = render(App);
+    await contextMenuOnCommit(rendered, 'first');
+    await waitFor(() => expect(rendered.getByRole('menuitem', { name: 'Review this commit' })).toBeInTheDocument());
 
-    await waitFor(() => expect(on.mock.calls.map(c => c[0])).toContain('review.changed'));
+    await fireEvent.click(rendered.getByRole('menuitem', { name: 'Review this commit' }));
+
+    await waitFor(() => expect(send).toHaveBeenCalledWith('review.setTarget', {
+      kind: 'commit', headRef: SHA_1,
+    }));
   });
 
-  it('clears loading immediately on a cache hit, since no review.changed will ever fire for it', async () => {
-    stub({ id: 'rev-cached', cached: true });
-    const { getByRole } = await openReviewPanel();
-    const reviewButton = getByRole('button', { name: /Review Changes/ });
+  it('select-then-compare sends a range target and clears the selection', async () => {
+    stubApp();
+    const rendered = render(App);
 
-    await fireEvent.click(reviewButton);
+    await contextMenuOnCommit(rendered, 'first');
+    await waitFor(() => expect(rendered.getByRole('menuitem', { name: 'Select for compare' })).toBeInTheDocument());
+    await fireEvent.click(rendered.getByRole('menuitem', { name: 'Select for compare' }));
 
-    await waitFor(() => expect(send).toHaveBeenCalledWith('review.start', expect.objectContaining({
-      kind: 'branch',
-      baseRef: 'feature',
-      headRef: 'main',
-    })));
-    // A cache hit short-circuits on the host with no status transition, so
-    // review.changed is never emitted for this id (the mocked `on` here never
-    // invokes its callback either way). If aiReviewLoading could only be
-    // cleared by that event, the button would say "Reviewing..." forever.
-    await waitFor(() => expect(reviewButton).toHaveTextContent('🤖 Review Changes'));
-    expect(reviewButton).toBeEnabled();
+    await contextMenuOnCommit(rendered, 'second');
+    const label = `Compare with selected ${SHA_1.slice(0, 7)}`;
+    await waitFor(() => expect(rendered.getByRole('menuitem', { name: label })).toBeInTheDocument());
+    await fireEvent.click(rendered.getByRole('menuitem', { name: label }));
+
+    await waitFor(() => expect(send).toHaveBeenCalledWith('review.setTarget', {
+      kind: 'range', baseRef: SHA_1, headRef: SHA_2,
+    }));
+
+    // Once the pair has been sent the marker is cleared: the commit menu goes
+    // back to offering "Select for compare".
+    await contextMenuOnCommit(rendered, 'first');
+    await waitFor(() => expect(rendered.getByRole('menuitem', { name: 'Select for compare' })).toBeInTheDocument());
   });
 });

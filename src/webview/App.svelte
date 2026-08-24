@@ -203,6 +203,9 @@
   let contextMenuY = 0;
   let contextMenuItems: MenuItem[] = [];
   let contextMenuTarget: { type: 'commit' | 'branch' | 'working'; value: string } | null = null;
+  // Commit được đánh dấu bằng "Select for compare", chờ ghép cặp range.
+  // Chỉ bị thay khi chọn commit khác, bị xoá khi cặp đã gửi đi.
+  let selectedForCompare: string | null = null;
   const mutationGate = new MutationGate();
   let mutationProgress: string | null = null;
 
@@ -627,6 +630,11 @@
       { label: 'Reset hard to here', action: 'resetHard', danger: true, disabled: !onCurrentBranch },
       { label: '', action: '', divider: true },
       { label: 'Copy SHA', action: 'copySha' },
+      { label: '', action: '', divider: true },
+      { label: 'Review this commit', action: 'reviewCommit' },
+      selectedForCompare && selectedForCompare !== hash
+        ? { label: `Compare with selected ${selectedForCompare.slice(0, 7)}`, action: 'compareWithSelected' }
+        : { label: 'Select for compare', action: 'selectForCompare' },
     ];
     contextMenuVisible = true;
   }
@@ -1067,6 +1075,18 @@
             }
             break;
           }
+          case 'reviewCommit':
+            await bridge.send('review.setTarget', { kind: 'commit', headRef: hash });
+            break;
+          case 'selectForCompare':
+            selectedForCompare = hash;
+            break;
+          case 'compareWithSelected':
+            if (selectedForCompare) {
+              await bridge.send('review.setTarget', { kind: 'range', baseRef: selectedForCompare, headRef: hash });
+              selectedForCompare = null;
+            }
+            break;
           case 'copySha':
             await navigator.clipboard.writeText(hash);
             break;
@@ -1255,16 +1275,25 @@
             // Unused — replaced by compareBranch
             break;
           case 'compareBranch': {
-            // Compare: base = right-clicked branch (merge target), head = current branch (your changes)
             const currentBr = branches.find(b => b.current);
-            const head = currentBr && currentBr.name !== branchName ? currentBr.name : '';
-            compareBranches(branchName, head);
+            let base = branchName;
+            let head = currentBr?.name ?? '';
+            if (!head || head === branchName) {
+              // Right-click chính branch hiện tại: chọn base qua QuickPick, head = branch đó.
+              const picked = await bridge.send('ui.pickBranch', {
+                exclude: branchName, title: 'Compare with...', placeholder: 'Select the base branch',
+              }) as string | null;
+              if (!picked) break;
+              base = picked;
+              head = branchName;
+            }
+            await bridge.send('review.setTarget', { kind: 'branch', baseRef: base, headRef: head });
             break;
           }
         }
       }
 
-      return action !== 'copySha' && action !== 'copyShas';
+      return action !== 'copySha' && action !== 'copyShas' && action !== 'reviewCommit' && action !== 'selectForCompare' && action !== 'compareWithSelected';
     } finally {
       contextMenuTarget = null;
     }
@@ -1521,6 +1550,7 @@
                 style="top: {(node.row - graphWindow.startRow + currentStartRow) * ROW_HEIGHT + (hasWorkingChanges ? ROW_HEIGHT : 0)}px; --graph-col-width: {graphColWidth}px; --lane-rgb: {getColorRgb(node.color)}"
                 class:selected={selectedHash === node.hash || selectedHashes.has(node.hash)}
                 class:branch-focused={focusedBranchHash === node.hash}
+                class:compare-selected={selectedForCompare === node.hash}
                 on:click={(e) => handleRowClick(node.hash, e)}
                 on:keydown={(e) => { if (e.key === 'Enter') handleRowClick(node.hash); }}
                 on:contextmenu={(e) => handleRowContextMenu(e, node.hash)}
@@ -1924,6 +1954,11 @@
   .commit-row.selected {
     color: var(--vscode-list-activeSelectionForeground, #ffffff);
     box-shadow: inset 2px 0 0 0 rgb(var(--lane-rgb));
+  }
+
+  .commit-row.compare-selected {
+    outline: 1px dashed var(--vscode-focusBorder);
+    outline-offset: -1px;
   }
 
   .commit-row.branch-focused {
