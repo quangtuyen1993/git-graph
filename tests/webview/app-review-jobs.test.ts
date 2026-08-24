@@ -98,13 +98,4 @@ describe('App review jobs', () => {
     await waitFor(() => expect(reviewButton).toHaveTextContent('🤖 Review Changes'));
     expect(reviewButton).toBeEnabled();
   });
-
-  it('holds no review result state that a commit click could destroy', async () => {
-    stub();
-    vi.stubGlobal('acquireVsCodeApi', () => ({ postMessage: vi.fn(), getState: () => null, setState: vi.fn() }));
-    const { container } = render(App);
-    await waitFor(() => expect(send).toHaveBeenCalledWith('repo.list'));
-
-    expect(container.querySelector('.review-result')).toBeNull();
-  });
 });

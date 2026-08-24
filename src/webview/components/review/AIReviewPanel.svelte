@@ -100,8 +100,16 @@
   $: totalAdditions = compareFiles?.reduce((sum, f) => sum + f.additions, 0) ?? 0;
   $: totalDeletions = compareFiles?.reduce((sum, f) => sum + f.deletions, 0) ?? 0;
 
+  // The hint is only true while a job is genuinely queued: a `review.start`
+  // failure (e.g. the empty-diff refusal) surfaces as `error`, which must
+  // retract the hint rather than leave it sitting next to the failure. A new
+  // comparison also retracts it, so re-running doesn't leave a stale pointer
+  // to a job that finished (or failed) long ago.
+  $: if (error) reviewStarted = false;
+
   function handleCompare() {
     if (!sourceBranch || !targetBranch) return;
+    reviewStarted = false;
     dispatch('compare', { sourceBranch, targetBranch });
   }
 

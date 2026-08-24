@@ -29,8 +29,17 @@ function renderPanel(props: Record<string, unknown> = {}) {
 describe('AIReviewPanel', () => {
   afterEach(() => cleanup());
 
-  it('holds no review result markup — a finished review lives only in the Code Review panel', () => {
-    const { container } = renderPanel();
+  it('renders no review-result surface even if a reviewResult-shaped value is forced onto the instance', () => {
+    // The component no longer declares a `reviewResult` prop, so this value is
+    // inert — but forcing it onto the instance is exactly what would have hit
+    // the old `{#if reviewResult}` block if the removal were incomplete. A
+    // plain `renderPanel()` with nothing forced would pass whether or not the
+    // markup was actually removed (App itself never passes a truthy
+    // reviewResult, before or after this task), so it proves nothing on its
+    // own — this is the one that is actually sensitive to the removal.
+    const { container } = renderPanel({
+      reviewResult: { content: 'Looks good.', provider: 'claude', model: 'sonnet', timestamp: '2026-08-24T00:00:00.000Z' },
+    });
     expect(container.querySelector('.review-result')).toBeNull();
   });
 
@@ -67,6 +76,31 @@ describe('AIReviewPanel', () => {
     });
     expect(container.querySelector('.review-started-hint')?.textContent)
       .toContain('Started — see the Code Review panel.');
+  });
+
+  it('hides the started hint once a review.start failure surfaces as an error', async () => {
+    const { getByRole, container, component } = renderPanel({ initialProvider: 'claude' });
+
+    await fireEvent.click(getByRole('button', { name: /Review Changes/ }));
+    expect(container.querySelector('.review-started-hint')).not.toBeNull();
+
+    // Mirrors what App.svelte does on a review.start rejection: it sets
+    // aiReviewError, which flows into this prop. Nothing was actually queued,
+    // so pointing the user at the Code Review panel would be wrong.
+    component.$set({ error: 'Nothing to review — no changes between these branches' });
+    await Promise.resolve();
+
+    expect(container.querySelector('.review-started-hint')).toBeNull();
+  });
+
+  it('clears the started hint once a new comparison begins', async () => {
+    const { getByRole, container } = renderPanel({ initialProvider: 'claude' });
+
+    await fireEvent.click(getByRole('button', { name: /Review Changes/ }));
+    expect(container.querySelector('.review-started-hint')).not.toBeNull();
+
+    await fireEvent.click(getByRole('button', { name: /Compare/ }));
+    expect(container.querySelector('.review-started-hint')).toBeNull();
   });
 
   it('explains an empty comparison instead of showing a blank list', () => {
