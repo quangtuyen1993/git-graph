@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { MessageRouter } from './controllers/message-router';
+import { RouterRegistry } from './controllers/router-registry';
 import { RepositorySession, type RepositoryInfo } from './controllers/repository-session';
 import { GitGraphWebviewProvider } from './providers/webview-provider';
 import { GitService } from './services/git.service';
@@ -74,6 +75,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // currently attached. Assigned by createSession below and cleared on dispose.
   let activeSession: RepositorySession | undefined;
   let activeRouter: MessageRouter | undefined;
+  const routers = new RouterRegistry();
 
   // Repository identity for the review side. Deliberately NOT tied to the
   // graph webview: the reviews view activates on its own (onView:...reviews)
@@ -98,7 +100,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // session's in-flight run rather than falling back to the store's
   // persisted status.
   const reviewRunner = new ReviewRunner(reviewStore, aiReview, (_repoId, id) => {
-    activeRouter?.sendEvent('review.changed', { id });
+    routers.broadcast('review.changed', { id });
     reviewTree?.refresh();            // undefined until Task 11 registers the view
     void syncTicker?.();              // undefined until Task 11 adds the clock
   });
@@ -139,6 +141,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     activeSession = session;
     activeRouter = router;
+    const detachRouter = routers.attach(router);
 
     let gitWatcher: vscode.FileSystemWatcher | undefined;
     let debounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -441,6 +444,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       visibilitySubscription?.dispose();
       if (activeSession === session) activeSession = undefined;
       if (activeRouter === router) activeRouter = undefined;
+      detachRouter();
       router.dispose();
     };
 
