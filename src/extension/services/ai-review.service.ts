@@ -146,12 +146,36 @@ export class AIReviewService {
         throw new Error(`Unknown AI provider: ${request.provider}`);
     }
 
+    const rateLimitMsg = this.detectRateLimit(content);
+    if (rateLimitMsg) {
+      throw new Error(`AI provider rate-limited: ${rateLimitMsg}`);
+    }
+
     return {
       content: content.replace(/\u0000/g, '').replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F]/g, ''),
       provider: request.provider,
       model,
       timestamp: new Date().toISOString(),
     };
+  }
+
+  /**
+   * Short CLI outputs that match rate-limit patterns are not reviews.
+   * A real review is always longer than 500 chars; a quota message is a single line.
+   */
+  private detectRateLimit(output: string): string | null {
+    if (output.length > 500) return null;
+    const patterns = [
+      /session limit/i,
+      /rate limit/i,
+      /too many requests/i,
+      /quota exceeded/i,
+      /resets? \d/i,
+    ];
+    for (const pattern of patterns) {
+      if (pattern.test(output)) return output.trim();
+    }
+    return null;
   }
 
   private async runClaude(input: string, model: string, hooks: SpawnHooks): Promise<string> {

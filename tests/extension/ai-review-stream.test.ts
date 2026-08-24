@@ -331,3 +331,39 @@ describe('AIReviewService streaming', () => {
     log.mockRestore();
   });
 });
+
+describe('rate-limit detection', () => {
+  it('rejects when CLI returns a short rate-limit message', async () => {
+    const proc = fakeProcess();
+    hoisted.spawn.mockReturnValue(proc);
+
+    const service = new AIReviewService();
+    const promise = service.review({
+      diff: 'd', provider: 'claude', payloadText: 'p',
+    });
+
+    const rateLimitOutput = "You've hit your session limit · resets 2:40am (Asia/Saigon)\n";
+    proc.stdout.emit('data', Buffer.from(rateLimitOutput));
+    proc.emit('close', 0);
+
+    await expect(promise).rejects.toThrow(/rate-limited/);
+  });
+
+  it('does not flag a long review that mentions rate limit', async () => {
+    const proc = fakeProcess();
+    hoisted.spawn.mockReturnValue(proc);
+
+    const service = new AIReviewService();
+    const promise = service.review({
+      diff: 'd', provider: 'claude', payloadText: 'p',
+    });
+
+    // A 600+ char output that happens to mention "rate limit" should pass through
+    const longReview = 'A'.repeat(500) + ' This code may trigger a rate limit if called too often. ' + 'B'.repeat(100);
+    proc.stdout.emit('data', Buffer.from(longReview));
+    proc.emit('close', 0);
+
+    const result = await promise;
+    expect(result.content).toContain('rate limit');
+  });
+});
