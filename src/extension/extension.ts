@@ -1,10 +1,7 @@
 import * as vscode from 'vscode';
 import { MessageRouter } from './controllers/message-router';
 import { RepositorySession, type RepositoryInfo } from './controllers/repository-session';
-import {
-  GitGraphWebviewProvider,
-  type PanelRequest,
-} from './providers/webview-provider';
+import { GitGraphWebviewProvider } from './providers/webview-provider';
 import { GitService } from './services/git.service';
 import { buildReviewPayload } from './services/review-payload';
 
@@ -49,19 +46,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const aiReview = new AIReviewService();
   let nextPanelSessionId = 0;
 
-  function createPanelSession(panel: vscode.WebviewPanel, request: PanelRequest): void {
+  function createPanelSession(panel: vscode.WebviewPanel): void {
     const panelSessionId = ++nextPanelSessionId;
     let virtualDocumentRequestSequence = 0;
     const router = new MessageRouter();
-    const session = request.kind === 'root'
-      ? new RepositorySession({
-          initialRepository: repos[0] ?? null,
-          repositories: repos,
-        })
-      : new RepositorySession({
-          initialRepository: { name: request.repoName, path: request.repoPath },
-          repositories: [{ name: request.repoName, path: request.repoPath }],
-        });
+    const session = new RepositorySession({
+      initialRepository: repos[0] ?? null,
+      repositories: repos,
+    });
 
     let gitWatcher: vscode.FileSystemWatcher | undefined;
     let debounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -107,17 +99,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }
 
-    router.register('repo', async (method: string, params: unknown) => {
-      if (request.kind === 'root' && method === 'repo.switch') {
-        const switchRepository = async () => {
-          const result = await session.handleRepo(method, params);
-          await bindGitWatcher();
-          return result;
-        };
-        const result = repositorySwitchQueue.then(switchRepository, switchRepository);
-        repositorySwitchQueue = result.then(() => undefined, () => undefined);
+    /**
+     * Every repository change goes through here: the switch itself, then the
+     * watcher rebind. Queued, because two switches racing would leave the
+     * watcher pointing at the loser's .git directory.
+     */
+    function queueRepositorySwitch(params: unknown): Promise<unknown> {
+      const run = async () => {
+        const result = await session.handleRepo('repo.switch', params);
+        await bindGitWatcher();
         return result;
-      }
+      };
+      const result = repositorySwitchQueue.then(run, run);
+      repositorySwitchQueue = result.then(() => undefined, () => undefined);
+      return result;
+    }
+
+    router.register('repo', async (method: string, params: unknown) => {
+      if (method === 'repo.switch') return queueRepositorySwitch(params);
       return session.handleRepo(method, params);
     });
     router.register('git', (method: string, params: unknown) => session.handleGit(method, params));
@@ -305,8 +304,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           const gitService = session.getGitService();
           if (!gitService) throw new Error('No git repository found');
           const submodule = await gitService.resolveSubmodule(p.path as string);
-          await webviewProvider.openRepositoryPanel(submodule.absolutePath, submodule.name);
-          return { success: true };
+          const added = await session.addRepository({
+            name: submodule.name,
+            path: submodule.absolutePath,
+          });
+          return queueRepositorySwitch({ path: added.path });
         }
         default:
           throw new Error(`Unknown method: ${method}`);
@@ -402,7 +404,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   webviewProvider = new GitGraphWebviewProvider(
     context.extensionUri,
-    (panel, request) => createPanelSession(panel, request),
+    (panel) => createPanelSession(panel),
   );
 
   const openCommand = vscode.commands.registerCommand('gitGraphPro.open', () => {

@@ -356,147 +356,27 @@ describe('extension panel sessions', () => {
     expect(events).toEqual([]);
   });
 
-  it('resolves a relative submodule path in the panel session before opening its repository panel', async () => {
+  it('switches the session to a submodule instead of opening another panel', async () => {
     const panel = await activateAndOpenRoot();
-    await vi.waitFor(() => expect(hostMocks.createFileSystemWatcher).toHaveBeenCalledTimes(1));
 
     panel.receive({
-      id: 'open-submodule',
-      type: 'request',
-      method: 'ui.openSubmodule',
-      params: { path: 'packages/sdk', absolutePath: '/forged/sdk' },
-    });
-
-    await vi.waitFor(() => expect(hostMocks.createWebviewPanel).toHaveBeenCalledTimes(2));
-    expect(hostMocks.resolveSubmodule).toHaveBeenCalledWith('/repo/root', 'packages/sdk');
-    expect(hostMocks.createWebviewPanel.mock.calls[1][1]).toBe('Git Graph: sdk');
-    await vi.waitFor(() => expect(panel.webview.postMessage).toHaveBeenCalledWith({
-      id: 'open-submodule',
-      type: 'response',
-      result: { success: true },
-    }));
-  });
-
-  it('keeps child repo and Git RPCs fixed to the canonical child repository', async () => {
-    const rootPanel = await activateAndOpenRoot();
-    await vi.waitFor(() => expect(hostMocks.createFileSystemWatcher).toHaveBeenCalledTimes(1));
-    rootPanel.receive({
-      id: 'open-submodule',
+      id: 'sub',
       type: 'request',
       method: 'ui.openSubmodule',
       params: { path: 'packages/sdk' },
     });
-    await vi.waitFor(() => expect(hostMocks.createWebviewPanel).toHaveBeenCalledTimes(2));
-    const childPanel = hostMocks.createWebviewPanel.mock.results[1].value as FakePanel;
 
-    childPanel.receive({ id: 'child-list', type: 'request', method: 'repo.list', params: {} });
-    childPanel.receive({ id: 'child-branches', type: 'request', method: 'git.branches', params: {} });
-    childPanel.receive({
-      id: 'child-switch',
-      type: 'request',
-      method: 'repo.switch',
-      params: { path: '/repo/other' },
-    });
+    const opened = await responseFor(panel, 'sub');
+    expect(opened.result).toMatchObject({ success: true, name: 'sdk', path: '/real/sdk' });
+    expect(hostMocks.createWebviewPanel).toHaveBeenCalledTimes(1);
 
-    expect(await responseFor(childPanel, 'child-list')).toMatchObject({
-      result: { repos: [{ name: 'sdk', path: '/real/sdk', active: true }] },
-    });
-    expect(await responseFor(childPanel, 'child-branches')).toMatchObject({
-      result: [{ name: '/real/sdk' }],
-    });
-    expect(await responseFor(childPanel, 'child-switch')).toMatchObject({
-      error: { message: expect.stringContaining('Repo not found') },
-    });
-  });
+    panel.receive({ id: 'list', type: 'request', method: 'repo.list', params: {} });
 
-  it('isolates child watcher events and disposal from the root panel session', async () => {
-    vi.useFakeTimers();
-    const rootPanel = await activateAndOpenRoot();
-    await vi.waitFor(() => expect(hostMocks.createFileSystemWatcher).toHaveBeenCalledTimes(1));
-    rootPanel.receive({
-      id: 'open-submodule',
-      type: 'request',
-      method: 'ui.openSubmodule',
-      params: { path: 'packages/sdk' },
-    });
+    const listed = await responseFor(panel, 'list');
+    expect((listed.result as { repos: Array<{ name: string; path: string; active: boolean }> }).repos)
+      .toContainEqual({ name: 'sdk', path: '/real/sdk', active: true });
+
     await vi.waitFor(() => expect(hostMocks.createFileSystemWatcher).toHaveBeenCalledTimes(2));
-    const childPanel = hostMocks.createWebviewPanel.mock.results[1].value as FakePanel;
-    const rootWatcher = hostMocks.createFileSystemWatcher.mock.results[0].value;
-    const childWatcher = hostMocks.createFileSystemWatcher.mock.results[1].value;
-
-    childWatcher.fireChange();
-    await vi.advanceTimersByTimeAsync(500);
-
-    expect(rootPanel.webview.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'event' }));
-    expect(childPanel.webview.postMessage).toHaveBeenCalledWith({
-      type: 'event',
-      event: 'git.refsChanged',
-      data: undefined,
-    });
-
-    childPanel.disposePanel();
-    expect(childWatcher.dispose).toHaveBeenCalledTimes(1);
-    expect(rootWatcher.dispose).not.toHaveBeenCalled();
-
-    rootPanel.receive({ id: 'root-branches', type: 'request', method: 'git.branches', params: {} });
-    expect(await responseFor(rootPanel, 'root-branches')).toMatchObject({
-      result: [{ name: '/repo/root' }],
-    });
-  });
-
-  it.each([
-    {
-      method: 'ui.openDiff',
-      params: { path: 'src/shared.ts', hash: 'commit', status: 'modified' },
-    },
-    {
-      method: 'ui.compareDiff',
-      params: {
-        path: 'src/shared.ts',
-        sourceBranch: 'feature',
-        targetBranch: 'main',
-        status: 'modified',
-      },
-    },
-  ])('keeps two panel sessions\' $method virtual documents distinct at the same clock tick', async ({ method, params }) => {
-    const rootPanel = await activateAndOpenRoot();
-    await vi.waitFor(() => expect(hostMocks.createFileSystemWatcher).toHaveBeenCalledTimes(1));
-    rootPanel.receive({
-      id: 'open-submodule',
-      type: 'request',
-      method: 'ui.openSubmodule',
-      params: { path: 'packages/sdk' },
-    });
-    await vi.waitFor(() => expect(hostMocks.createWebviewPanel).toHaveBeenCalledTimes(2));
-    const childPanel = hostMocks.createWebviewPanel.mock.results[1].value as FakePanel;
-    const now = vi.spyOn(Date, 'now').mockReturnValue(1234);
-
-    try {
-      rootPanel.receive({ id: 'root-diff', type: 'request', method, params });
-      childPanel.receive({ id: 'child-diff', type: 'request', method, params });
-      await responseFor(rootPanel, 'root-diff');
-      await responseFor(childPanel, 'child-diff');
-
-      const diffCalls = hostMocks.executeCommand.mock.calls
-        .filter(([command]) => command === 'vscode.diff');
-      expect(diffCalls).toHaveLength(2);
-      const [rootLeft, rootRight] = diffCalls[0].slice(1, 3) as Array<{ toString(): string }>;
-      const [childLeft, childRight] = diffCalls[1].slice(1, 3) as Array<{ toString(): string }>;
-      expect([rootLeft.toString(), rootRight.toString()])
-        .not.toEqual([childLeft.toString(), childRight.toString()]);
-      expect(rootLeft.toString()).toContain('git-graph-pro-diff:');
-      expect(childLeft.toString()).toContain('git-graph-pro-diff:');
-
-      const provider = hostMocks.registerTextDocumentContentProvider.mock.calls[0][1] as {
-        provideTextDocumentContent(uri: { toString(): string }): string;
-      };
-      expect(provider.provideTextDocumentContent(rootLeft)).toContain('/repo/root:');
-      expect(provider.provideTextDocumentContent(rootRight)).toContain('/repo/root:');
-      expect(provider.provideTextDocumentContent(childLeft)).toContain('/real/sdk:');
-      expect(provider.provideTextDocumentContent(childRight)).toContain('/real/sdk:');
-    } finally {
-      now.mockRestore();
-    }
   });
 
   it('keeps the Open File action by using the active repository file for a HEAD diff', async () => {
@@ -515,33 +395,5 @@ describe('extension panel sessions', () => {
       .find(([command]) => command === 'vscode.diff')!;
     expect(parentUri.toString()).toContain('git-graph-pro-diff:');
     expect(currentUri.toString()).toBe('/repo/root/src/shared.ts');
-  });
-
-  it('keeps persisted UI state available through every panel session', async () => {
-    const rootPanel = await activateAndOpenRoot();
-    rootPanel.receive({
-      id: 'set-state',
-      type: 'request',
-      method: 'ui.setState',
-      params: { key: 'aiReview.provider', value: 'codex' },
-    });
-    await responseFor(rootPanel, 'set-state');
-
-    rootPanel.receive({
-      id: 'open-submodule',
-      type: 'request',
-      method: 'ui.openSubmodule',
-      params: { path: 'packages/sdk' },
-    });
-    await vi.waitFor(() => expect(hostMocks.createWebviewPanel).toHaveBeenCalledTimes(2));
-    const childPanel = hostMocks.createWebviewPanel.mock.results[1].value as FakePanel;
-    childPanel.receive({
-      id: 'get-state',
-      type: 'request',
-      method: 'ui.getState',
-      params: { key: 'aiReview.provider' },
-    });
-
-    expect(await responseFor(childPanel, 'get-state')).toMatchObject({ result: 'codex' });
   });
 });

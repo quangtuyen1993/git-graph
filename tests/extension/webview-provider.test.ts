@@ -53,60 +53,26 @@ describe('GitGraphWebviewProvider', () => {
     vscodeMocks.createWebviewPanel.mockImplementation(() => createFakePanel());
   });
 
-  it('reuses the root panel without conflating it with repository panels', async () => {
+  it('reuses the single panel and rebuilds it after disposal', async () => {
     const createSession = vi.fn();
     const provider = new GitGraphWebviewProvider(
       { toString: () => '/extension' } as never,
       createSession,
-      async (repoPath) => repoPath,
     );
 
-    const rootA = provider.openPanel() as unknown as FakePanel;
-    const rootB = provider.openPanel() as unknown as FakePanel;
-    const child = await provider.openRepositoryPanel('/real/sdk', 'sdk') as unknown as FakePanel;
+    const first = provider.openPanel() as unknown as FakePanel;
+    const second = provider.openPanel() as unknown as FakePanel;
 
-    expect(rootB).toBe(rootA);
-    expect(rootA.reveal).toHaveBeenCalledTimes(1);
-    expect(child).not.toBe(rootA);
-    expect(createSession).toHaveBeenCalledWith(rootA, { kind: 'root' });
-    expect(createSession).toHaveBeenCalledWith(child, {
-      kind: 'repository',
-      repoPath: '/real/sdk',
-      repoName: 'sdk',
-    });
-    expect(rootA.iconPath).toBeDefined();
-    expect(child.iconPath).toBeDefined();
-
-    child.disposePanel();
-
-    expect(provider.openPanel()).toBe(rootA);
-    expect(rootA.reveal).toHaveBeenCalledTimes(2);
-  });
-
-  it('deduplicates repository panels by canonical path and forgets disposed panels', async () => {
-    const createSession = vi.fn();
-    const provider = new GitGraphWebviewProvider(
-      { toString: () => '/extension' } as never,
-      createSession,
-      async (repoPath) => repoPath === '/alias/sdk' ? '/real/sdk' : repoPath,
-    );
-
-    const childA = await provider.openRepositoryPanel('/alias/sdk', 'sdk') as unknown as FakePanel;
-    const childB = await provider.openRepositoryPanel('/real/sdk', 'sdk') as unknown as FakePanel;
-
-    expect(childB).toBe(childA);
-    expect(childA.reveal).toHaveBeenCalledTimes(1);
+    expect(second).toBe(first);
+    expect(first.reveal).toHaveBeenCalledTimes(1);
     expect(createSession).toHaveBeenCalledTimes(1);
-    expect(createSession).toHaveBeenCalledWith(childA, {
-      kind: 'repository',
-      repoPath: '/real/sdk',
-      repoName: 'sdk',
-    });
+    expect(createSession).toHaveBeenCalledWith(first);
+    expect(first.iconPath).toBeDefined();
 
-    childA.disposePanel();
-    const reopened = await provider.openRepositoryPanel('/real/sdk', 'sdk') as unknown as FakePanel;
+    first.disposePanel();
+    const rebuilt = provider.openPanel() as unknown as FakePanel;
 
-    expect(reopened).not.toBe(childA);
+    expect(rebuilt).not.toBe(first);
     expect(createSession).toHaveBeenCalledTimes(2);
   });
 });
