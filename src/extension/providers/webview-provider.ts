@@ -1,54 +1,43 @@
 import * as vscode from 'vscode';
+import type { WebviewHost } from '../types/webview-host.types';
 
-export type CreatePanelSession = (panel: vscode.WebviewPanel) => void;
+export type CreateSession = (host: WebviewHost) => () => void;
 
-export class GitGraphWebviewProvider {
-  private rootPanel: vscode.WebviewPanel | undefined;
+export class GitGraphWebviewProvider implements vscode.WebviewViewProvider {
+  public static readonly viewType = 'gitGraphPro.graph';
+
+  private disposeSession: (() => void) | undefined;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
-    private readonly createPanelSession: CreatePanelSession,
+    private readonly createSession: CreateSession,
   ) {}
 
-  public openPanel(): vscode.WebviewPanel {
-    if (this.rootPanel) {
-      this.rootPanel.reveal();
-      return this.rootPanel;
-    }
+  /**
+   * Called again every time the user hides and re-shows the view, so the
+   * previous session must go first: otherwise its file watcher survives and
+   * every hide/show doubles the refresh traffic.
+   */
+  public resolveWebviewView(view: vscode.WebviewView): void {
+    this.disposeSession?.();
+    this.disposeSession = undefined;
 
-    const panel = this.createPanel('Git Graph Pro');
-    this.rootPanel = panel;
-    this.createPanelSession(panel);
-
-    panel.onDidDispose(() => {
-      if (this.rootPanel === panel) this.rootPanel = undefined;
-    });
-
-    return panel;
-  }
-
-  private createPanel(title: string): vscode.WebviewPanel {
-    const panel = vscode.window.createWebviewPanel(
-      'gitGraphPro',
-      title,
-      vscode.ViewColumn.One,
-      {
-        enableScripts: true,
-        localResourceRoots: [
-          vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview'),
-          vscode.Uri.joinPath(this.extensionUri, 'resources')
-        ],
-        retainContextWhenHidden: true
-      }
-    );
-
-    panel.iconPath = {
-      light: vscode.Uri.joinPath(this.extensionUri, 'resources', 'icon.svg'),
-      dark: vscode.Uri.joinPath(this.extensionUri, 'resources', 'icon.svg'),
+    view.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [
+        vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview'),
+        vscode.Uri.joinPath(this.extensionUri, 'resources'),
+      ],
     };
+    view.webview.html = this.getHtmlContent(view.webview);
 
-    panel.webview.html = this.getHtmlContent(panel.webview);
-    return panel;
+    const dispose = this.createSession(view);
+    this.disposeSession = dispose;
+
+    view.onDidDispose(() => {
+      if (this.disposeSession === dispose) this.disposeSession = undefined;
+      dispose();
+    });
   }
 
   private getHtmlContent(webview: vscode.Webview): string {

@@ -9,6 +9,7 @@ const hostMocks = vi.hoisted(() => ({
   getParents: vi.fn(),
   gitDirectory: vi.fn(),
   registerTextDocumentContentProvider: vi.fn(),
+  registerWebviewViewProvider: vi.fn(),
   resolveSubmodule: vi.fn(),
   registerCommand: vi.fn(),
   showFile: vi.fn(),
@@ -43,6 +44,7 @@ vi.mock('vscode', () => ({
   },
   window: {
     createWebviewPanel: hostMocks.createWebviewPanel,
+    registerWebviewViewProvider: hostMocks.registerWebviewViewProvider,
     showInputBox: vi.fn(),
     showQuickPick: vi.fn(),
     showWarningMessage: hostMocks.showWarningMessage,
@@ -118,12 +120,24 @@ interface FakePanel {
   disposePanel(): void;
 }
 
-function fakePanel(): FakePanel {
+interface FakeView {
+  webview: FakePanel['webview'] & { options: unknown };
+  visible: boolean;
+  onDidDispose(callback: () => void): { dispose(): void };
+  onDidChangeVisibility(callback: () => void): { dispose(): void };
+  receive(message: Request): void;
+  setVisible(next: boolean): void;
+  disposeView(): void;
+}
+
+function fakeView(visible = true): FakeView {
   const disposalCallbacks: Array<() => void> = [];
+  const visibilityCallbacks: Array<() => void> = [];
   let receiveMessage: ((message: Request) => void) | undefined;
-  return {
+  const view: FakeView = {
     webview: {
       html: '',
+      options: undefined,
       cspSource: 'test-csp',
       asWebviewUri: (uri) => uri,
       onDidReceiveMessage(callback) {
@@ -132,18 +146,27 @@ function fakePanel(): FakePanel {
       },
       postMessage: vi.fn(),
     },
-    reveal: vi.fn(),
+    visible,
     onDidDispose(callback) {
       disposalCallbacks.push(callback);
+      return { dispose: vi.fn() };
+    },
+    onDidChangeVisibility(callback) {
+      visibilityCallbacks.push(callback);
       return { dispose: vi.fn() };
     },
     receive(message) {
       receiveMessage?.(message);
     },
-    disposePanel() {
+    setVisible(next) {
+      view.visible = next;
+      for (const callback of visibilityCallbacks) callback();
+    },
+    disposeView() {
       for (const callback of disposalCallbacks) callback();
     },
   };
+  return view;
 }
 
 function fakeWatcher() {
@@ -171,7 +194,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-async function responseFor(panel: FakePanel, id: string): Promise<Record<string, unknown>> {
+async function responseFor(panel: FakePanel | FakeView, id: string): Promise<Record<string, unknown>> {
   let response: Record<string, unknown> | undefined;
   await vi.waitFor(() => {
     response = panel.webview.postMessage.mock.calls
@@ -182,7 +205,7 @@ async function responseFor(panel: FakePanel, id: string): Promise<Record<string,
   return response!;
 }
 
-async function activateAndOpenRoot(): Promise<FakePanel> {
+async function activateAndResolveView(view: FakeView = fakeView()): Promise<FakeView> {
   const subscriptions: Array<{ dispose(): unknown }> = [];
   await activate({
     extensionUri: { toString: () => '/extension' },
@@ -194,12 +217,15 @@ async function activateAndOpenRoot(): Promise<FakePanel> {
     },
     subscriptions,
   } as never);
-  const open = hostMocks.registerCommand.mock.calls.find(([command]) => command === 'gitGraphPro.open')?.[1];
-  open();
-  return hostMocks.createWebviewPanel.mock.results.at(-1)?.value as FakePanel;
+  const provider = hostMocks.registerWebviewViewProvider.mock.calls
+    .find(([viewType]) => viewType === 'gitGraphPro.graph')?.[1] as {
+      resolveWebviewView(view: unknown): void;
+    };
+  provider.resolveWebviewView(view);
+  return view;
 }
 
-describe('extension panel sessions', () => {
+describe('extension view sessions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     hostMocks.globalState.clear();
@@ -220,7 +246,6 @@ describe('extension panel sessions', () => {
       absolutePath: '/real/sdk',
       state: 'clean',
     });
-    hostMocks.createWebviewPanel.mockImplementation(() => fakePanel());
     hostMocks.createFileSystemWatcher.mockImplementation(() => fakeWatcher());
     hostMocks.registerTextDocumentContentProvider.mockImplementation((_scheme, provider) => {
       return { dispose: vi.fn(), provider };
@@ -231,8 +256,8 @@ describe('extension panel sessions', () => {
     vi.useRealTimers();
   });
 
-  it('binds each root session watcher initially, rebinds after switching, and disposes it with the panel', async () => {
-    const panel = await activateAndOpenRoot();
+  it('binds each root session watcher initially, rebinds after switching, and disposes it with the view', async () => {
+    const view = await activateAndResolveView();
 
     await vi.waitFor(() => expect(hostMocks.createFileSystemWatcher).toHaveBeenCalledTimes(1));
     expect(hostMocks.createFileSystemWatcher.mock.calls[0][0]).toMatchObject({
@@ -241,36 +266,36 @@ describe('extension panel sessions', () => {
     });
     const initialWatcher = hostMocks.createFileSystemWatcher.mock.results[0].value;
 
-    panel.receive({ id: 'switch', type: 'request', method: 'repo.switch', params: { path: '/repo/other' } });
+    view.receive({ id: 'switch', type: 'request', method: 'repo.switch', params: { path: '/repo/other' } });
 
     await vi.waitFor(() => expect(hostMocks.createFileSystemWatcher).toHaveBeenCalledTimes(2));
     expect(initialWatcher.dispose).toHaveBeenCalledTimes(1);
     expect(hostMocks.createFileSystemWatcher.mock.calls[1][0]).toMatchObject({ base: '/git/other' });
     const reboundWatcher = hostMocks.createFileSystemWatcher.mock.results[1].value;
 
-    panel.disposePanel();
+    view.disposeView();
 
     expect(reboundWatcher.dispose).toHaveBeenCalledTimes(1);
   });
 
   it('warns about initial and rebind watcher failures without delaying repo.switch for warning dismissal', async () => {
     hostMocks.gitDirectory.mockRejectedValueOnce(new Error('initial watcher failed'));
-    const panel = await activateAndOpenRoot();
+    const view = await activateAndResolveView();
 
     await vi.waitFor(() => expect(hostMocks.showWarningMessage).toHaveBeenCalledWith(
       expect.stringContaining('initial watcher failed'),
     ));
-    expect(panel.webview.html).toContain('<div id="app"></div>');
+    expect(view.webview.html).toContain('<div id="app"></div>');
 
     hostMocks.gitDirectory.mockRejectedValueOnce(new Error('rebind watcher failed'));
     const pendingWarning = deferred<string | undefined>();
     hostMocks.showWarningMessage.mockReturnValueOnce(pendingWarning.promise);
-    panel.receive({ id: 'switch', type: 'request', method: 'repo.switch', params: { path: '/repo/other' } });
+    view.receive({ id: 'switch', type: 'request', method: 'repo.switch', params: { path: '/repo/other' } });
 
     await vi.waitFor(() => expect(hostMocks.showWarningMessage).toHaveBeenCalledWith(
       expect.stringContaining('rebind watcher failed'),
     ));
-    await vi.waitFor(() => expect(panel.webview.postMessage).toHaveBeenCalledWith({
+    await vi.waitFor(() => expect(view.webview.postMessage).toHaveBeenCalledWith({
       id: 'switch',
       type: 'response',
       result: { success: true, name: 'other', path: '/repo/other' },
@@ -286,25 +311,25 @@ describe('extension panel sessions', () => {
         ? slowOtherDirectory.promise
         : Promise.resolve(path.replace('/repo', '/git'))
     ));
-    const panel = await activateAndOpenRoot();
+    const view = await activateAndResolveView();
     await vi.waitFor(() => expect(hostMocks.createFileSystemWatcher).toHaveBeenCalledTimes(1));
 
     const appliedRepositories: string[] = [];
-    panel.webview.postMessage.mockImplementation((message: Record<string, unknown>) => {
+    view.webview.postMessage.mockImplementation((message: Record<string, unknown>) => {
       if (message.type === 'response' && (message.id === 'switch-other' || message.id === 'switch-last')) {
         const result = message.result as { path?: string } | undefined;
         if (result?.path) appliedRepositories.push(result.path);
       }
     });
 
-    panel.receive({
+    view.receive({
       id: 'switch-other',
       type: 'request',
       method: 'repo.switch',
       params: { path: '/repo/other' },
     });
     await vi.waitFor(() => expect(hostMocks.gitDirectory).toHaveBeenCalledWith('/repo/other'));
-    panel.receive({
+    view.receive({
       id: 'switch-last',
       type: 'request',
       method: 'repo.switch',
@@ -313,8 +338,8 @@ describe('extension panel sessions', () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     slowOtherDirectory.resolve('/git/other');
 
-    await responseFor(panel, 'switch-other');
-    await responseFor(panel, 'switch-last');
+    await responseFor(view, 'switch-other');
+    await responseFor(view, 'switch-last');
 
     expect(appliedRepositories).toEqual(['/repo/other', '/repo/last']);
     expect(hostMocks.createFileSystemWatcher.mock.calls.at(-1)?.[0]).toMatchObject({ base: '/git/last' });
@@ -327,11 +352,11 @@ describe('extension panel sessions', () => {
         ? staleInitialDirectory.promise
         : Promise.resolve(path.replace('/repo', '/git'))
     ));
-    const panel = await activateAndOpenRoot();
+    const view = await activateAndResolveView();
     await vi.waitFor(() => expect(hostMocks.gitDirectory).toHaveBeenCalledWith('/repo/root'));
 
-    panel.receive({ id: 'switch', type: 'request', method: 'repo.switch', params: { path: '/repo/other' } });
-    await responseFor(panel, 'switch');
+    view.receive({ id: 'switch', type: 'request', method: 'repo.switch', params: { path: '/repo/other' } });
+    await responseFor(view, 'switch');
     staleInitialDirectory.reject(new Error('superseded watcher failed'));
     await Promise.resolve();
     await Promise.resolve();
@@ -341,38 +366,38 @@ describe('extension panel sessions', () => {
 
   it('cancels a pending watcher invalidation when repository switching supersedes it', async () => {
     vi.useFakeTimers();
-    const panel = await activateAndOpenRoot();
+    const view = await activateAndResolveView();
     await vi.waitFor(() => expect(hostMocks.createFileSystemWatcher).toHaveBeenCalledTimes(1));
     const initialWatcher = hostMocks.createFileSystemWatcher.mock.results[0].value;
     initialWatcher.fireChange();
 
-    panel.receive({ id: 'switch', type: 'request', method: 'repo.switch', params: { path: '/repo/other' } });
-    await responseFor(panel, 'switch');
+    view.receive({ id: 'switch', type: 'request', method: 'repo.switch', params: { path: '/repo/other' } });
+    await responseFor(view, 'switch');
     await vi.advanceTimersByTimeAsync(500);
 
-    const events = panel.webview.postMessage.mock.calls
+    const events = view.webview.postMessage.mock.calls
       .map(([message]) => message as { type: string })
       .filter(message => message.type === 'event');
     expect(events).toEqual([]);
   });
 
-  it('switches the session to a submodule instead of opening another panel', async () => {
-    const panel = await activateAndOpenRoot();
+  it('switches the session to a submodule instead of opening another view', async () => {
+    const view = await activateAndResolveView();
 
-    panel.receive({
+    view.receive({
       id: 'sub',
       type: 'request',
       method: 'ui.openSubmodule',
       params: { path: 'packages/sdk' },
     });
 
-    const opened = await responseFor(panel, 'sub');
+    const opened = await responseFor(view, 'sub');
     expect(opened.result).toMatchObject({ success: true, name: 'sdk', path: '/real/sdk' });
-    expect(hostMocks.createWebviewPanel).toHaveBeenCalledTimes(1);
+    expect(hostMocks.createWebviewPanel).not.toHaveBeenCalled();
 
-    panel.receive({ id: 'list', type: 'request', method: 'repo.list', params: {} });
+    view.receive({ id: 'list', type: 'request', method: 'repo.list', params: {} });
 
-    const listed = await responseFor(panel, 'list');
+    const listed = await responseFor(view, 'list');
     expect((listed.result as { repos: Array<{ name: string; path: string; active: boolean }> }).repos)
       .toContainEqual({ name: 'sdk', path: '/real/sdk', active: true });
 
@@ -381,19 +406,36 @@ describe('extension panel sessions', () => {
 
   it('keeps the Open File action by using the active repository file for a HEAD diff', async () => {
     hostMocks.getHeadHash.mockResolvedValue('commit');
-    const panel = await activateAndOpenRoot();
+    const view = await activateAndResolveView();
 
-    panel.receive({
+    view.receive({
       id: 'head-diff',
       type: 'request',
       method: 'ui.openDiff',
       params: { path: 'src/shared.ts', hash: 'commit', status: 'modified' },
     });
-    await responseFor(panel, 'head-diff');
+    await responseFor(view, 'head-diff');
 
     const [, parentUri, currentUri] = hostMocks.executeCommand.mock.calls
       .find(([command]) => command === 'vscode.diff')!;
     expect(parentUri.toString()).toContain('git-graph-pro-diff:');
     expect(currentUri.toString()).toBe('/repo/root/src/shared.ts');
+  });
+
+  it('registers the graph as a panel view and focuses it from the open command', async () => {
+    await activateAndResolveView();
+
+    expect(hostMocks.registerWebviewViewProvider).toHaveBeenCalledWith(
+      'gitGraphPro.graph',
+      expect.anything(),
+      { webviewOptions: { retainContextWhenHidden: true } },
+    );
+    expect(hostMocks.createWebviewPanel).not.toHaveBeenCalled();
+
+    const openCommand = hostMocks.registerCommand.mock.calls
+      .find(([command]) => command === 'gitGraphPro.open')?.[1] as () => void;
+    openCommand();
+
+    expect(hostMocks.executeCommand).toHaveBeenCalledWith('gitGraphPro.graph.focus');
   });
 });

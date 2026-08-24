@@ -21,6 +21,27 @@
         "title": "Git Graph Pro: Open"
       }
     ],
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "gitGraphPro",
+          "title": "Git Graph",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "gitGraphPro": [
+        {
+          "type": "webview",
+          "id": "gitGraphPro.graph",
+          "name": "Git Graph",
+          "webviewOptions": {
+            "retainContextWhenHidden": true
+          }
+        }
+      ]
+    },
     "configuration": {
       "title": "Git Graph Pro",
       "properties": {

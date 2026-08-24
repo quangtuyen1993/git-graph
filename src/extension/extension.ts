@@ -4,6 +4,7 @@ import { RepositorySession, type RepositoryInfo } from './controllers/repository
 import { GitGraphWebviewProvider } from './providers/webview-provider';
 import { GitService } from './services/git.service';
 import { buildReviewPayload } from './services/review-payload';
+import type { WebviewHost } from './types/webview-host.types';
 
 let webviewProvider: GitGraphWebviewProvider;
 
@@ -46,7 +47,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const aiReview = new AIReviewService();
   let nextPanelSessionId = 0;
 
-  function createPanelSession(panel: vscode.WebviewPanel): void {
+  function createSession(host: WebviewHost): () => void {
     const panelSessionId = ++nextPanelSessionId;
     let virtualDocumentRequestSequence = 0;
     const router = new MessageRouter();
@@ -229,7 +230,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
           await vscode.languages.setTextDocumentLanguage(doc, 'markdown');
           await vscode.window.showTextDocument(doc, {
-            viewColumn: vscode.ViewColumn.Beside,
+            viewColumn: vscode.ViewColumn.Active,
             preview: false,
           });
           return { success: true, path: file };
@@ -388,10 +389,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     });
 
-    router.setHost(panel);
+    router.setHost(host);
     void bindGitWatcher();
 
-    panel.onDidDispose(() => {
+    const dispose = () => {
+      if (disposed) return;
       disposed = true;
       watcherGeneration += 1;
       if (debounceTimer) clearTimeout(debounceTimer);
@@ -399,16 +401,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       gitWatcher?.dispose();
       gitWatcher = undefined;
       router.dispose();
-    });
+    };
+
+    host.onDidDispose(dispose);
+
+    return dispose;
   }
 
   webviewProvider = new GitGraphWebviewProvider(
     context.extensionUri,
-    (panel) => createPanelSession(panel),
+    (host) => createSession(host),
+  );
+
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(
+      GitGraphWebviewProvider.viewType,
+      webviewProvider,
+      { webviewOptions: { retainContextWhenHidden: true } },
+    ),
   );
 
   const openCommand = vscode.commands.registerCommand('gitGraphPro.open', () => {
-    webviewProvider.openPanel();
+    void vscode.commands.executeCommand('gitGraphPro.graph.focus');
   });
   context.subscriptions.push(openCommand);
 }
