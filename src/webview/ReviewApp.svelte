@@ -2,6 +2,8 @@
   import { onDestroy, onMount } from 'svelte';
   import { bridge } from './lib/message-bridge';
   import { LatestRequestGate, runLatestRequest } from './lib/latest-request';
+  import FileTreeList from './components/detail/FileTreeList.svelte';
+  import { buildPathTree } from './lib/path-tree';
 
   type ReviewTargetKind = 'branch' | 'commit' | 'range';
   type ReviewStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
@@ -30,6 +32,8 @@
   let modelInput = '';
   let error = '';
   let latestStartedId = '';
+  let viewMode: 'tree' | 'flat' = 'flat';
+  let collapsedFolders: Record<string, boolean> = {};
   let now = Date.now();
   // Một sự kiện review.target có thể tới trước khi init() lấy xong target mặc định
   // (host gửi ngay khi người dùng chọn "Review" từ graph); cờ này giữ cho init()
@@ -68,13 +72,15 @@
 
   async function init(): Promise<void> {
     try {
-      const [branchList, providerList, savedProvider, savedModel, storedTarget] = await Promise.all([
+      const [branchList, providerList, savedProvider, savedModel, storedTarget, savedViewMode] = await Promise.all([
         bridge.send('git.branches') as Promise<Branch[]>,
         bridge.send('ai.providers') as Promise<Provider[]>,
         bridge.send('ui.getState', { key: 'aiReview.provider' }) as Promise<string | null>,
         bridge.send('ui.getState', { key: 'aiReview.model' }) as Promise<string | null>,
         bridge.send('review.getTarget') as Promise<ReviewTarget | null>,
+        bridge.send('ui.getState', { key: 'detail.viewMode' }) as Promise<string | null>,
       ]);
+      if (savedViewMode === 'tree' || savedViewMode === 'flat') viewMode = savedViewMode;
       branches = branchList ?? [];
       providers = providerList ?? [];
       const available = providers.filter(p => p.available);
@@ -127,17 +133,28 @@
     }
   }
 
+  // Write-behind so a window reload reopens on the pair being compared. A
+  // failed save only costs the next session its default — never surface it.
+  function saveTarget(): void {
+    void Promise.resolve(bridge.send('review.saveTarget', {
+      kind: target.kind, baseRef: target.baseRef, headRef: target.headRef,
+      ...(target.subject ? { subject: target.subject } : {}),
+    })).catch(() => {});
+  }
+
   function setBranch(side: 'base' | 'head', name: string): void {
     target = side === 'base'
       ? { kind: 'branch', baseRef: name, headRef: target.headRef }
       : { kind: 'branch', baseRef: target.baseRef, headRef: name };
     files = null;
+    saveTarget();
     void compare();
   }
 
   function swap(): void {
     target = { ...target, baseRef: target.headRef, headRef: target.baseRef };
     files = null;
+    saveTarget();
     void compare();
   }
 
@@ -145,7 +162,17 @@
     target = defaultTarget();
     files = null;
     error = '';
+    saveTarget();
     void compare();
+  }
+
+  function setViewMode(mode: 'tree' | 'flat'): void {
+    viewMode = mode;
+    void Promise.resolve(bridge.send('ui.setState', { key: 'detail.viewMode', value: mode })).catch(() => {});
+  }
+
+  function toggleFolder(path: string): void {
+    collapsedFolders = { ...collapsedFolders, [path]: !collapsedFolders[path] };
   }
 
   async function startReview(): Promise<void> {
@@ -241,6 +268,8 @@
     now = Date.now();
   }
 
+  $: fileTree = viewMode === 'tree' && files ? buildPathTree(files, (f) => f.path) : [];
+
   $: totalAdditions = files?.reduce((sum, f) => sum + f.additions, 0) ?? 0;
   $: totalDeletions = files?.reduce((sum, f) => sum + f.deletions, 0) ?? 0;
 </script>
@@ -296,6 +325,14 @@
           <span class="add">+{totalAdditions}</span>
           <span class="del">−{totalDeletions}</span>
         {/if}
+        <span class="view-toggle">
+          <button class="icon-btn" class:active={viewMode === 'tree'} title="View as tree"
+            aria-label="View as tree" aria-pressed={viewMode === 'tree'}
+            on:click={() => setViewMode('tree')}>&#x2637;</button>
+          <button class="icon-btn" class:active={viewMode === 'flat'} title="View as list"
+            aria-label="View as list" aria-pressed={viewMode === 'flat'}
+            on:click={() => setViewMode('flat')}>&#x2630;</button>
+        </span>
       </h3>
       {#if compareLoading}
         <p class="hint">Comparing…</p>
@@ -303,6 +340,13 @@
         <p class="hint">Pick a base and a head to compare.</p>
       {:else if files && files.length === 0}
         <p class="hint">No differences.</p>
+      {:else if files && viewMode === 'tree'}
+        <FileTreeList
+          nodes={fileTree}
+          {collapsedFolders}
+          on:folderToggle={(event) => toggleFolder(event.detail.path)}
+          on:openFile={(event) => openFile(event.detail)}
+        />
       {:else if files}
         <ul>
           {#each files as file (file.path)}
@@ -396,6 +440,10 @@
   }
   .icon-btn:hover:not(:disabled) { background: var(--vscode-toolbar-hoverBackground); }
   .icon-btn:disabled { opacity: 0.4; cursor: default; }
+  .view-toggle { float: right; display: inline-flex; gap: 2px; }
+  .view-toggle .icon-btn.active {
+    background: var(--vscode-toolbar-activeBackground, var(--vscode-list-activeSelectionBackground));
+  }
   .review-btn {
     background: var(--vscode-button-background);
     color: var(--vscode-button-foreground);

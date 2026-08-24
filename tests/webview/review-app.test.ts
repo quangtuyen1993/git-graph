@@ -223,3 +223,68 @@ describe('ReviewApp', () => {
     await waitFor(() => expect(rendered.getByRole('alert')).toHaveTextContent('Cannot resolve "gone"'));
   });
 });
+
+describe('persisted UI state', () => {
+  it('saves the target when a picker changes', async () => {
+    stub();
+    const rendered = render(ReviewApp);
+    await waitFor(() => expect(rendered.getByText('src/a.ts')).toBeInTheDocument());
+    send.mockClear();
+
+    await fireEvent.change(rendered.getByLabelText('Base branch'), { target: { value: 'feat/x' } });
+
+    await waitFor(() => expect(send).toHaveBeenCalledWith('review.saveTarget',
+      expect.objectContaining({ kind: 'branch', baseRef: 'feat/x', headRef: 'feat/x' })));
+  });
+
+  it('saves the swapped pair when swap is clicked', async () => {
+    stub();
+    const rendered = render(ReviewApp);
+    await waitFor(() => expect(rendered.getByText('src/a.ts')).toBeInTheDocument());
+    send.mockClear();
+
+    await fireEvent.click(rendered.getByRole('button', { name: 'Swap base and head' }));
+
+    await waitFor(() => expect(send).toHaveBeenCalledWith('review.saveTarget',
+      expect.objectContaining({ baseRef: 'feat/x', headRef: 'main' })));
+  });
+
+  it('renders the changed files as a tree when the stored view mode says so', async () => {
+    stub();
+    send.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === 'ui.getState' && (params as { key: string }).key === 'detail.viewMode') return 'tree';
+      if (method === 'ui.getState') return null;
+      if (method === 'git.branches') return branches;
+      if (method === 'ai.providers') return [{ id: 'claude', name: 'Claude', available: true, group: 'cli' }];
+      if (method === 'review.getTarget') return null;
+      if (method === 'review.list') return [];
+      if (method === 'review.compare') return { files: [
+        { path: 'src/a.ts', oldPath: null, status: 'modified', additions: 3, deletions: 1, binary: false },
+      ] };
+      return null;
+    });
+    const rendered = render(ReviewApp);
+
+    await waitFor(() => expect(rendered.getByLabelText('Folder src')).toBeInTheDocument());
+    expect(rendered.getByText('a.ts')).toBeInTheDocument();
+    expect(rendered.queryByText('src/a.ts')).toBeNull(); // no flat row
+
+    // leaf click still opens the diff editor
+    await fireEvent.click(rendered.getByText('a.ts'));
+    await waitFor(() => expect(send).toHaveBeenCalledWith('ui.compareDiff',
+      expect.objectContaining({ path: 'src/a.ts' })));
+  });
+
+  it('persists a view-mode toggle to the shared detail.viewMode key', async () => {
+    stub();
+    const rendered = render(ReviewApp);
+    await waitFor(() => expect(rendered.getByText('src/a.ts')).toBeInTheDocument());
+    send.mockClear();
+
+    await fireEvent.click(rendered.getByRole('button', { name: 'View as tree' }));
+
+    await waitFor(() => expect(send).toHaveBeenCalledWith('ui.setState',
+      { key: 'detail.viewMode', value: 'tree' }));
+    await waitFor(() => expect(rendered.getByLabelText('Folder src')).toBeInTheDocument());
+  });
+});
