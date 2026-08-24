@@ -1,11 +1,17 @@
 import { EventEmitter } from 'events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const hoisted = vi.hoisted(() => ({ spawn: vi.fn(), kill: vi.fn(), timeoutSeconds: 0 }));
+const hoisted = vi.hoisted(() => ({
+  spawn: vi.fn(), kill: vi.fn(), timeoutSeconds: 0, deepseekKey: 'sk-secret-key',
+}));
 
 vi.mock('child_process', () => ({ spawn: hoisted.spawn }));
 vi.mock('vscode', () => ({
-  workspace: { getConfiguration: () => ({ get: () => hoisted.timeoutSeconds }) },
+  workspace: {
+    getConfiguration: () => ({
+      get: (key: string) => (key === 'deepseekApiKey' ? hoisted.deepseekKey : hoisted.timeoutSeconds),
+    }),
+  },
 }));
 
 import { AIReviewService, ReviewCancelledError } from '../../src/extension/services/ai-review.service';
@@ -20,6 +26,10 @@ function fakeProcess() {
   proc.stderr = new EventEmitter();
   proc.stdin = { write: vi.fn(), end: vi.fn() };
   proc.pid = FAKE_PID;
+  // A live ChildProcess reports null for both until it exits; killTree() reads
+  // them to decide whether the pgid is still its own to signal.
+  proc.exitCode = null;
+  proc.signalCode = null;
   proc.kill = hoisted.kill;
   return proc;
 }
@@ -225,5 +235,99 @@ describe('AIReviewService streaming', () => {
     expect(sigkillCalls.length).toBe(1);
 
     processKill.mockRestore();
+  });
+  it('does not signal a pgid the child has already released', () => {
+    // M3: between 'exit' and 'close' the child is gone and the pgid can have
+    // been recycled; a SIGTERM then lands on whatever inherited the number.
+    const proc = fakeProcess();
+    hoisted.spawn.mockReturnValue(proc);
+    const controller = new AbortController();
+    const processKill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    const service = new AIReviewService();
+    const promise = service.review({
+      diff: 'd', provider: 'claude', payloadText: 'p', signal: controller.signal,
+    });
+    const assertion = expect(promise).rejects.toBeInstanceOf(ReviewCancelledError);
+
+    // The child has exited but 'close' has not fired yet.
+    proc.exitCode = 0;
+    controller.abort();
+
+    expect(processKill).not.toHaveBeenCalled();
+    processKill.mockRestore();
+    return assertion;
+  });
+
+  it('does not signal a pgid whose child was already killed by a signal', () => {
+    const proc = fakeProcess();
+    hoisted.spawn.mockReturnValue(proc);
+    const controller = new AbortController();
+    const processKill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    const service = new AIReviewService();
+    const promise = service.review({
+      diff: 'd', provider: 'claude', payloadText: 'p', signal: controller.signal,
+    });
+    const assertion = expect(promise).rejects.toBeInstanceOf(ReviewCancelledError);
+
+    proc.signalCode = 'SIGTERM';
+    controller.abort();
+
+    expect(processKill).not.toHaveBeenCalled();
+    processKill.mockRestore();
+    return assertion;
+  });
+
+  it('listens for errors on the Windows taskkill it spawns', () => {
+    // I6: a ChildProcess emitting 'error' with no listener throws — an uncaught
+    // exception in the extension host, on the cancel path.
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      const proc = fakeProcess();
+      const killer = new EventEmitter();
+      hoisted.spawn.mockImplementation((command: string) => (command === 'taskkill' ? killer : proc));
+      const controller = new AbortController();
+
+      const service = new AIReviewService();
+      const promise = service.review({
+        diff: 'd', provider: 'claude', payloadText: 'p', signal: controller.signal,
+      });
+      const assertion = expect(promise).rejects.toBeInstanceOf(ReviewCancelledError);
+
+      controller.abort();
+
+      expect(hoisted.spawn).toHaveBeenCalledWith('taskkill', ['/pid', String(FAKE_PID), '/T', '/F']);
+      // Unhandled, this throws out of emit() and takes the host with it.
+      expect(() => killer.emit('error', new Error('taskkill not found'))).not.toThrow();
+      return assertion;
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
+  });
+
+  it('never logs the spawn arguments, which carry the API key and the prompt', async () => {
+    const proc = fakeProcess();
+    hoisted.spawn.mockReturnValue(proc);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const service = new AIReviewService();
+    const promise = service.review({
+      diff: 'd', provider: 'deepseek', payloadText: 'the whole prompt', model: 'deepseek-chat',
+    });
+    proc.stdout.emit('data', Buffer.from(JSON.stringify({
+      choices: [{ message: { content: 'ok' } }],
+    })));
+    proc.exitCode = 0;
+    proc.emit('close', 0);
+    await promise;
+
+    const logged = log.mock.calls.map(call => call.join(' ')).join('\n');
+    expect(logged).toContain('Spawning: curl');
+    expect(logged).not.toContain('Bearer');
+    expect(logged).not.toContain('sk-secret');
+    expect(logged).not.toContain('the whole prompt');
+    log.mockRestore();
   });
 });

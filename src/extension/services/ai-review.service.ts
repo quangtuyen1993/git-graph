@@ -332,7 +332,11 @@ export class AIReviewService {
         return;
       }
 
-      console.log(`[AIReview] Spawning: ${resolvedCommand} ${args.join(' ')}`);
+      // Never log the arguments. For DeepSeek the argv carries
+      // `Authorization: Bearer <key>` and the entire request body; for the CLIs
+      // it can carry the prompt. The command and an argument count are enough
+      // to debug a spawn.
+      console.log(`[AIReview] Spawning: ${resolvedCommand} (${args.length} args)`);
 
       // detached puts the CLI in its own process group so a cancel reaches the
       // grandchildren these tools spawn, not just the process we started.
@@ -359,8 +363,15 @@ export class AIReviewService {
         // fires a real signal 5s later at a possibly-recycled pgid.
         clearSigkillTimer();
         if (proc.pid === undefined) return;
+        // Between 'exit' and 'close' the child is already gone and its pgid can
+        // have been recycled — signalling it then hits whatever process
+        // inherited the number.
+        if (proc.exitCode !== null || proc.signalCode !== null) return;
         if (process.platform === 'win32') {
-          spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F']);
+          // A ChildProcess that emits 'error' with no listener *throws*. On the
+          // cancel path that is an uncaught exception in the extension host.
+          const killer = spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F']);
+          killer.on('error', () => { /* the tree is already gone, or taskkill is missing */ });
           return;
         }
         try {
