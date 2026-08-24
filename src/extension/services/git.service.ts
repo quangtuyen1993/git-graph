@@ -197,6 +197,10 @@ export class GitService {
     return output.replace(/\u0000/g, '').replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F]/g, '');
   }
 
+  public async revParse(ref: string): Promise<string> {
+    return (await this.cli.exec(['rev-parse', ref])).trim();
+  }
+
   // --- Write Operations ---
 
   public async checkout(ref: string): Promise<void> {

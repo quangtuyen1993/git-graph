@@ -1,3 +1,4 @@
+import { realpathSync } from 'fs';
 import * as vscode from 'vscode';
 import { MessageRouter } from './controllers/message-router';
 import { RepositorySession, type RepositoryInfo } from './controllers/repository-session';
@@ -9,6 +10,11 @@ import { GitService } from './services/git.service';
 import { buildReviewPayload } from './services/review-payload';
 
 let webviewProvider: GitGraphWebviewProvider;
+
+// Every ReviewRunner constructed across panel sessions is registered here so
+// deactivate() can kill every in-flight CLI process. Without this, a detached
+// review process keeps running (and keeps spending) after the window closes.
+const runners: { cancelAll(): void }[] = [];
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -48,6 +54,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const { AIReviewService } = await import('./services/ai-review.service');
   const aiReview = new AIReviewService();
   let nextPanelSessionId = 0;
+
+  const { ReviewStore } = await import('./services/review-store');
+  const { ReviewRunner } = await import('./services/review-runner');
+  const { createReviewHandler } = await import('./controllers/review-method-handler');
+  const { repoIdFor } = await import('./services/review-key');
+
+  // ReviewStore's constructor only assigns a field; it cannot throw. reconcileOrphans()
+  // does real I/O (readdir/readFile/writeFile against globalStorageUri) and must never
+  // take activation down with it — a missing directory or an unreadable index degrades
+  // to "orphaned runs stay marked running" rather than a failed activation.
+  const reviewStore = new ReviewStore(vscode.Uri.joinPath(context.globalStorageUri, 'reviews').fsPath);
+  try {
+    await reviewStore.reconcileOrphans();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[extension] Failed to reconcile orphaned reviews: ${message}`);
+  }
+
+  // Assigned by Task 11 once the review tree view and status-bar clock exist.
+  // Declared here (rather than left undefined-and-optional-chained on an
+  // undeclared name) so the onChange callback below type-checks today.
+  let reviewTree: { refresh(): void } | undefined;
+  let syncTicker: (() => Promise<void>) | undefined;
 
   function createPanelSession(panel: vscode.WebviewPanel, request: PanelRequest): void {
     const panelSessionId = ++nextPanelSessionId;
@@ -386,6 +415,37 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     });
 
+    const reviewRunner = new ReviewRunner(reviewStore, aiReview, (_repoId, id) => {
+      router.sendEvent('review.changed', { id });
+      reviewTree?.refresh();            // undefined until Task 11 registers the view
+      void syncTicker?.();              // undefined until Task 11 adds the clock
+    });
+    runners.push(reviewRunner);         // module-level array, drained in deactivate
+
+    const getRepoId = (): string | undefined => {
+      const repoPath = session.getGitService()?.getRepoPath();
+      return repoPath ? repoIdFor(realpathSync(repoPath)) : undefined;
+    };
+
+    const openBody = async (repoId: string, id: string): Promise<void> => {
+      const doc = await vscode.workspace.openTextDocument(
+        vscode.Uri.file(reviewStore.bodyPath(repoId, id)),
+      );
+      await vscode.languages.setTextDocumentLanguage(doc, 'markdown');
+      await vscode.window.showTextDocument(doc, { preview: false });
+    };
+
+    const reviewHandler = createReviewHandler({
+      store: reviewStore,
+      runner: reviewRunner,
+      getGitService: () => session.getGitService() as never,
+      getRepoId,
+      getMaxDiffChars: () =>
+        vscode.workspace.getConfiguration('gitGraphPro.aiReview').get<number>('maxDiffChars') ?? 0,
+      openBody,
+    });
+    router.register('review', reviewHandler);
+
     router.setPanel(panel);
     void bindGitWatcher();
 
@@ -413,4 +473,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 export function deactivate(): void {
   // Panel-owned resources are disposed by their panel disposal listeners.
+
+  // Nothing must outlive the window. Without this, detached CLI process groups
+  // keep running and keep spending after VS Code is gone.
+  for (const runner of runners) runner.cancelAll();
+  runners.length = 0;
 }
