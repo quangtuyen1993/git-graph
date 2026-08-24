@@ -251,12 +251,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           return result ?? null;
         }
         case 'ui.confirm': {
+          // Callers may offer their own choices (for example "Delete local" vs
+          // "Delete local + remote"). With none given this stays a yes/no
+          // confirm and returns a boolean, as every existing caller expects.
+          const choices = Array.isArray(p.choices) ? (p.choices as string[]) : undefined;
           const answer = await vscode.window.showWarningMessage(
             p.message as string,
-            { modal: true },
-            'Yes',
+            { modal: true, detail: p.detail as string | undefined },
+            ...(choices ?? ['Yes']),
           );
-          return answer === 'Yes';
+          return choices ? (answer ?? null) : answer === 'Yes';
         }
         case 'ui.openDiff': {
           const gitService = session.getGitService();

@@ -696,8 +696,7 @@
         { label: 'Fetch', action: 'fetch' },
         { label: '', action: '', divider: true },
         { label: 'Rename branch...', action: 'renameBranch' },
-        { label: 'Delete branch', action: 'deleteBranch', danger: true },
-        ...(hasUpstream ? [{ label: 'Delete branch + remote', action: 'deleteBranchAndRemote', danger: true }] : []),
+        { label: 'Delete branch...', action: 'deleteBranch', danger: true },
         { label: '', action: '', divider: true },
         { label: 'Compare with...', action: 'compareBranch' },
       ];
@@ -888,7 +887,6 @@
     fetch: 'Fetching…',
     renameBranch: 'Renaming branch…',
     deleteBranch: 'Deleting branch…',
-    deleteBranchAndRemote: 'Deleting branch…',
     deleteRemoteBranch: 'Deleting remote branch…',
     createBranchFromTag: 'Creating branch…',
     pushTag: 'Pushing tag…',
@@ -942,6 +940,60 @@
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       setTimeout(() => { error = ''; }, 5000);
+    }
+  }
+
+  /**
+   * Ask what to delete. A tracked branch offers the remote as a choice rather
+   * than a separate menu item, so the decision is made where the consequence
+   * is stated. Returns null when the user backs out.
+   */
+  async function askDeleteScope(branchName: string, tracked: boolean): Promise<boolean | null> {
+    if (!tracked) {
+      const confirmed = await bridge.send('ui.confirm', {
+        message: `Delete branch "${branchName}"?`,
+      }) as boolean;
+      return confirmed ? false : null;
+    }
+
+    const answer = await bridge.send('ui.confirm', {
+      message: `Delete branch "${branchName}"?`,
+      detail: 'This branch tracks a remote branch. You can delete the local branch only, or both.',
+      choices: ['Delete local', 'Delete local + remote'],
+    }) as string | null;
+
+    if (answer === 'Delete local') return false;
+    if (answer === 'Delete local + remote') return true;
+    return null;
+  }
+
+  /**
+   * Delete, and if git refuses because the branch is not fully merged, say what
+   * would be lost and offer to force. Without this the raw git error surfaced in
+   * a banner that cleared itself, leaving no way to act on it.
+   */
+  async function deleteBranchWithForcePrompt(
+    branchName: string,
+    runMutation: (method: string, params?: unknown) => Promise<unknown>,
+    progress?: ContextMutationProgress,
+  ): Promise<boolean> {
+    try {
+      await runMutation('git.deleteBranch', { name: branchName });
+      return true;
+    } catch (e) {
+      if ((e as { kind?: string }).kind !== 'BRANCH_NOT_FULLY_MERGED') throw e;
+
+      progress?.awaitConfirmation();
+      const forced = await bridge.send('ui.confirm', {
+        message: `Branch "${branchName}" is not fully merged.`,
+        detail: 'It has commits that exist on no other branch. Deleting it will lose them.',
+        choices: ['Force delete'],
+      }) as string | null;
+
+      if (forced !== 'Force delete') return false;
+
+      await runMutation('git.deleteBranch', { name: branchName, force: true });
+      return true;
     }
   }
 
@@ -1116,17 +1168,14 @@
           }
           case 'deleteBranch': {
             progress?.awaitConfirmation();
-            const confirmed = await bridge.send('ui.confirm', { message: `Delete branch "${branchName}"?` }) as boolean;
-            if (confirmed) {
-              await runMutation('git.deleteBranch', { name: branchName });
-            }
-            break;
-          }
-          case 'deleteBranchAndRemote': {
-            progress?.awaitConfirmation();
-            const confirmed = await bridge.send('ui.confirm', { message: `Delete branch "${branchName}" locally AND from remote?` }) as boolean;
-            if (confirmed) {
-              await runMutation('git.deleteBranch', { name: branchName });
+            const tracked = !!branches.find((b) => b.name === branchName)?.upstream;
+            const alsoRemote = await askDeleteScope(branchName, tracked);
+            if (alsoRemote === null) break;
+
+            const deleted = await deleteBranchWithForcePrompt(branchName, runMutation, progress);
+            if (!deleted) break;
+
+            if (alsoRemote) {
               await runMutation('git.push', { remote: 'origin', branch: `:${branchName}` });
             }
             break;

@@ -56,10 +56,16 @@ export class MessageRouter {
         response = { id: request.id, type: 'response', result };
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
+        // A thrown error may carry a stable string code (see
+        // BranchNotFullyMergedError). Pass it through so the webview can react
+        // to the kind of failure instead of matching the message text.
+        const kind = typeof (err as { code?: unknown })?.code === 'string'
+          ? (err as { code: string }).code
+          : undefined;
         response = {
           id: request.id,
           type: 'response',
-          error: { code: -1, message: errorMessage }
+          error: { code: -1, message: errorMessage, ...(kind ? { kind } : {}) }
         };
       }
     }

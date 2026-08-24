@@ -41,6 +41,22 @@ function messageEditorSource(): string {
   ].join('\n');
 }
 
+/**
+ * `git branch -d` refused because the branch holds commits reachable from
+ * nowhere else. Typed rather than a stderr match so the UI can offer a force
+ * delete without depending on git's message language.
+ */
+export const BRANCH_NOT_FULLY_MERGED = 'BRANCH_NOT_FULLY_MERGED';
+
+export class BranchNotFullyMergedError extends Error {
+  public readonly code = BRANCH_NOT_FULLY_MERGED;
+
+  constructor(public readonly branchName: string) {
+    super(`Branch "${branchName}" is not fully merged`);
+    this.name = 'BranchNotFullyMergedError';
+  }
+}
+
 export class GitService {
   private cli: GitCLI;
 
@@ -214,8 +230,39 @@ export class GitService {
   }
 
   public async deleteBranch(name: string, force?: boolean): Promise<void> {
-    const flag = force ? '-D' : '-d';
-    await this.cli.exec(['branch', flag, name]);
+    if (force) {
+      await this.cli.exec(['branch', '-D', name]);
+      return;
+    }
+
+    try {
+      await this.cli.exec(['branch', '-d', name]);
+    } catch (error) {
+      // git's refusal is a localised stderr string, so matching its text breaks
+      // on a translated git. Ask git itself instead: if the branch still exists
+      // and is absent from the merged list, that is why -d refused.
+      if (await this.isUnmerged(name)) {
+        throw new BranchNotFullyMergedError(name);
+      }
+      throw error;
+    }
+  }
+
+  private async isUnmerged(name: string): Promise<boolean> {
+    // A branch that does not exist is also absent from the merged list, so
+    // check existence first or every unrelated failure looks like an unmerged
+    // branch.
+    const exists = await this.cli.exec(['rev-parse', '--verify', '--quiet', `refs/heads/${name}`])
+      .then((output) => output.trim().length > 0)
+      .catch(() => false);
+    if (!exists) return false;
+
+    const merged = await this.cli.exec(['branch', '--merged', 'HEAD', '--format=%(refname:short)'])
+      .catch(() => null);
+    if (merged === null) return false;
+
+    const mergedNames = merged.split('\n').map((line) => line.trim()).filter(Boolean);
+    return !mergedNames.includes(name);
   }
 
   public async renameBranch(oldName: string, newName: string): Promise<void> {

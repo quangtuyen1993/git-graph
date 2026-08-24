@@ -9,7 +9,8 @@ export interface Response {
   id: string;
   type: 'response';
   result?: unknown;
-  error?: { code: number; message: string };
+  /** `kind` is a stable discriminator for failures the UI must react to. */
+  error?: { code: number; message: string; kind?: string };
 }
 
 export interface Event {

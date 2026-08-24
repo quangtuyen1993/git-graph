@@ -125,7 +125,9 @@ export class MessageBridge {
           clearTimeout(pending.timeoutId);
         }
         if (message.error) {
-          pending.reject(new Error(message.error.message));
+          const failure = new Error(message.error.message) as Error & { kind?: string };
+          if (message.error.kind) failure.kind = message.error.kind;
+          pending.reject(failure);
         } else {
           pending.resolve(message.result);
         }
