@@ -50,12 +50,77 @@
   export let worktrees: WorktreeEntry[] = [];
   export let submodules: SubmoduleEntry[] = [];
   export let selectedBranch: string | null = null;
+  export let favourites: string[] = [];
 
   const dispatch = createEventDispatcher();
 
-  $: localBranches = branches.filter(b => !b.remote);
-  $: remoteBranches = branches.filter(b => !!b.remote);
-  $: localTree = buildBranchTree(localBranches);
+  let query = '';
+  $: needle = query.trim().toLowerCase();
+  $: searching = needle.length > 0;
+  const matches = (value: string): boolean => value.toLowerCase().includes(needle);
+
+  $: visibleBranches = searching ? branches.filter((b) => matches(b.name)) : branches;
+  $: visibleTags = searching ? tags.filter((t) => matches(t.name)) : tags;
+  $: visibleStashes = searching ? stashes.filter((s) => matches(s.message ?? '')) : stashes;
+  $: visibleWorktrees = searching
+    ? worktrees.filter((w) => matches(w.branch ?? w.path))
+    : worktrees;
+  $: visibleSubmodules = searching
+    ? submodules.filter((m) => matches(m.name) || matches(m.path))
+    : submodules;
+
+  $: currentBranch = branches.find((b) => b.current) ?? null;
+
+  $: localBranches = visibleBranches.filter(b => !b.remote);
+  $: remoteBranches = visibleBranches.filter(b => !!b.remote);
+  /*
+   * A starred branch is lifted out of its folder and shown at the top of LOCAL
+   * under its full name. Sorting inside the tree would not work — the builder
+   * sorts by path, and a favourite buried in a collapsed group is exactly the
+   * one you starred to stop hunting for.
+   */
+  $: favouriteNodes = localBranches
+    .filter((branch) => favourites.includes(branch.name))
+    .map((branch) => ({ label: branch.name, path: branch.name, branch, children: [] }));
+  $: localTree = [
+    ...favouriteNodes,
+    ...buildBranchTree(localBranches.filter((branch) => !favourites.includes(branch.name))),
+  ];
+
+  /*
+   * A search must reach matches inside collapsed groups, but expanding them for
+   * real would rewrite preferences the user set deliberately. So while a query
+   * is active the tree renders against a derived expansion, and clearing the
+   * query drops straight back to the stored one.
+   */
+  $: searchExpandedGroups = searching
+    ? Object.fromEntries(
+      localBranches.flatMap((branch) => activeBranchGroupPaths(branch.name)
+        .map((path) => [`local:${path}`, true]))
+        .concat(remoteBranches.flatMap((branch) => activeBranchGroupPaths(getShortName(branch))
+          .map((path) => [`remote:${branch.name.split('/')[0]}:${path}`, true]))),
+    )
+    : {};
+  $: effectiveGroups = searching
+    ? { ...expandedGroups, ...searchExpandedGroups }
+    : expandedGroups;
+  $: sectionOpen = {
+    local: searching ? localBranches.length > 0 : localExpanded,
+    remote: searching ? remoteBranches.length > 0 : remoteExpanded,
+    tags: searching ? visibleTags.length > 0 : tagsExpanded,
+    stashes: searching ? visibleStashes.length > 0 : stashesExpanded,
+    worktrees: searching ? visibleWorktrees.length > 0 : worktreesExpanded,
+    submodules: searching ? visibleSubmodules.length > 0 : submodulesExpanded,
+  };
+  /* An empty section during a search is noise, so its header goes too. */
+  $: sectionVisible = {
+    local: !searching || localBranches.length > 0,
+    remote: !searching || remoteBranches.length > 0,
+    tags: !searching || visibleTags.length > 0,
+    stashes: !searching || visibleStashes.length > 0,
+    worktrees: !searching || visibleWorktrees.length > 0,
+    submodules: !searching || visibleSubmodules.length > 0,
+  };
 
   // Group remote branches by remote name
   $: remoteGroups = (() => {
@@ -196,43 +261,78 @@
 </script>
 
 <div class="branch-sidebar">
+  <div class="sidebar-search">
+    <span class="search-icon"><Icon name="search" size={14} /></span>
+    <input
+      type="text"
+      placeholder="Branch or tag"
+      aria-label="Filter branches and tags"
+      bind:value={query}
+      on:keydown={(event) => { if (event.key === 'Escape') query = ''; }}
+    />
+    {#if searching}
+      <button type="button" class="search-clear" aria-label="Clear filter" on:click={() => { query = ''; }}>
+        <Icon name="close" size={12} />
+      </button>
+    {/if}
+  </div>
+
+  {#if currentBranch}
+    <button
+      type="button"
+      class="head-row"
+      aria-label={`HEAD, current branch ${currentBranch.name}`}
+      on:click={() => dispatch('branchSelect', { name: currentBranch.name })}
+      on:contextmenu|preventDefault|stopPropagation={(event) => dispatch('branchContextMenu', { event, branch: currentBranch })}
+    >
+      <span class="head-icon"><Icon name="check" size={14} /></span>
+      <span class="head-label">HEAD</span>
+      <span class="head-branch">{currentBranch.name}</span>
+    </button>
+  {/if}
+
   <!-- LOCAL section -->
+  {#if sectionVisible.local}
   <div class="section">
     <button
       class="section-header"
       on:click={() => { localExpanded = !localExpanded; }}
     >
-      <span class="chevron" class:collapsed={!localExpanded}><Icon name="chevron-right" /></span>
+      <span class="chevron" class:collapsed={!sectionOpen.local}><Icon name="chevron-right" /></span>
       <span class="section-title">LOCAL</span>
       <span class="section-count">{localBranches.length}</span>
     </button>
 
-    {#if localExpanded}
+    {#if sectionOpen.local}
       <BranchTreeList
         nodes={localTree}
-        {expandedGroups}
+        expandedGroups={effectiveGroups}
         groupPrefix="local"
         {selectedBranch}
+        {favourites}
         on:groupToggle={(event) => toggleBranchGroup(event.detail.key)}
         on:select={(event) => dispatch('branchSelect', event.detail)}
         on:checkout={(event) => dispatch('checkout', event.detail)}
         on:contextMenu={(event) => dispatch('branchContextMenu', event.detail)}
+        on:favouriteToggle={(event) => dispatch('favouriteToggle', event.detail)}
       />
     {/if}
   </div>
+  {/if}
 
   <!-- REMOTE section -->
+  {#if sectionVisible.remote}
   <div class="section">
     <button
       class="section-header"
       on:click={() => { remoteExpanded = !remoteExpanded; }}
     >
-      <span class="chevron" class:collapsed={!remoteExpanded}><Icon name="chevron-right" /></span>
+      <span class="chevron" class:collapsed={!sectionOpen.remote}><Icon name="chevron-right" /></span>
       <span class="section-title">REMOTE</span>
       <span class="section-count">{remoteBranches.length}</span>
     </button>
 
-    {#if remoteExpanded}
+    {#if sectionOpen.remote}
       {#each Object.entries(remoteGroups) as [remote, group] (remote)}
         <div class="remote-group">
           <button
@@ -249,7 +349,7 @@
           {#if expandedRemotes[remote] === true}
             <BranchTreeList
               nodes={group.tree}
-              {expandedGroups}
+              expandedGroups={effectiveGroups}
               groupPrefix={`remote:${remote}`}
               {selectedBranch}
               depth={1}
@@ -263,21 +363,23 @@
       {/each}
     {/if}
   </div>
+  {/if}
 
   <!-- TAGS section -->
+  {#if sectionVisible.tags}
   <div class="section">
     <button
       class="section-header"
       on:click={() => { tagsExpanded = !tagsExpanded; }}
     >
-      <span class="chevron" class:collapsed={!tagsExpanded}><Icon name="chevron-right" /></span>
+      <span class="chevron" class:collapsed={!sectionOpen.tags}><Icon name="chevron-right" /></span>
       <span class="section-title">TAGS</span>
-      <span class="section-count">{tags.length}</span>
+      <span class="section-count">{visibleTags.length}</span>
     </button>
 
-    {#if tagsExpanded}
+    {#if sectionOpen.tags}
       <ul class="branch-list">
-        {#each tags as tag (tag.name)}
+        {#each visibleTags as tag (tag.name)}
           <li>
             <button
               type="button"
@@ -295,21 +397,23 @@
       </ul>
     {/if}
   </div>
+  {/if}
 
   <!-- STASHES section -->
+  {#if sectionVisible.stashes}
   <div class="section">
     <button
       class="section-header"
       on:click={() => { stashesExpanded = !stashesExpanded; }}
     >
-      <span class="chevron" class:collapsed={!stashesExpanded}><Icon name="chevron-right" /></span>
+      <span class="chevron" class:collapsed={!sectionOpen.stashes}><Icon name="chevron-right" /></span>
       <span class="section-title">STASHES</span>
-      <span class="section-count">{stashes.length}</span>
+      <span class="section-count">{visibleStashes.length}</span>
     </button>
 
-    {#if stashesExpanded}
+    {#if sectionOpen.stashes}
       <ul class="branch-list">
-        {#each stashes as stash (stash.index)}
+        {#each visibleStashes as stash (stash.index)}
           <li>
             <button
               type="button"
@@ -329,21 +433,23 @@
       </ul>
     {/if}
   </div>
+  {/if}
 
   <!-- WORKTREES section -->
+  {#if sectionVisible.worktrees}
   <div class="section">
     <button
       class="section-header"
       on:click={() => { worktreesExpanded = !worktreesExpanded; }}
     >
-      <span class="chevron" class:collapsed={!worktreesExpanded}><Icon name="chevron-right" /></span>
+      <span class="chevron" class:collapsed={!sectionOpen.worktrees}><Icon name="chevron-right" /></span>
       <span class="section-title">WORKTREES</span>
-      <span class="section-count">{worktrees.length}</span>
+      <span class="section-count">{visibleWorktrees.length}</span>
     </button>
 
-    {#if worktreesExpanded}
+    {#if sectionOpen.worktrees}
       <ul class="branch-list">
-        {#each worktrees as wt (wt.path)}
+        {#each visibleWorktrees as wt (wt.path)}
           <li>
             <button
               type="button"
@@ -364,21 +470,23 @@
       </ul>
     {/if}
   </div>
+  {/if}
 
   <!-- SUBMODULES section -->
+  {#if sectionVisible.submodules}
   <div class="section">
     <button
       class="section-header"
       on:click={() => { submodulesExpanded = !submodulesExpanded; }}
     >
-      <span class="chevron" class:collapsed={!submodulesExpanded}><Icon name="chevron-right" /></span>
+      <span class="chevron" class:collapsed={!sectionOpen.submodules}><Icon name="chevron-right" /></span>
       <span class="section-title">SUBMODULES</span>
-      <span class="section-count">{submodules.length}</span>
+      <span class="section-count">{visibleSubmodules.length}</span>
     </button>
 
-    {#if submodulesExpanded}
+    {#if sectionOpen.submodules}
       <ul class="branch-list">
-        {#each submodules as submodule (submodule.path)}
+        {#each visibleSubmodules as submodule (submodule.path)}
           <li>
             <button
               type="button"
@@ -399,6 +507,7 @@
       </ul>
     {/if}
   </div>
+  {/if}
 </div>
 
 <style>
@@ -413,6 +522,109 @@
     /* Flat, not a gradient: the old middle stop was raw white, which washed
        out the panel on light themes and belonged to no theme token. */
     background: var(--vscode-sideBar-background, #1e1e1e);
+  }
+
+  .sidebar-search {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 12px 8px;
+    padding: 0 6px;
+    height: 26px;
+    border: 1px solid var(--vscode-input-border, transparent);
+    border-radius: 4px;
+    background: var(--vscode-input-background, rgba(128, 128, 128, 0.1));
+  }
+
+  .sidebar-search:focus-within {
+    border-color: var(--vscode-focusBorder, #007acc);
+  }
+
+  .search-icon {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    color: var(--vscode-descriptionForeground, #767676);
+  }
+
+  .sidebar-search input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    background: none;
+    outline: none;
+    color: var(--vscode-input-foreground, inherit);
+    font-family: inherit;
+    font-size: 13px;
+  }
+
+  .search-clear {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: none;
+    border-radius: 3px;
+    background: none;
+    color: var(--vscode-descriptionForeground, #767676);
+    cursor: pointer;
+  }
+
+  .search-clear:hover {
+    color: var(--vscode-foreground, inherit);
+  }
+
+  /* Always reachable, whatever LOCAL is doing or the filter is hiding. */
+  .head-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    min-height: 30px;
+    padding: 4px 12px;
+    border: none;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .head-row:hover {
+    background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.12));
+  }
+
+  .head-row:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007acc);
+    outline-offset: -1px;
+  }
+
+  .head-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    color: var(--vscode-testing-iconPassed, #6a9955);
+  }
+
+  .head-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    color: var(--vscode-descriptionForeground, #767676);
+  }
+
+  .head-branch {
+    font-size: 13px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .section {

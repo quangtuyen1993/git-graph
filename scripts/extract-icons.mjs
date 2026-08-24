@@ -19,6 +19,8 @@ const WANTED = {
   'circle-large-outline': 'circle-outline',
   'circle-small': 'circle-small',
   'check': 'check',
+  'search': 'search',
+  'star-full': 'star-full',
   'arrow-small-up': 'arrow-small-up',
   'arrow-small-down': 'arrow-small-down',
   'tag': 'tag',

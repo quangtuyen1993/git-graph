@@ -93,6 +93,37 @@
   let repos: RepoEntry[] = [];
   let activeRepoName = '';
 
+  /*
+   * Starred branches, scoped to the active repository — a global list would
+   * carry one repo's `master` into every other repo's sidebar.
+   */
+  let favourites: string[] = [];
+  let favouritesKey = '';
+
+  const favouritesKeyFor = (repoPath: string): string => `favourites:${repoPath}`;
+
+  /*
+   * Takes the path rather than reading a reactive `$:` binding: the callers run
+   * inside async handlers where the reactive statement has not recomputed yet,
+   * so deriving the key here would read the previous repo's — or an empty one.
+   */
+  async function loadFavourites(repoPath: string | undefined): Promise<void> {
+    favouritesKey = repoPath ? favouritesKeyFor(repoPath) : '';
+    if (!favouritesKey) {
+      favourites = [];
+      return;
+    }
+    const stored = await bridge.send('ui.getState', { key: favouritesKey });
+    favourites = Array.isArray(stored) ? stored as string[] : [];
+  }
+
+  function toggleFavourite(name: string): void {
+    favourites = favourites.includes(name)
+      ? favourites.filter((candidate) => candidate !== name)
+      : [...favourites, name];
+    if (favouritesKey) bridge.send('ui.setState', { key: favouritesKey, value: favourites });
+  }
+
   // Graph state
   let totalRows = 0;
   let maxLane = 0;
@@ -223,6 +254,7 @@
       workspaceSubmodules = repoResult.submodules ?? [];
       const active = repos.find(r => r.active);
       activeRepoName = active?.name ?? repos[0]?.name ?? '';
+      await loadFavourites(active?.path ?? repos[0]?.path);
       await refreshGraph();
       await restorePanelState();
     } catch (e) {
@@ -316,6 +348,7 @@
       const repoResult = await bridge.send('repo.list') as RepoListResult;
       repos = repoResult.repos;
       workspaceSubmodules = repoResult.submodules ?? [];
+      await loadFavourites(repoResult.repos.find((repo) => repo.active)?.path);
       selectedBranchFilter = null;
       clearBranchHighlight();
       selectedHash = null;
@@ -1405,6 +1438,8 @@
             on:stashApply={handleSidebarStashApply}
             on:worktreeOpen={handleSidebarWorktreeOpen}
             on:submoduleOpen={handleSidebarSubmoduleOpen}
+            on:favouriteToggle={(event) => toggleFavourite(event.detail.name)}
+            {favourites}
           />
         {/key}
       </aside>
