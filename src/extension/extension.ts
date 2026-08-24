@@ -4,6 +4,7 @@ import { RouterRegistry } from './controllers/router-registry';
 import { RepositorySession, type RepositoryInfo } from './controllers/repository-session';
 import { GitGraphWebviewProvider } from './providers/webview-provider';
 import { GitService } from './services/git.service';
+import { openCompareDiff, type CompareDiffDeps } from './services/compare-diff';
 import type { ReviewRunner } from './services/review-runner';
 import type { WebviewHost } from './types/webview-host.types';
 
@@ -116,6 +117,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await vscode.languages.setTextDocumentLanguage(doc, 'markdown');
     await vscode.window.showTextDocument(doc, { preview: false });
   };
+
+  // Built per compareDiff call so it can bind the caller's own session tag
+  // and request counter — shared by the graph session today and the review
+  // webview session (Task 7) tomorrow.
+  const makeCompareDiffDeps = (
+    gitService: GitService,
+    sessionTag: number,
+    nextRequest: () => number,
+  ): CompareDiffDeps => ({
+    git: gitService,
+    setContent: (key, content) => contentProvider.setContent(key, content),
+    virtualUri: (path, query) => vscode.Uri.from({ scheme: GIT_GRAPH_SCHEME, path: `/${path}`, query }),
+    fileUri: (repoPath, path) => vscode.Uri.joinPath(vscode.Uri.file(repoPath), path),
+    executeDiff: async (left, right, title) => {
+      await vscode.commands.executeCommand('vscode.diff', left, right, title);
+    },
+    nextTag: () => `ts=${Date.now()}&session=${sessionTag}&request=${nextRequest()}`,
+  });
 
   // One review handler for the host, not one per session. The tree view's
   // commands are not attached to any webview, so a handler scoped to a live
@@ -347,51 +366,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         case 'ui.compareDiff': {
           const gitService = session.getGitService();
           if (!gitService) throw new Error('No git repository found');
-          const filePath = p.path as string;
-          const oldPath = p.oldPath as string | null | undefined;
-          const baseBranch = p.sourceBranch as string;
-          const headBranch = p.targetBranch as string;
-          const status = (p.status as string) ?? 'modified';
-          const baseContent = status !== 'added'
-            ? await gitService.showFile(baseBranch, oldPath ?? filePath) ?? ''
-            : '';
-          const fileName = filePath.split('/').pop() ?? filePath;
-          const virtualDocumentRequestId = ++virtualDocumentRequestSequence;
-          const baseUri = vscode.Uri.from({
-            scheme: GIT_GRAPH_SCHEME,
-            path: `/${oldPath ?? filePath}`,
-            query: `ref=${baseBranch}&ts=${Date.now()}&session=${panelSessionId}&request=${virtualDocumentRequestId}&side=base`,
-          });
-          contentProvider.setContent(baseUri.toString(), baseContent);
-
-          const branchList = await gitService.branches();
-          const currentBranch = branchList.find(branch => branch.current)?.name;
-          const headIsCheckedOut = !!currentBranch && currentBranch === headBranch;
-          let headUri: vscode.Uri;
-          if (headIsCheckedOut && status !== 'deleted') {
-            headUri = vscode.Uri.joinPath(vscode.Uri.file(gitService.getRepoPath()), filePath);
-          } else {
-            const headContent = status !== 'deleted'
-              ? await gitService.showFile(headBranch, filePath) ?? ''
-              : '';
-            headUri = vscode.Uri.from({
-              scheme: GIT_GRAPH_SCHEME,
-              path: `/${filePath}`,
-              query: `ref=${headBranch}&ts=${Date.now()}&session=${panelSessionId}&request=${virtualDocumentRequestId}&side=head`,
-            });
-            contentProvider.setContent(headUri.toString(), headContent);
-          }
-
-          let title: string;
-          if (status === 'added') {
-            title = `${fileName} (added in ${headBranch})`;
-          } else if (status === 'deleted') {
-            title = `${fileName} (deleted in ${headBranch})`;
-          } else {
-            title = `${fileName} (${baseBranch} → ${headBranch})`;
-          }
-          await vscode.commands.executeCommand('vscode.diff', baseUri, headUri, title);
-          return { success: true };
+          return openCompareDiff(
+            makeCompareDiffDeps(gitService, panelSessionId, () => ++virtualDocumentRequestSequence),
+            p as never,
+          );
         }
         case 'ui.openSubmodule': {
           // The picker lists submodules from every workspace repository, so the
