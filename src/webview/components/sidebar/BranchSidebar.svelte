@@ -231,7 +231,7 @@
       {#each Object.entries(remoteGroups) as [remote, group] (remote)}
         <div class="remote-group">
           <button
-            class="remote-header"
+            class="remote-header nested-header"
             aria-label={`Remote group ${remote}`}
             aria-expanded={expandedRemotes[remote] === true}
             on:click={() => toggleRemote(remote)}
@@ -416,8 +416,7 @@
     margin-bottom: 4px;
   }
 
-  .section-header,
-  .remote-header {
+  .section-header {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -467,13 +466,40 @@
     text-align: center;
   }
 
+  /*
+   * A remote group sits INSIDE the REMOTE section, so it must not repeat the
+   * section header's treatment. Sharing one rule made `origin` and `REMOTE`
+   * pixel-identical and therefore read as siblings.
+   */
+  .remote-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    height: 22px;
+    padding: 0 12px 0 24px;
+    border: none;
+    background: none;
+    color: var(--vscode-foreground, #cccccc);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    text-align: left;
+  }
+
   .remote-group {
     margin-left: 0;
   }
 
+  /* Branches under a remote sit one level deeper again. */
+  .remote-group :global(.branch-tree) {
+    --sidebar-gutter: 32px;
+  }
+
   .remote-name {
-    font-size: 11px;
-    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .branch-list {
