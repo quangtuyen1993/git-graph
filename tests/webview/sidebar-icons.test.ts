@@ -1,4 +1,4 @@
-import { cleanup, render } from '@testing-library/svelte';
+import { cleanup, fireEvent, render } from '@testing-library/svelte';
 import { afterEach, describe, expect, it } from 'vitest';
 import BranchSidebar from '../../src/webview/components/sidebar/BranchSidebar.svelte';
 
@@ -51,8 +51,12 @@ describe('BranchSidebar iconography', () => {
 describe('BranchSidebar hierarchy', () => {
   afterEach(cleanup);
 
-  it('marks a remote group as a child row rather than a second section header', () => {
+  it('marks a remote group as a child row rather than a second section header', async () => {
     const { container } = renderSidebar();
+    // REMOTE is collapsed by default, so open it before reaching inside.
+    const remoteSection = [...container.querySelectorAll('.section-header')]
+      .find((candidate) => candidate.textContent?.includes('REMOTE'))!;
+    await fireEvent.click(remoteSection);
     const remoteHeader = container.querySelector('.remote-header') as HTMLElement;
 
     expect(remoteHeader).toBeTruthy();

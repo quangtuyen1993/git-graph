@@ -169,6 +169,12 @@ describe('App graph refresh ordering', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    // SUBMODULES is collapsed by default; open it so the submodule metadata
+    // this test tracks is observable in the DOM.
+    const submodulesHeader = [...container.querySelectorAll('.section-header')]
+      .find((candidate) => candidate.textContent?.includes('SUBMODULES'));
+    if (submodulesHeader) await fireEvent.click(submodulesHeader);
+
     expect(buildCount).toBe(buildCountAfterLatestRefresh);
     expect(send.mock.calls.filter(([method]) => method === 'graph.getWindow'))
       .toHaveLength(windowCountAfterLatestRefresh);

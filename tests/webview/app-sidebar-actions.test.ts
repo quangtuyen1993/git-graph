@@ -95,6 +95,14 @@ describe('App sidebar primary actions', () => {
   it('routes tag checkout, stash apply, worktree opening, and submodule opening through their established RPCs', async () => {
     const { container, getByRole } = await renderApp();
 
+    // Only LOCAL opens by default, so these sections need the same click a
+    // user makes before their rows exist.
+    for (const title of ['TAGS', 'STASHES', 'WORKTREES', 'SUBMODULES']) {
+      const header = [...container.querySelectorAll('.section-header')]
+        .find((candidate) => candidate.textContent?.includes(title));
+      if (header) await fireEvent.click(header);
+    }
+
     await fireEvent.click(getByRole('button', { name: /v1\.0\.0/ }));
     await waitFor(() => expect(send).toHaveBeenCalledWith('git.checkout', { ref: 'v1.0.0' }));
     await waitFor(() => expect(container.querySelector('.mutation-progress')).toBeNull());

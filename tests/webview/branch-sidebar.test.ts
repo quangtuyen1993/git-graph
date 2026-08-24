@@ -34,6 +34,27 @@ const submodules = [
   { name: 'legacy', path: 'vendor/legacy', head: null, state: 'uninitialized' as const },
 ];
 
+/**
+ * Only LOCAL is expanded by default, so any test that reaches into another
+ * section has to open it first — the same click a user makes.
+ */
+async function expandSections(container: HTMLElement, ...titles: string[]): Promise<void> {
+  for (const title of titles) {
+    const header = [...container.querySelectorAll('.section-header')]
+      .find((candidate) => candidate.textContent?.includes(title));
+    if (header) await fireEvent.click(header);
+  }
+}
+
+const ALL_SECTIONS = ['REMOTE', 'TAGS', 'STASHES', 'WORKTREES', 'SUBMODULES'];
+
+/** Render with every section open, matching the pre-collapse default. */
+async function renderExpanded(props: Record<string, unknown>) {
+  const rendered = render(BranchSidebar, props);
+  await expandSections(rendered.container, ...ALL_SECTIONS);
+  return rendered;
+}
+
 describe('BranchSidebar', () => {
   const originalRect = HTMLElement.prototype.getBoundingClientRect;
 
@@ -57,8 +78,28 @@ describe('BranchSidebar', () => {
     HTMLElement.prototype.getBoundingClientRect = originalRect;
   });
 
-  it('uses focusable semantic buttons for local branches, tags, stashes, and worktrees', () => {
-    const { getByRole } = render(BranchSidebar, { branches, tags, stashes, worktrees });
+  it('opens only LOCAL by default, leaving the other sections collapsed', () => {
+    const { container, getByRole, queryByRole } = render(BranchSidebar, {
+      branches, tags, stashes, worktrees, submodules,
+    });
+
+    // LOCAL's contents are reachable without any interaction.
+    expect(getByRole('button', { name: 'main' })).toBeEnabled();
+
+    // The rest cost vertical space the branch list needs, so they start closed.
+    expect(queryByRole('button', { name: /v1\.0\.0/ })).toBeNull();
+    expect(queryByRole('button', { name: /save work/ })).toBeNull();
+    expect(container.querySelector('.remote-header')).toBeNull();
+  });
+
+  it('still expands the active branch ancestors inside LOCAL', () => {
+    const { getByRole } = render(BranchSidebar, { branches: groupedBranches, tags, stashes, worktrees });
+
+    expect(getByRole('button', { name: 'fix/abc/abcd' })).toHaveAttribute('aria-current', 'true');
+  });
+
+  it('uses focusable semantic buttons for local branches, tags, stashes, and worktrees', async () => {
+    const { getByRole } = await renderExpanded({ branches, tags, stashes, worktrees });
 
     expect(getByRole('button', { name: 'main' })).toHaveAttribute('aria-current', 'true');
     expect(getByRole('button', { name: /v1\.0\.0/ })).toBeEnabled();
@@ -66,7 +107,7 @@ describe('BranchSidebar', () => {
   });
 
   it.each(['Enter', ' '])('selects a local branch when %s activates it', async (key) => {
-    const { component, getByRole } = render(BranchSidebar, { branches, tags, stashes, worktrees });
+    const { component, getByRole } = await renderExpanded({ branches, tags, stashes, worktrees });
     const onSelect = vi.fn();
     component.$on('branchSelect', onSelect);
 
@@ -75,8 +116,8 @@ describe('BranchSidebar', () => {
     expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ detail: { name: 'main' } }));
   });
 
-  it('nests branch path segments and expands only the active branch ancestors', () => {
-    const { getByRole, queryByRole } = render(BranchSidebar, {
+  it('nests branch path segments and expands only the active branch ancestors', async () => {
+    const { getByRole, queryByRole } = await renderExpanded({
       branches: groupedBranches,
       tags,
       stashes,
@@ -101,7 +142,7 @@ describe('BranchSidebar', () => {
 
   it('nests remote branch paths after the collapsed remote group is opened', async () => {
     const remoteOnly = groupedBranches.filter(branch => branch.remote);
-    const { getByRole, queryByRole } = render(BranchSidebar, {
+    const { getByRole, queryByRole } = await renderExpanded({
       branches: remoteOnly,
       tags,
       stashes,
@@ -118,7 +159,7 @@ describe('BranchSidebar', () => {
   });
 
   it('keeps manual expand and collapse choices when the active branch changes', async () => {
-    const { component, getByRole, queryByRole } = render(BranchSidebar, {
+    const { component, getByRole, queryByRole } = await renderExpanded({
       branches: groupedBranches,
       tags,
       stashes,
@@ -147,7 +188,7 @@ describe('BranchSidebar', () => {
 
   it('selects on a single click and marks the selected branch', async () => {
     vi.useFakeTimers();
-    const { component, getByRole } = render(BranchSidebar, {
+    const { component, getByRole } = await renderExpanded({
       branches,
       tags,
       stashes,
@@ -167,7 +208,7 @@ describe('BranchSidebar', () => {
 
   it('keeps double-click checkout from also selecting', async () => {
     vi.useFakeTimers();
-    const { component, getByRole } = render(BranchSidebar, { branches, tags, stashes, worktrees });
+    const { component, getByRole } = await renderExpanded({ branches, tags, stashes, worktrees });
     const onCheckout = vi.fn();
     const onSelect = vi.fn();
     component.$on('checkout', onCheckout);
@@ -181,7 +222,7 @@ describe('BranchSidebar', () => {
   });
 
   it.each(['click', 'Enter', ' '])('dispatches tag checkout, stash apply, and non-main worktree open on %s', async (activation) => {
-    const { component, getByRole } = render(BranchSidebar, { branches, tags, stashes, worktrees });
+    const { component, getByRole } = await renderExpanded({ branches, tags, stashes, worktrees });
     const onCheckout = vi.fn();
     const onStashApply = vi.fn();
     const onWorktreeOpen = vi.fn();
@@ -207,7 +248,7 @@ describe('BranchSidebar', () => {
   });
 
   it('does not open the main worktree as a primary action', async () => {
-    const { component, getByRole } = render(BranchSidebar, { branches, tags, stashes, worktrees });
+    const { component, getByRole } = await renderExpanded({ branches, tags, stashes, worktrees });
     const onWorktreeOpen = vi.fn();
     component.$on('worktreeOpen', onWorktreeOpen);
 
@@ -217,7 +258,7 @@ describe('BranchSidebar', () => {
   });
 
   it.each(['click', 'Enter', ' '])('requests a submodule tab on %s', async (activation) => {
-    const { component, getByRole } = render(BranchSidebar, { branches, tags, stashes, worktrees, submodules });
+    const { component, getByRole } = await renderExpanded({ branches, tags, stashes, worktrees, submodules });
     const open = vi.fn();
     component.$on('submoduleOpen', open);
     const row = getByRole('button', { name: /submodule sdk.*packages\/sdk.*initialized/i });
@@ -228,7 +269,7 @@ describe('BranchSidebar', () => {
   });
 
   it('shows the submodule count, can collapse rows, and labels uninitialized entries', async () => {
-    const { getByRole, queryByRole } = render(BranchSidebar, { branches, tags, stashes, worktrees, submodules });
+    const { getByRole, queryByRole } = await renderExpanded({ branches, tags, stashes, worktrees, submodules });
     const header = getByRole('button', { name: /submodules.*3/i });
 
     expect(getByRole('button', { name: /submodule legacy.*vendor\/legacy.*uninitialized/i })).toBeEnabled();
@@ -249,15 +290,15 @@ describe('BranchSidebar', () => {
       shortHead: '1234567',
       accessibleName: 'Submodule ui-kit, packages/ui-kit, 1234567, modified',
     },
-  ])('shows and exposes the abbreviated head for $state submodule $name', ({ accessibleName, shortHead }) => {
-    const { getByRole } = render(BranchSidebar, { branches, tags, stashes, worktrees, submodules });
+  ])('shows and exposes the abbreviated head for $state submodule $name', async ({ accessibleName, shortHead }) => {
+    const { getByRole } = await renderExpanded({ branches, tags, stashes, worktrees, submodules });
 
     const row = getByRole('button', { name: accessibleName });
     expect(row.querySelector('.submodule-head')).toHaveTextContent(new RegExp(`^${shortHead}$`));
   });
 
-  it('does not show a head for an uninitialized submodule with a null head', () => {
-    const { getByRole } = render(BranchSidebar, { branches, tags, stashes, worktrees, submodules });
+  it('does not show a head for an uninitialized submodule with a null head', async () => {
+    const { getByRole } = await renderExpanded({ branches, tags, stashes, worktrees, submodules });
 
     const row = getByRole('button', { name: /submodule legacy.*vendor\/legacy.*uninitialized/i });
     expect(row.querySelector('.submodule-head')).toBeNull();
@@ -265,7 +306,7 @@ describe('BranchSidebar', () => {
   });
 
   it('opens context menus from Shift+F10 at the focused entry bounding box', async () => {
-    const { component, getByRole } = render(BranchSidebar, { branches, tags, stashes, worktrees });
+    const { component, getByRole } = await renderExpanded({ branches, tags, stashes, worktrees });
     const branchMenu = vi.fn();
     const tagMenu = vi.fn();
     const stashMenu = vi.fn();

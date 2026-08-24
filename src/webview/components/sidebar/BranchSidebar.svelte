@@ -71,12 +71,17 @@
     return groups;
   })();
 
+  /*
+   * Only LOCAL opens by default. The sidebar lives in a short bottom panel, so
+   * six expanded sections push the branch list — the thing you actually came
+   * for — off screen. The active branch's group path is still expanded below.
+   */
   let localExpanded = true;
-  let remoteExpanded = true;
-  let tagsExpanded = true;
-  let stashesExpanded = true;
-  let worktreesExpanded = true;
-  let submodulesExpanded = true;
+  let remoteExpanded = false;
+  let tagsExpanded = false;
+  let stashesExpanded = false;
+  let worktreesExpanded = false;
+  let submodulesExpanded = false;
   let expandedRemotes: Record<string, boolean> = {};
   let expandedGroups: Record<string, boolean> = {};
   let branchGroupsInitialized = false;
