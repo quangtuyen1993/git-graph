@@ -4,14 +4,16 @@ import { MessageRouter } from './controllers/message-router';
 import { RepositorySession, type RepositoryInfo } from './controllers/repository-session';
 import { GitGraphWebviewProvider } from './providers/webview-provider';
 import { GitService } from './services/git.service';
+import type { ReviewRunner } from './services/review-runner';
 import type { WebviewHost } from './types/webview-host.types';
 
 let webviewProvider: GitGraphWebviewProvider;
 
-// Every ReviewRunner constructed across panel sessions is registered here so
-// deactivate() can kill every in-flight CLI process. Without this, a detached
-// review process keeps running (and keeps spending) after the window closes.
-const runners: { cancelAll(): void }[] = [];
+// The single ReviewRunner constructed in activate() below. Held here so
+// deactivate() can kill every in-flight CLI process — without this, a
+// detached review process keeps running (and keeps spending) after the
+// window closes.
+let activeRunner: ReviewRunner | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -69,11 +71,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     console.error(`[extension] Failed to reconcile orphaned reviews: ${message}`);
   }
 
+  // The live session/router, for consumers that have no webview to ask (the
+  // review tree view, Task 11's status-bar clock) and for routing events back
+  // to whichever webview is currently attached. Assigned by createSession
+  // below and cleared on dispose.
+  let activeSession: RepositorySession | undefined;
+  let activeRouter: MessageRouter | undefined;
+
+  const getRepoId = (): string | undefined => {
+    const repoPath = activeSession?.getActiveRepositoryPath();
+    return repoPath ? repoIdFor(realpathSync(repoPath)) : undefined;
+  };
+
   // Assigned by Task 11 once the review tree view and status-bar clock exist.
   // Declared here (rather than left undefined-and-optional-chained on an
   // undeclared name) so the onChange callback below type-checks today.
   let reviewTree: { refresh(): void } | undefined;
   let syncTicker: (() => Promise<void>) | undefined;
+
+  // One runner for the whole extension, not one per session: its in-flight
+  // map is the source of truth for cross-session dedup (review.start
+  // idempotency), so a second session for the same repo must see the first
+  // session's in-flight run rather than falling back to the store's
+  // persisted status.
+  const reviewRunner = new ReviewRunner(reviewStore, aiReview, (_repoId, id) => {
+    activeRouter?.sendEvent('review.changed', { id });
+    reviewTree?.refresh();            // undefined until Task 11 registers the view
+    void syncTicker?.();              // undefined until Task 11 adds the clock
+  });
+  activeRunner = reviewRunner;         // held at module scope so deactivate() can cancelAll()
 
   function createSession(host: WebviewHost): () => void {
     const panelSessionId = ++nextPanelSessionId;
@@ -83,6 +109,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       initialRepository: repos[0] ?? null,
       repositories: repos,
     });
+    activeSession = session;
+    activeRouter = router;
 
     let gitWatcher: vscode.FileSystemWatcher | undefined;
     let debounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -364,18 +392,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     });
 
-    const reviewRunner = new ReviewRunner(reviewStore, aiReview, (_repoId, id) => {
-      router.sendEvent('review.changed', { id });
-      reviewTree?.refresh();            // undefined until Task 11 registers the view
-      void syncTicker?.();              // undefined until Task 11 adds the clock
-    });
-    runners.push(reviewRunner);         // module-level array, drained in deactivate
-
-    const getRepoId = (): string | undefined => {
-      const repoPath = session.getGitService()?.getRepoPath();
-      return repoPath ? repoIdFor(realpathSync(repoPath)) : undefined;
-    };
-
     const openBody = async (repoId: string, id: string): Promise<void> => {
       const doc = await vscode.workspace.openTextDocument(
         vscode.Uri.file(reviewStore.bodyPath(repoId, id)),
@@ -406,6 +422,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       debounceTimer = undefined;
       gitWatcher?.dispose();
       gitWatcher = undefined;
+      if (activeSession === session) activeSession = undefined;
+      if (activeRouter === router) activeRouter = undefined;
       router.dispose();
     };
 
@@ -438,6 +456,6 @@ export function deactivate(): void {
 
   // Nothing must outlive the window. Without this, detached CLI process groups
   // keep running and keep spending after VS Code is gone.
-  for (const runner of runners) runner.cancelAll();
-  runners.length = 0;
+  activeRunner?.cancelAll();
+  activeRunner = undefined;
 }

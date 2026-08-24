@@ -103,7 +103,23 @@ vi.mock('../../src/extension/services/ai-review.service', () => ({
   },
 }));
 
-import { activate } from '../../src/extension/extension';
+// A stand-in that only tracks construction and lets tests assert on cancelAll,
+// so the hoisting behaviour (one runner for the whole extension, not one per
+// session) can be verified without exercising real review I/O.
+const reviewRunnerMocks = vi.hoisted(() => ({
+  instances: [] as Array<{ cancelAll: ReturnType<typeof vi.fn> }>,
+}));
+
+vi.mock('../../src/extension/services/review-runner', () => ({
+  ReviewRunner: class {
+    cancelAll = vi.fn();
+    constructor() {
+      reviewRunnerMocks.instances.push(this as unknown as { cancelAll: ReturnType<typeof vi.fn> });
+    }
+  },
+}));
+
+import { activate, deactivate } from '../../src/extension/extension';
 import type { Request } from '../../src/extension/types/messages.types';
 
 interface FakePanel {
@@ -228,6 +244,7 @@ async function activateAndResolveView(view: FakeView = fakeView()): Promise<Fake
 describe('extension view sessions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    reviewRunnerMocks.instances.length = 0;
     hostMocks.globalState.clear();
     hostMocks.workspaceFolders = [
       { name: 'root', uri: { fsPath: '/workspace/root' } },
@@ -437,5 +454,26 @@ describe('extension view sessions', () => {
     openCommand();
 
     expect(hostMocks.executeCommand).toHaveBeenCalledWith('gitGraphPro.graph.focus');
+  });
+
+  it('shares one ReviewRunner across sessions and cancels its in-flight runs on deactivate', async () => {
+    await activateAndResolveView();
+    expect(reviewRunnerMocks.instances).toHaveLength(1);
+
+    const provider = hostMocks.registerWebviewViewProvider.mock.calls
+      .find(([viewType]) => viewType === 'gitGraphPro.graph')?.[1] as {
+        resolveWebviewView(view: unknown): void;
+      };
+
+    // Resolving a second view (a hide/re-show) tears down and rebuilds the
+    // session, but must not construct a second ReviewRunner: a per-session
+    // runner would fragment the in-flight map that review.start relies on for
+    // cross-session dedup.
+    provider.resolveWebviewView(fakeView());
+    expect(reviewRunnerMocks.instances).toHaveLength(1);
+
+    deactivate();
+
+    expect(reviewRunnerMocks.instances[0].cancelAll).toHaveBeenCalledTimes(1);
   });
 });

@@ -57,6 +57,11 @@ export class RepositorySession {
     return this.gitService;
   }
 
+  /** The active repo root, for consumers that have no webview to ask. */
+  public getActiveRepositoryPath(): string | undefined {
+    return this.getGitService()?.getRepoPath();
+  }
+
   public getCurrentRepository(): RepositoryInfo | null {
     return this.currentRepository;
   }
