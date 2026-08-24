@@ -168,4 +168,23 @@ describe('ReviewRunner', () => {
 
     expect(changes.filter(c => c === id).length).toBeGreaterThanOrEqual(2);
   });
+
+  it('is idempotent for a second start() while the same id is already in flight', async () => {
+    const { service, captured } = deferredService();
+    const runner = new ReviewRunner(store, service as never, () => {});
+
+    const idA = await runner.start(input);
+    captured.onChunk?.('first run body');
+    const idB = await runner.start(input);
+
+    expect(idB).toBe(idA);
+    expect(service.review).toHaveBeenCalledTimes(1);
+    // The original controller must still be the one governing the run — a
+    // second, competing entry in `inFlight` would have orphaned it.
+    expect(runner.cancel(REPO, idA)).toBe(true);
+    await waitFor(() => runner.isRunning(idA) === false);
+
+    expect((await store.get(REPO, idA))?.status).toBe('cancelled');
+    expect(await store.readBody(REPO, idA)).toBe('first run body');
+  });
 });
