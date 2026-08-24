@@ -84,4 +84,19 @@ describe('GitGraphWebviewProvider', () => {
 
     expect(disposers[0]).toHaveBeenCalledTimes(1);
   });
+
+  it('renders the review asset when constructed for the review app', () => {
+    const provider = new GitGraphWebviewProvider(
+      { toString: () => '/extension' } as never,
+      createSession,
+      { asset: 'review', title: 'Code Review' },
+    );
+    const view = createFakeView();
+    provider.resolveWebviewView(view as never);
+
+    expect(view.webview.html).toContain('assets/review.js');
+    expect(view.webview.html).toContain('assets/review.css');
+    expect(view.webview.html).toContain('<title>Code Review</title>');
+    expect(view.webview.html).not.toContain('assets/main.js');
+  });
 });
