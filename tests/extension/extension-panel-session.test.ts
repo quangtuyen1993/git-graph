@@ -405,7 +405,7 @@ describe('extension panel sessions', () => {
       result: [{ name: '/real/sdk' }],
     });
     expect(await responseFor(childPanel, 'child-switch')).toMatchObject({
-      error: { message: expect.stringContaining('fixed repository') },
+      error: { message: expect.stringContaining('Repo not found') },
     });
   });
 

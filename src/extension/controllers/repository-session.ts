@@ -1,3 +1,4 @@
+import { realpath } from 'fs/promises';
 import { handleGitMethod } from './git-method-handler';
 import { GraphMethodHandler } from './graph-method-handler';
 import { GitService } from '../services/git.service';
@@ -11,18 +12,22 @@ export interface RepositoryInfo {
 export interface RepositorySessionOptions {
   initialRepository: RepositoryInfo | null;
   repositories: readonly RepositoryInfo[];
-  allowRepositorySwitch: boolean;
   createGitService?: (path: string) => GitService;
+  canonicalizePath?: (path: string) => Promise<string>;
 }
 
 export class RepositorySession {
   private gitService: GitService | null;
   private currentRepository: RepositoryInfo | null;
+  private readonly repositories: RepositoryInfo[];
   private readonly graphMethodHandler: GraphMethodHandler;
   private readonly createGitService: (path: string) => GitService;
+  private readonly canonicalizePath: (path: string) => Promise<string>;
 
-  constructor(private readonly options: RepositorySessionOptions) {
+  constructor(options: RepositorySessionOptions) {
     this.createGitService = options.createGitService ?? ((path) => new GitService(path));
+    this.canonicalizePath = options.canonicalizePath ?? realpath;
+    this.repositories = [...options.repositories];
     this.currentRepository = options.initialRepository;
     this.gitService = this.currentRepository
       ? this.createGitService(this.currentRepository.path)
@@ -31,6 +36,21 @@ export class RepositorySession {
       new GraphService(),
       () => this.gitService,
     );
+  }
+
+  /**
+   * Makes a repository selectable without reopening anything. Submodules arrive
+   * this way, so the path is canonicalised first: the same submodule reached
+   * through a symlink must not enter the list twice.
+   */
+  public async addRepository(repository: RepositoryInfo): Promise<RepositoryInfo> {
+    const canonicalPath = await this.canonicalizePath(repository.path);
+    const existing = this.repositories.find((candidate) => candidate.path === canonicalPath);
+    if (existing) return existing;
+
+    const entry: RepositoryInfo = { name: repository.name, path: canonicalPath };
+    this.repositories.push(entry);
+    return entry;
   }
 
   public getGitService(): GitService | null {
@@ -47,18 +67,14 @@ export class RepositorySession {
     switch (method) {
       case 'repo.list':
         return {
-          repos: this.options.repositories.map((repository) => ({
+          repos: this.repositories.map((repository) => ({
             ...repository,
             active: repository.path === this.currentRepository?.path,
           })),
         };
       case 'repo.switch': {
-        if (!this.options.allowRepositorySwitch) {
-          throw new Error('Cannot switch a fixed repository session');
-        }
-
         const targetPath = p.path as string;
-        const repository = this.options.repositories.find((candidate) => candidate.path === targetPath);
+        const repository = this.repositories.find((candidate) => candidate.path === targetPath);
         if (!repository) {
           throw new Error(`Repo not found: ${targetPath}`);
         }

@@ -57,12 +57,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       ? new RepositorySession({
           initialRepository: repos[0] ?? null,
           repositories: repos,
-          allowRepositorySwitch: true,
         })
       : new RepositorySession({
           initialRepository: { name: request.repoName, path: request.repoPath },
           repositories: [{ name: request.repoName, path: request.repoPath }],
-          allowRepositorySwitch: false,
         });
 
     let gitWatcher: vscode.FileSystemWatcher | undefined;

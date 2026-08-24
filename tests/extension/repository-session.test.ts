@@ -36,22 +36,14 @@ function fakeGitServiceFactory(repositoryPath: string): GitService {
 }
 
 describe('RepositorySession', () => {
-  it('keeps repository switching isolated from fixed submodule sessions', async () => {
+  it('switches between configured repositories and rejects unknown paths', async () => {
     const root = new RepositorySession({
       initialRepository: { name: 'root', path: '/root' },
       repositories: [{ name: 'root', path: '/root' }, { name: 'other', path: '/other' }],
-      allowRepositorySwitch: true,
-      createGitService: fakeGitServiceFactory,
-    });
-    const child = new RepositorySession({
-      initialRepository: { name: 'sdk', path: '/root/packages/sdk' },
-      repositories: [{ name: 'sdk', path: '/root/packages/sdk' }],
-      allowRepositorySwitch: false,
       createGitService: fakeGitServiceFactory,
     });
 
     expect(await root.handleGit('git.branches', {})).toEqual([{ name: '/root' }]);
-    expect(await child.handleGit('git.branches', {})).toEqual([{ name: '/root/packages/sdk' }]);
     expect(await root.handleRepo('repo.list', {})).toEqual({
       repos: [
         { name: 'root', path: '/root', active: true },
@@ -65,21 +57,17 @@ describe('RepositorySession', () => {
 
     expect(root.getCurrentRepository()?.path).toBe('/other');
     expect(await root.handleGit('git.branches', {})).toEqual([{ name: '/other' }]);
-    expect(child.getCurrentRepository()?.path).toBe('/root/packages/sdk');
-    await expect(child.handleRepo('repo.switch', { path: '/root' })).rejects.toThrow('fixed repository');
   });
 
   it('publishes graph windows only from the session that built them', async () => {
     const root = new RepositorySession({
       initialRepository: { name: 'root', path: '/root' },
       repositories: [{ name: 'root', path: '/root' }],
-      allowRepositorySwitch: true,
       createGitService: fakeGitServiceFactory,
     });
     const child = new RepositorySession({
       initialRepository: { name: 'sdk', path: '/root/packages/sdk' },
       repositories: [{ name: 'sdk', path: '/root/packages/sdk' }],
-      allowRepositorySwitch: false,
       createGitService: fakeGitServiceFactory,
     });
 
@@ -99,5 +87,32 @@ describe('RepositorySession', () => {
 
     expect(rootWindow.nodes.map((node) => node.subject)).toEqual(['/root']);
     expect(childWindow.nodes.map((node) => node.subject)).toEqual(['/root/packages/sdk']);
+  });
+
+  it('adds repositories at runtime and deduplicates them by canonical path', async () => {
+    const session = new RepositorySession({
+      initialRepository: { name: 'root', path: '/root' },
+      repositories: [{ name: 'root', path: '/root' }],
+      createGitService: fakeGitServiceFactory,
+      canonicalizePath: async (path) => (path === '/root/alias/sdk' ? '/root/packages/sdk' : path),
+    });
+
+    const added = await session.addRepository({ name: 'sdk', path: '/root/alias/sdk' });
+    expect(added).toEqual({ name: 'sdk', path: '/root/packages/sdk' });
+
+    const again = await session.addRepository({ name: 'sdk', path: '/root/packages/sdk' });
+    expect(again).toBe(added);
+
+    expect(await session.handleRepo('repo.list', {})).toEqual({
+      repos: [
+        { name: 'root', path: '/root', active: true },
+        { name: 'sdk', path: '/root/packages/sdk', active: false },
+      ],
+    });
+
+    await session.handleRepo('repo.switch', { path: '/root/packages/sdk' });
+
+    expect(session.getCurrentRepository()?.path).toBe('/root/packages/sdk');
+    expect(await session.handleGit('git.branches', {})).toEqual([{ name: '/root/packages/sdk' }]);
   });
 });
