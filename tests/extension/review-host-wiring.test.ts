@@ -4,15 +4,15 @@ import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * The review side must not be hostage to the graph webview. These tests
- * activate the extension and never resolve a webview view — the state a fresh
- * window is in when the user opens the Code Review tab (activation via
- * `onView:gitGraphPro.reviews`).
+ * The review side must not be hostage to the graph webview. Activation must
+ * succeed, register the reviews webview alongside the graph webview, and
+ * reconcile whatever is sitting on disk — all without the extension host
+ * ever resolving a webview view (the state a fresh window is in before the
+ * user opens either tab).
  */
 
 const hostMocks = vi.hoisted(() => ({
   registerCommand: vi.fn(),
-  createTreeView: vi.fn(() => ({ dispose: vi.fn() })),
   registerWebviewViewProvider: vi.fn(),
   registerTextDocumentContentProvider: vi.fn(),
   createFileSystemWatcher: vi.fn(),
@@ -59,21 +59,11 @@ vi.mock('vscode', () => ({
     fire(): void { this.listeners.forEach(listener => listener()); }
     dispose = vi.fn();
   },
-  ThemeIcon: class { constructor(public readonly id: string) {} },
-  TreeItem: class {
-    description?: string;
-    iconPath?: unknown;
-    contextValue?: string;
-    tooltip?: string;
-    command?: unknown;
-    constructor(public readonly label: string) {}
-  },
   RelativePattern: class { constructor(public readonly base: string, public readonly pattern: string) {} },
   commands: { registerCommand: hostMocks.registerCommand, executeCommand: vi.fn() },
   languages: { setTextDocumentLanguage: hostMocks.setTextDocumentLanguage },
   window: {
     registerWebviewViewProvider: hostMocks.registerWebviewViewProvider,
-    createTreeView: hostMocks.createTreeView,
     showTextDocument: hostMocks.showTextDocument,
     showWarningMessage: vi.fn(),
   },
@@ -168,17 +158,6 @@ async function activateHeadless(): Promise<void> {
   } as never);
 }
 
-function treeProvider(): { getChildren(): Promise<ReviewEntry[]>; dispose(): void } {
-  const call = hostMocks.createTreeView.mock.calls
-    .find(([id]) => id === 'gitGraphPro.reviews') as unknown as [string, { treeDataProvider: never }];
-  return call[1].treeDataProvider;
-}
-
-function command(id: string): (entry: ReviewEntry) => Promise<void> {
-  const call = hostMocks.registerCommand.mock.calls.find(([name]) => name === id);
-  return call?.[1] as (entry: ReviewEntry) => Promise<void>;
-}
-
 beforeEach(async () => {
   vi.clearAllMocks();
   runnerMocks.isRunning.mockReturnValue(false);
@@ -190,63 +169,35 @@ afterEach(async () => {
   await rm(storageRoot, { recursive: true, force: true });
 });
 
-describe('the review view without a graph webview', () => {
-  it('lists persisted reviews when no webview has ever been resolved', async () => {
-    // I1: getRepoId() used to come from the webview session, so the view was
-    // empty in a fresh window despite reviews sitting on disk.
-    await seed([persistedEntry()]);
+describe('the review host without a graph webview ever resolving', () => {
+  it('registers the reviews webview alongside the graph webview', async () => {
     await activateHeadless();
 
-    const rows = await treeProvider().getChildren();
-
-    expect(rows.map(row => row.id)).toEqual([ENTRY_ID]);
+    const registered = hostMocks.registerWebviewViewProvider.mock.calls.map(c => c[0]);
+    expect(registered).toContain('gitGraphPro.graph');
+    expect(registered).toContain('gitGraphPro.reviews');
   });
 
-  it('opens a row body with no webview attached', async () => {
-    await seed([persistedEntry()]);
+  it('registers the reviews webview so it survives the panel hiding', async () => {
     await activateHeadless();
 
-    await command('gitGraphPro.review.open')(persistedEntry());
-
-    expect(hostMocks.openTextDocument).toHaveBeenCalledWith(
-      expect.objectContaining({ fsPath: join(storageRoot, 'reviews', REPO_ID, `${ENTRY_ID}.md`) }),
-    );
-    expect(hostMocks.showTextDocument).toHaveBeenCalled();
+    const call = hostMocks.registerWebviewViewProvider.mock.calls
+      .find(([viewType]) => viewType === 'gitGraphPro.reviews');
+    expect(call?.[2]).toEqual({ webviewOptions: { retainContextWhenHidden: true } });
   });
 
-  it('deletes a row with no webview attached', async () => {
-    const dir = await seed([persistedEntry()]);
+  it('reconciles a review left running by a previous window', async () => {
+    // I1: getRepoId() and reconcileOrphans() must reach the on-disk store on
+    // activation even though nothing ever resolves a webview.
+    const dir = await seed([persistedEntry({ status: 'running' })]);
+
     await activateHeadless();
 
-    await command('gitGraphPro.review.delete')(persistedEntry());
-
-    await expect(readFile(join(dir, `${ENTRY_ID}.md`), 'utf8')).rejects.toThrow();
-    expect(JSON.parse(await readFile(join(dir, 'index.json'), 'utf8'))).toEqual([]);
+    const [stored] = JSON.parse(await readFile(join(dir, 'index.json'), 'utf8'));
+    expect(stored.status).toBe('interrupted');
   });
 
-  it('reruns a row with no webview attached', async () => {
-    // I2: rerun returned early whenever no webview session was live, so the
-    // command silently did nothing.
-    const dir = await seed([persistedEntry()]);
-    await activateHeadless();
-
-    await command('gitGraphPro.review.rerun')(persistedEntry());
-
-    expect(runnerMocks.start).toHaveBeenCalledWith(expect.objectContaining({
-      repoId: REPO_ID,
-      baseRef: 'main',
-      headRef: 'feat/x',
-      provider: 'claude',
-      model: 'sonnet',
-    }));
-    // The stale entry is dropped first; the fresh run owns the id from here.
-    expect(JSON.parse(await readFile(join(dir, 'index.json'), 'utf8'))).toEqual([]);
-  });
-
-  it('registers the tree provider as a disposable so its emitter is released', async () => {
-    // M2
-    await activateHeadless();
-
-    expect(subscriptions).toContain(treeProvider() as never);
+  it('activates cleanly when nothing has ever been stored for the repo', async () => {
+    await expect(activateHeadless()).resolves.toBeUndefined();
   });
 });

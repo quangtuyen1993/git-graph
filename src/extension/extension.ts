@@ -56,8 +56,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const { ReviewStore } = await import('./services/review-store');
   const { ReviewRunner } = await import('./services/review-runner');
   const { createReviewHandler } = await import('./controllers/review-method-handler');
-  const { ReviewTreeProvider } = await import('./providers/review-tree-provider');
-  const { registerReviewView } = await import('./providers/review-view-registration');
   const { createActiveRepo } = await import('./services/active-repo');
   const { ReviewTargetState } = await import('./services/review-target');
 
@@ -90,12 +88,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   const getRepoId = () => activeRepo.getRepoId();
 
-  // Assigned by Task 11 once the review tree view and status-bar clock exist.
-  // Declared here (rather than left undefined-and-optional-chained on an
-  // undeclared name) so the onChange callback below type-checks today.
-  let reviewTree: { refresh(): void } | undefined;
-  let syncTicker: (() => Promise<void>) | undefined;
-
   // One runner for the whole extension, not one per session: its in-flight
   // map is the source of truth for cross-session dedup (review.start
   // idempotency), so a second session for the same repo must see the first
@@ -103,8 +95,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // persisted status.
   const reviewRunner = new ReviewRunner(reviewStore, aiReview, (_repoId, id) => {
     routers.broadcast('review.changed', { id });
-    reviewTree?.refresh();            // undefined until Task 11 registers the view
-    void syncTicker?.();              // undefined until Task 11 adds the clock
   });
   activeRunner = reviewRunner;         // held at module scope so deactivate() can cancelAll()
 
@@ -438,6 +428,65 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return dispose;
   }
 
+  /**
+   * The review tab's session. Deliberately thin: no RepositorySession, no file
+   * watcher — the store and the target state live on the host and survive this
+   * webview being rebuilt by hide/show. Every method resolves the repository
+   * through activeRepo, same as the review handler.
+   */
+  function createReviewSession(host: WebviewHost): () => void {
+    const sessionTag = ++nextPanelSessionId;
+    let requestSequence = 0;
+    const router = new MessageRouter();
+    const detachRouter = routers.attach(router);
+
+    router.register('review', reviewHandler);
+
+    router.register('ai', async (method: string) => {
+      if (method === 'ai.providers') return aiReview.detectProviders();
+      throw new Error(`Unknown method: ${method}`);
+    });
+
+    router.register('git', async (method: string) => {
+      if (method === 'git.branches') {
+        const gitService = activeRepo.getGitService();
+        if (!gitService) throw new Error('No git repository found');
+        return gitService.branches();
+      }
+      throw new Error(`Unknown method: ${method}`);
+    });
+
+    router.register('ui', async (method: string, params: unknown) => {
+      const p = (params ?? {}) as Record<string, unknown>;
+      switch (method) {
+        case 'ui.getState':
+          return context.globalState.get(p.key as string) ?? null;
+        case 'ui.setState':
+          await context.globalState.update(p.key as string, p.value);
+          return { success: true };
+        case 'ui.compareDiff': {
+          const gitService = activeRepo.getGitService();
+          if (!gitService) throw new Error('No git repository found');
+          return openCompareDiff(
+            makeCompareDiffDeps(gitService as GitService, sessionTag, () => ++requestSequence),
+            p as never,
+          );
+        }
+        default:
+          throw new Error(`Unknown method: ${method}`);
+      }
+    });
+
+    router.setHost(host);
+
+    const dispose = () => {
+      detachRouter();
+      router.dispose();
+    };
+    host.onDidDispose(dispose);
+    return dispose;
+  }
+
   const webviewProvider = new GitGraphWebviewProvider(
     context.extensionUri,
     (host) => createSession(host),
@@ -451,66 +500,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
   );
 
+  const reviewWebviewProvider = new GitGraphWebviewProvider(
+    context.extensionUri,
+    (host) => createReviewSession(host),
+    { asset: 'review', title: 'Code Review' },
+  );
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider('gitGraphPro.reviews', reviewWebviewProvider, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
+  );
+
   const openCommand = vscode.commands.registerCommand('gitGraphPro.open', () => {
     void vscode.commands.executeCommand('gitGraphPro.graph.focus');
   });
   context.subscriptions.push(openCommand);
-
-  const treeProvider = new ReviewTreeProvider(reviewStore, getRepoId);
-  reviewTree = treeProvider;
-  context.subscriptions.push(treeProvider);
-
-  // One timer for the whole view, started only while a run is in flight and
-  // stopped when the last one ends, so a running row's clock advances without
-  // a stray setInterval outliving the extension.
-  let tick: ReturnType<typeof setInterval> | undefined;
-  syncTicker = async () => {
-    let running = false;
-    try {
-      // getRepoId() does a synchronous realpathSync — a repo that vanished (or
-      // renamed) between the run starting and this tick can throw. A ticker
-      // glitch must not throw out of onChange or leave a dangling interval;
-      // treat "can't tell" as "not running" and let the next onChange retry.
-      const repoId = getRepoId();
-      if (repoId) {
-        running = (await reviewStore.list(repoId)).some(entry => entry.status === 'running');
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`[extension] Failed to check in-flight reviews: ${message}`);
-    }
-    if (running && !tick) {
-      tick = setInterval(() => treeProvider.refresh(), 1000);
-    } else if (!running && tick) {
-      clearInterval(tick);
-      tick = undefined;
-    }
-  };
-  context.subscriptions.push({
-    dispose: () => {
-      if (tick) clearInterval(tick);
-      tick = undefined;
-    },
-  });
-
-  registerReviewView({
-    tree: treeProvider,
-    runner: reviewRunner,
-    store: reviewStore,
-    getRepoId,
-    openBody,
-    rerun: async (entry) => {
-      try {
-        await reviewHandler('review.rerun', { id: entry.id });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`[extension] Failed to rerun review ${entry.id}: ${message}`);
-      }
-    },
-    registerCommand: (id, fn) => vscode.commands.registerCommand(id, fn),
-    registerTreeView: (id, tree) => vscode.window.createTreeView(id, { treeDataProvider: tree }),
-    subscribe: (d) => context.subscriptions.push(d),
-  });
 }
 
 export function deactivate(): void {
