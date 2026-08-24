@@ -81,7 +81,7 @@ describe('MessageBridge', () => {
   it('lets a slow host-owned AI request finish instead of timing out at 30s', async () => {
     // Regression: these were absent from the unbounded set, so the webview
     // rejected at the 30s default while the host was still working.
-    for (const method of ['ai.compare', 'ai.providers']) {
+    for (const method of ['review.compare', 'ai.providers']) {
       vi.useFakeTimers();
       const postMessage = vi.fn();
       vi.stubGlobal('acquireVsCodeApi', () => ({ postMessage, getState: () => ({}), setState: vi.fn() }));

@@ -20,9 +20,9 @@ const UNBOUNDED_REQUEST_METHODS = new Set([
   'ui.inputBox',
   // ai.review / ai.reviewDiff used to shell out to a CLI and block for minutes.
   // They are gone: the host owns review runs now, and review.start returns as
-  // soon as the entry exists. ai.compare and ai.providers still touch git and
-  // the filesystem, so the host keeps owning their duration.
-  'ai.compare',
+  // soon as the entry exists. review.compare and ai.providers still touch git
+  // and the filesystem, so the host keeps owning their duration.
+  'review.compare',
   'ai.providers',
 ]);
 const MUTATION_REQUEST_METHODS = new Set([

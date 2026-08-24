@@ -15,7 +15,6 @@
   import CommitDetail from './components/detail/CommitDetail.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
   import ResizeHandle from './components/layout/ResizeHandle.svelte';
-  import AIReviewPanel from './components/review/AIReviewPanel.svelte';
 
   interface Branch {
     name: string;
@@ -163,7 +162,6 @@
   // Panel state
   let leftSidebarOpen = true;
   let rightPanelOpen = false;
-  let rightPanelMode: 'detail' | 'review' = 'detail';
   // The widths the user asked for. Only a drag, a reset or a restore writes
   // these; the rendered widths below are a pure projection of them, so
   // toggling the sidebar or dragging the panel narrow squeezes the panels
@@ -188,14 +186,6 @@
   $: leftPanelMaxWidth = panelLayout.left.maxWidth;
   $: rightPanelMinWidth = panelLayout.right.minWidth;
   $: rightPanelMaxWidth = panelLayout.right.maxWidth;
-
-  // AI Review state
-  let aiProviders: { id: string; name: string; available: boolean; group: 'cli' | 'api' }[] = [];
-  let savedProvider = '';
-  let savedModel = '';
-  let aiReviewJobId: string | null = null;
-  let aiReviewLoading = false;
-  let aiReviewError = '';
 
   // Context menu state
   let contextMenuVisible = false;
@@ -234,11 +224,6 @@
       const active = repos.find(r => r.active);
       activeRepoName = active?.name ?? repos[0]?.name ?? '';
       await refreshGraph();
-      // Load AI providers
-      aiProviders = await bridge.send('ai.providers') as typeof aiProviders;
-      // Restore cached provider/model selection
-      savedProvider = await bridge.send('ui.getState', { key: 'aiReview.provider' }) as string | null ?? '';
-      savedModel = await bridge.send('ui.getState', { key: 'aiReview.model' }) as string | null ?? '';
       await restorePanelState();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -247,11 +232,6 @@
 
     bridge.on('graph.invalidated', () => {
       refreshGraph();
-    });
-
-    bridge.on('review.changed', (data) => {
-      const changed = data as { id: string };
-      if (changed.id === aiReviewJobId) aiReviewLoading = false;
     });
   });
 
@@ -505,7 +485,6 @@
 
     if (hash && hash !== 'WORKING') {
       rightPanelOpen = true;
-      rightPanelMode = 'detail';
       fetchCommitDetail(hash);
     } else {
       detailCommit = null;
@@ -1271,9 +1250,6 @@
           case 'worktreeOpen':
             await bridge.send('ui.openFolder', { path: branchName });
             break;
-          case 'aiReview':
-            // Unused — replaced by compareBranch
-            break;
           case 'compareBranch': {
             const currentBr = branches.find(b => b.current);
             let base = branchName;
@@ -1296,60 +1272,6 @@
       return action !== 'copySha' && action !== 'copyShas' && action !== 'reviewCommit' && action !== 'selectForCompare' && action !== 'compareWithSelected';
     } finally {
       contextMenuTarget = null;
-    }
-  }
-
-  // Compare state
-  let compareSource = '';
-  let compareTarget = '';
-  let compareFiles: { path: string; oldPath: string | null; status: string; additions: number; deletions: number; binary: boolean }[] | null = null;
-  let compareLoading = false;
-
-  async function compareBranches(source: string, target: string) {
-    compareSource = source;
-    compareTarget = target;
-    compareFiles = null;
-    rightPanelOpen = true;
-    rightPanelMode = 'review';
-    aiReviewError = '';
-
-    // If both branches set, fetch comparison immediately
-    if (source && target) {
-      compareLoading = true;
-      try {
-        const result = await bridge.send('ai.compare', { sourceBranch: source, targetBranch: target }) as { files: typeof compareFiles };
-        compareFiles = result.files;
-      } catch (e) {
-        aiReviewError = e instanceof Error ? e.message : String(e);
-      } finally {
-        compareLoading = false;
-      }
-    }
-  }
-
-  async function handleAIReview(event: CustomEvent<{ sourceBranch: string; targetBranch: string; provider: string; model: string }>) {
-    const { sourceBranch, targetBranch, provider, model } = event.detail;
-    aiReviewLoading = true;
-    aiReviewError = '';
-    try {
-      const started = await bridge.send('review.start', { kind: 'branch', baseRef: sourceBranch, headRef: targetBranch, provider, model }) as { id: string; cached: boolean };
-      aiReviewJobId = started.id;
-      // A cache hit resolves an already-`done` run and opens its document on the
-      // host side without any status transition — no review.changed will ever
-      // fire for it, so nothing else will clear the spinner.
-      if (started.cached) aiReviewLoading = false;
-    } catch (e) {
-      aiReviewError = e instanceof Error ? e.message : String(e);
-      aiReviewLoading = false;
-    }
-  }
-
-  async function handleCompareOpenDiff(event: CustomEvent<{ sourceBranch: string; targetBranch: string; path: string; oldPath: string | null; status: string }>) {
-    const { sourceBranch, targetBranch, path, oldPath, status } = event.detail;
-    try {
-      await bridge.send('ui.compareDiff', { sourceBranch, targetBranch, path, oldPath, status });
-    } catch (e) {
-      aiReviewError = e instanceof Error ? e.message : String(e);
     }
   }
 
@@ -1591,39 +1513,15 @@
       />
       <aside class="right-panel" style="width: {rightPanelWidth}px;">
         <div class="right-panel-header">
-          <span class="right-panel-title">{rightPanelMode === 'review' ? 'COMPARE' : 'COMMIT'}</span>
+          <span class="right-panel-title">COMMIT</span>
           <button class="close-btn" aria-label="Close panel" title="Close panel" on:click={closeRightPanel}><Icon name="close" /></button>
         </div>
-        {#if rightPanelMode === 'review'}
-          <AIReviewPanel
-            providers={aiProviders}
-            branches={branches.map(b => ({ name: b.name, current: b.current }))}
-            {compareFiles}
-            {compareLoading}
-            initialSource={compareSource}
-            initialTarget={compareTarget}
-            initialProvider={savedProvider}
-            initialModel={savedModel}
-            reviewLoading={aiReviewLoading}
-            error={aiReviewError}
-            on:compare={(e) => compareBranches(e.detail.sourceBranch, e.detail.targetBranch)}
-            on:review={handleAIReview}
-            on:openDiff={handleCompareOpenDiff}
-            on:settingsChange={(e) => {
-              savedProvider = e.detail.provider;
-              savedModel = e.detail.model;
-              bridge.send('ui.setState', { key: 'aiReview.provider', value: e.detail.provider });
-              bridge.send('ui.setState', { key: 'aiReview.model', value: e.detail.model });
-            }}
-          />
-        {:else}
-          <CommitDetail
-            commit={detailCommit}
-            files={detailFiles}
-            loading={detailLoading}
-            on:openFile={(e) => bridge.send('ui.openDiff', e.detail)}
-          />
-        {/if}
+        <CommitDetail
+          commit={detailCommit}
+          files={detailFiles}
+          loading={detailLoading}
+          on:openFile={(e) => bridge.send('ui.openDiff', e.detail)}
+        />
       </aside>
     {/if}
   </div>

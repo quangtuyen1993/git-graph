@@ -385,24 +385,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     router.register('ping', async () => ({ pong: true, timestamp: Date.now() }));
 
-    router.register('ai', async (method: string, params: unknown) => {
-      const p = (params ?? {}) as Record<string, unknown>;
-      switch (method) {
-        case 'ai.providers':
-          return aiReview.detectProviders();
-        case 'ai.compare': {
-          const gitService = session.getGitService();
-          if (!gitService) throw new Error('No git repository found');
-          const baseBranch = p.sourceBranch as string;
-          const headBranch = p.targetBranch as string;
-          const result = await gitService.diff(baseBranch, headBranch);
-          return { files: result.files };
-        }
-        default:
-          throw new Error(`Unknown method: ${method}`);
-      }
-    });
-
     router.register('review', reviewHandler);
 
     router.setHost(host);

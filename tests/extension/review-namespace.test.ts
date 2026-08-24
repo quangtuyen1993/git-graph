@@ -150,15 +150,6 @@ describe('review namespace', () => {
     expect(result).toEqual({ id: 'new-id', cached: false });
   });
 
-  it('accepts legacy sourceBranch params for one release of compatibility', async () => {
-    const { handler, runner } = harness();
-    const result = await handler('review.start', {
-      sourceBranch: 'main', targetBranch: 'feat/x', provider: 'claude', model: 'sonnet',
-    });
-    expect(result).toEqual({ id: 'new-id', cached: false });
-    expect(runner.start).toHaveBeenCalledOnce();
-  });
-
   it('reviews a single commit against its first parent', async () => {
     const { handler, runner, git } = harness();
     git.log.mockResolvedValue([{ subject: 'fix: y' }] as never);

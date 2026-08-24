@@ -27,12 +27,10 @@ export interface ReviewHandlerDeps {
 }
 
 export function createReviewHandler(deps: ReviewHandlerDeps) {
-  // Wire được nhận cả dạng mới lẫn dạng cũ (sourceBranch/targetBranch) trong
-  // một nhịp chuyển tiếp — graph webview cũ vẫn chạy được trước Task 10.
   function targetFromParams(p: Record<string, unknown>): ReviewTarget {
     const kind = (p.kind as ReviewTargetKind) ?? 'branch';
-    const baseRef = (p.baseRef as string) ?? (p.sourceBranch as string) ?? '';
-    const headRef = (p.headRef as string) ?? (p.targetBranch as string);
+    const baseRef = (p.baseRef as string) ?? '';
+    const headRef = p.headRef as string;
     if (typeof headRef !== 'string' || !headRef) throw new Error('Missing head ref');
     if (kind !== 'commit' && !baseRef) throw new Error('Missing base ref');
     return { kind, baseRef, headRef };
