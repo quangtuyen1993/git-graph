@@ -2,12 +2,16 @@ import { assertSafeReviewId, buildReviewId } from '../services/review-key';
 import { buildReviewPayload } from '../services/review-payload';
 import type { ReviewRunner } from '../services/review-runner';
 import type { ReviewStore } from '../services/review-store';
+import { resolveReviewTarget } from '../services/review-target';
+import type { ReviewTarget, ReviewTargetState } from '../services/review-target';
+import type { ReviewTargetKind } from '../services/review-store';
 
 interface GitLike {
   revParse(ref: string): Promise<string>;
   getDiff(source: string, target: string): Promise<string>;
   diff(source: string, target: string): Promise<{ files: unknown[] }>;
   log(options: { revisions: string[]; maxCount: number }): Promise<{ subject: string }[]>;
+  getParents(hash: string): Promise<string[]>;
 }
 
 export interface ReviewHandlerDeps {
@@ -17,10 +21,24 @@ export interface ReviewHandlerDeps {
   getRepoId: () => string | undefined;
   getMaxDiffChars: () => number;
   openBody: (repoId: string, id: string) => Promise<void>;
+  targets: ReviewTargetState;
+  focusReviewView: () => Promise<void>;
+  broadcast: (event: string, data?: unknown) => void;
 }
 
 export function createReviewHandler(deps: ReviewHandlerDeps) {
-  return async function handle(method: string, params: unknown): Promise<unknown> {
+  // Wire được nhận cả dạng mới lẫn dạng cũ (sourceBranch/targetBranch) trong
+  // một nhịp chuyển tiếp — graph webview cũ vẫn chạy được trước Task 10.
+  function targetFromParams(p: Record<string, unknown>): ReviewTarget {
+    const kind = (p.kind as ReviewTargetKind) ?? 'branch';
+    const baseRef = (p.baseRef as string) ?? (p.sourceBranch as string) ?? '';
+    const headRef = (p.headRef as string) ?? (p.targetBranch as string);
+    if (typeof headRef !== 'string' || !headRef) throw new Error('Missing head ref');
+    if (kind !== 'commit' && !baseRef) throw new Error('Missing base ref');
+    return { kind, baseRef, headRef };
+  }
+
+  async function handle(method: string, params: unknown): Promise<unknown> {
     const p = (params ?? {}) as Record<string, unknown>;
     const repoId = deps.getRepoId();
     if (!repoId) throw new Error('No git repository found');
@@ -49,16 +67,10 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
       case 'review.start': {
         const git = deps.getGitService();
         if (!git) throw new Error('No git repository found');
-
-        const baseRef = p.sourceBranch as string;
-        const headRef = p.targetBranch as string;
         const provider = p.provider as string;
         const model = (p.model as string) || '';
 
-        const [baseSha, headSha] = await Promise.all([
-          git.revParse(baseRef),
-          git.revParse(headRef),
-        ]);
+        const resolved = await resolveReviewTarget(git, targetFromParams(p));
 
         // Same commits, same model: serve the stored answer. A completed review
         // is reusable as-is; a review still running is reusable too, but only
@@ -66,7 +78,7 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
         // rebuilding the payload here would be wasted work that ReviewRunner
         // would just deduplicate again. Only a finished, successful entry may
         // be opened; a failure or a cancellation must be retried, not served.
-        const id = buildReviewId({ baseSha, headSha, provider, model });
+        const id = buildReviewId({ baseSha: resolved.baseSha, headSha: resolved.headSha, provider, model });
         const existing = await deps.store.get(repoId, id);
         if (existing?.status === 'done') {
           await deps.openBody(repoId, id);
@@ -80,21 +92,23 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
           return { id, cached: false };
         }
 
-        const diff = await git.getDiff(baseRef, headRef);
+        const diff = await git.getDiff(resolved.baseRef, resolved.headRef);
         if (!diff.trim()) {
-          throw new Error(`No differences between ${baseRef} and ${headRef}`);
+          throw new Error(`No differences between ${resolved.baseRef} and ${resolved.headRef}`);
         }
 
         const [changed, commits] = await Promise.all([
-          git.diff(baseRef, headRef).then(d => d.files).catch(() => undefined),
-          git.log({ revisions: [`${baseRef}..${headRef}`], maxCount: 100 })
-            .then(cs => cs.map(c => c.subject))
-            .catch(() => undefined),
+          git.diff(resolved.baseRef, resolved.headRef).then(d => d.files).catch(() => undefined),
+          resolved.kind === 'commit'
+            ? Promise.resolve(resolved.subject ? [resolved.subject] : undefined)
+            : git.log({ revisions: [`${resolved.baseRef}..${resolved.headRef}`], maxCount: 100 })
+                .then(cs => cs.map(c => c.subject))
+                .catch(() => undefined),
         ]);
 
         const payload = buildReviewPayload({
-          baseBranch: baseRef,
-          headBranch: headRef,
+          baseBranch: resolved.baseRef,
+          headBranch: resolved.headRef,
           diff,
           files: changed as never,
           commits,
@@ -103,17 +117,62 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
 
         const startedId = await deps.runner.start({
           repoId,
-          kind: 'branch',
-          baseRef, baseSha,
-          headRef, headSha,
+          kind: resolved.kind,
+          baseRef: resolved.baseRef, baseSha: resolved.baseSha,
+          headRef: resolved.headRef, headSha: resolved.headSha,
+          ...(resolved.subject ? { subject: resolved.subject } : {}),
           provider, model,
           payloadText: payload.text,
         });
         return { id: startedId, cached: false };
       }
 
+      case 'review.setTarget': {
+        const git = deps.getGitService();
+        if (!git) throw new Error('No git repository found');
+        const resolved = await resolveReviewTarget(git, targetFromParams(p));
+        const stored: ReviewTarget = {
+          kind: resolved.kind,
+          baseRef: resolved.baseRef,
+          headRef: resolved.headRef,
+          ...(resolved.subject ? { subject: resolved.subject } : {}),
+        };
+        deps.targets.set(repoId, stored);
+        await deps.focusReviewView();
+        deps.broadcast('review.target', stored);
+        return { success: true };
+      }
+
+      case 'review.getTarget':
+        return deps.targets.get(repoId);
+
+      case 'review.rerun': {
+        const id = assertSafeReviewId(p.id);
+        const entry = await deps.store.get(repoId, id);
+        if (!entry) throw new Error(`No review with id ${id}`);
+        await deps.store.remove(repoId, id);
+        return handle('review.start', {
+          kind: entry.kind,
+          // kind 'commit' tự tính lại base; kind khác dùng ref đã lưu
+          ...(entry.kind === 'commit' ? {} : { baseRef: entry.baseRef }),
+          headRef: entry.headRef,
+          provider: entry.provider,
+          model: entry.model === 'default' ? '' : entry.model,
+        });
+      }
+
+      case 'review.compare': {
+        const git = deps.getGitService();
+        if (!git) throw new Error('No git repository found');
+        const resolved = await resolveReviewTarget(git, targetFromParams(p));
+        const result = await git.diff(resolved.baseRef, resolved.headRef);
+        return { files: result.files };
+      }
+
       default:
         throw new Error(`Unknown method: ${method}`);
     }
-  };
+  }
+
+  return handle;
 }

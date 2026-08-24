@@ -1303,7 +1303,7 @@
     aiReviewLoading = true;
     aiReviewError = '';
     try {
-      const started = await bridge.send('review.start', { sourceBranch, targetBranch, provider, model }) as { id: string; cached: boolean };
+      const started = await bridge.send('review.start', { kind: 'branch', baseRef: sourceBranch, headRef: targetBranch, provider, model }) as { id: string; cached: boolean };
       aiReviewJobId = started.id;
       // A cache hit resolves an already-`done` run and opens its document on the
       // host side without any status transition — no review.changed will ever

@@ -58,6 +58,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const { ReviewTreeProvider } = await import('./providers/review-tree-provider');
   const { registerReviewView } = await import('./providers/review-view-registration');
   const { createActiveRepo } = await import('./services/active-repo');
+  const { ReviewTargetState } = await import('./services/review-target');
 
   // ReviewStore's constructor only assigns a field; it cannot throw. reconcileOrphans()
   // does real I/O (readdir/readFile/writeFile against globalStorageUri) and must never
@@ -121,6 +122,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // session left `rerun` a silent no-op whenever the graph was closed. Both the
   // webview router and the tree view now call this same handler, and it
   // resolves the repository through activeRepo rather than a session.
+  const reviewTargets = new ReviewTargetState();
   const reviewHandler = createReviewHandler({
     store: reviewStore,
     runner: reviewRunner,
@@ -129,6 +131,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     getMaxDiffChars: () =>
       vscode.workspace.getConfiguration('gitGraphPro.aiReview').get<number>('maxDiffChars') ?? 0,
     openBody,
+    targets: reviewTargets,
+    focusReviewView: async () => {
+      await vscode.commands.executeCommand('gitGraphPro.reviews.focus');
+    },
+    broadcast: (event, data) => routers.broadcast(event, data),
   });
 
   function createSession(host: WebviewHost): () => void {
@@ -515,24 +522,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     getRepoId,
     openBody,
     rerun: async (entry) => {
-      let repoId: string | undefined;
       try {
-        // Same hazard as syncTicker above: getRepoId() can throw if the repo
-        // path is gone. Rerun must be a no-op then, not an unhandled rejection.
-        repoId = getRepoId();
+        await reviewHandler('review.rerun', { id: entry.id });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.error(`[extension] Failed to resolve repo for rerun: ${message}`);
-        return;
+        console.error(`[extension] Failed to rerun review ${entry.id}: ${message}`);
       }
-      if (!repoId) return;
-      await reviewStore.remove(repoId, entry.id);
-      await reviewHandler('review.start', {
-        sourceBranch: entry.baseRef,
-        targetBranch: entry.headRef,
-        provider: entry.provider,
-        model: entry.model,
-      });
     },
     registerCommand: (id, fn) => vscode.commands.registerCommand(id, fn),
     registerTreeView: (id, tree) => vscode.window.createTreeView(id, { treeDataProvider: tree }),

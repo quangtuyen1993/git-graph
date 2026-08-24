@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createReviewHandler } from '../../src/extension/controllers/review-method-handler';
+import { ReviewTargetState } from '../../src/extension/services/review-target';
 
 function harness(over: Record<string, unknown> = {}) {
   const store = {
@@ -18,7 +19,11 @@ function harness(over: Record<string, unknown> = {}) {
     getDiff: vi.fn(async () => 'diff --git a/x b/x'),
     diff: vi.fn(async () => ({ files: [] })),
     log: vi.fn(async () => []),
+    getParents: vi.fn(async () => ['c'.repeat(40)]),
   };
+  const targets = new ReviewTargetState();
+  const focusReviewView = vi.fn(async () => {});
+  const broadcast = vi.fn();
   const handler = createReviewHandler({
     store: store as never,
     runner: runner as never,
@@ -26,9 +31,12 @@ function harness(over: Record<string, unknown> = {}) {
     getRepoId: () => 'repo-a',
     getMaxDiffChars: () => 0,
     openBody: vi.fn(async () => {}),
+    targets,
+    focusReviewView,
+    broadcast,
     ...over,
   });
-  return { handler, store, runner, git };
+  return { handler, store, runner, git, targets, focusReviewView, broadcast };
 }
 
 describe('review namespace', () => {
@@ -36,7 +44,7 @@ describe('review namespace', () => {
     const { handler, runner } = harness();
 
     const result = await handler('review.start', {
-      sourceBranch: 'main', targetBranch: 'feat/x', provider: 'claude', model: 'sonnet',
+      kind: 'branch', baseRef: 'main', headRef: 'feat/x', provider: 'claude', model: 'sonnet',
     });
 
     expect(result).toEqual({ id: 'new-id', cached: false });
@@ -48,7 +56,7 @@ describe('review namespace', () => {
     store.get.mockResolvedValue({ id: 'aaaaaaa..bbbbbbb.claude.sonnet', status: 'done' } as never);
 
     const result = await handler('review.start', {
-      sourceBranch: 'main', targetBranch: 'feat/x', provider: 'claude', model: 'sonnet',
+      kind: 'branch', baseRef: 'main', headRef: 'feat/x', provider: 'claude', model: 'sonnet',
     });
 
     expect(result).toEqual({ id: 'aaaaaaa..bbbbbbb.claude.sonnet', cached: true });
@@ -60,7 +68,7 @@ describe('review namespace', () => {
     store.get.mockResolvedValue({ id: 'aaaaaaa..bbbbbbb.claude.sonnet', status: 'failed' } as never);
 
     await handler('review.start', {
-      sourceBranch: 'main', targetBranch: 'feat/x', provider: 'claude', model: 'sonnet',
+      kind: 'branch', baseRef: 'main', headRef: 'feat/x', provider: 'claude', model: 'sonnet',
     });
 
     expect(runner.start).toHaveBeenCalledOnce();
@@ -71,7 +79,7 @@ describe('review namespace', () => {
     git.getDiff.mockResolvedValue('   ');
 
     await expect(handler('review.start', {
-      sourceBranch: 'main', targetBranch: 'main', provider: 'claude', model: 'sonnet',
+      kind: 'branch', baseRef: 'main', headRef: 'main', provider: 'claude', model: 'sonnet',
     })).rejects.toThrow(/no differences/i);
     expect(runner.start).not.toHaveBeenCalled();
   });
@@ -94,7 +102,7 @@ describe('review namespace', () => {
     const { handler } = harness({ getGitService: () => undefined });
 
     await expect(handler('review.start', {
-      sourceBranch: 'main', targetBranch: 'feat/x', provider: 'claude', model: 'sonnet',
+      kind: 'branch', baseRef: 'main', headRef: 'feat/x', provider: 'claude', model: 'sonnet',
     })).rejects.toThrow(/no git repository/i);
   });
 
@@ -103,7 +111,7 @@ describe('review namespace', () => {
     store.get.mockResolvedValue({ id: 'aaaaaaa..bbbbbbb.claude.sonnet', status: 'running' } as never);
 
     const result = await handler('review.start', {
-      sourceBranch: 'main', targetBranch: 'feat/x', provider: 'claude', model: 'sonnet',
+      kind: 'branch', baseRef: 'main', headRef: 'feat/x', provider: 'claude', model: 'sonnet',
     });
 
     expect(result).toEqual({ id: 'aaaaaaa..bbbbbbb.claude.sonnet', cached: false });
@@ -134,11 +142,86 @@ describe('review namespace', () => {
     runner.isRunning.mockReturnValue(false);
 
     const result = await handler('review.start', {
-      sourceBranch: 'main', targetBranch: 'feat/x', provider: 'claude', model: 'sonnet',
+      kind: 'branch', baseRef: 'main', headRef: 'feat/x', provider: 'claude', model: 'sonnet',
     });
 
     expect(runner.isRunning).toHaveBeenCalledWith('aaaaaaa..bbbbbbb.claude.sonnet');
     expect(runner.start).toHaveBeenCalledOnce();
     expect(result).toEqual({ id: 'new-id', cached: false });
+  });
+
+  it('accepts legacy sourceBranch params for one release of compatibility', async () => {
+    const { handler, runner } = harness();
+    const result = await handler('review.start', {
+      sourceBranch: 'main', targetBranch: 'feat/x', provider: 'claude', model: 'sonnet',
+    });
+    expect(result).toEqual({ id: 'new-id', cached: false });
+    expect(runner.start).toHaveBeenCalledOnce();
+  });
+
+  it('reviews a single commit against its first parent', async () => {
+    const { handler, runner, git } = harness();
+    git.log.mockResolvedValue([{ subject: 'fix: y' }] as never);
+
+    await handler('review.start', { kind: 'commit', headRef: 'b'.repeat(40), provider: 'claude', model: '' });
+
+    const input = runner.start.mock.calls[0][0] as Record<string, unknown>;
+    expect(input.kind).toBe('commit');
+    expect(input.baseSha).toBe('c'.repeat(40));
+    expect(input.subject).toBe('fix: y');
+    // diff chạy trên cặp đã resolve
+    expect(git.getDiff).toHaveBeenCalledWith('c'.repeat(40), 'b'.repeat(40));
+  });
+
+  it('setTarget stores, focuses the review view, and broadcasts', async () => {
+    const { handler, targets, focusReviewView, broadcast } = harness();
+
+    await handler('review.setTarget', { kind: 'branch', baseRef: 'main', headRef: 'feat/x' });
+
+    expect(targets.get('repo-a')).toMatchObject({ kind: 'branch', baseRef: 'main', headRef: 'feat/x' });
+    expect(focusReviewView).toHaveBeenCalledOnce();
+    expect(broadcast).toHaveBeenCalledWith('review.target',
+      expect.objectContaining({ kind: 'branch', baseRef: 'main', headRef: 'feat/x' }));
+  });
+
+  it('setTarget with a dead ref rejects with the ref name and stores nothing', async () => {
+    const { handler, targets, git } = harness();
+    git.revParse.mockRejectedValue(new Error('unknown revision'));
+
+    await expect(handler('review.setTarget', { kind: 'branch', baseRef: 'gone', headRef: 'feat/x' }))
+      .rejects.toThrow(/"/);
+    expect(targets.get('repo-a')).toBeNull();
+  });
+
+  it('getTarget returns what setTarget stored, null before that', async () => {
+    const { handler } = harness();
+    expect(await handler('review.getTarget', {})).toBeNull();
+    await handler('review.setTarget', { kind: 'branch', baseRef: 'main', headRef: 'feat/x' });
+    expect(await handler('review.getTarget', {})).toMatchObject({ headRef: 'feat/x' });
+  });
+
+  it('rerun removes the entry and starts again from its stored target', async () => {
+    const { handler, store, runner } = harness();
+    store.get.mockResolvedValueOnce({
+      id: 'old-id', kind: 'branch', baseRef: 'main', baseSha: 'a'.repeat(40),
+      headRef: 'feat/x', headSha: 'b'.repeat(40), provider: 'claude', model: 'sonnet',
+      status: 'failed', startedAt: '2026-08-01T00:00:00.000Z',
+    } as never);
+
+    const result = await handler('review.rerun', { id: 'old-id' });
+
+    expect(store.remove).toHaveBeenCalledWith('repo-a', 'old-id');
+    expect(runner.start).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ cached: false });
+  });
+
+  it('compare resolves the target and returns the changed files', async () => {
+    const { handler, git } = harness();
+    git.diff.mockResolvedValue({ files: [{ path: 'a.ts' }] } as never);
+
+    const result = await handler('review.compare', { kind: 'branch', baseRef: 'main', headRef: 'feat/x' });
+
+    expect(result).toEqual({ files: [{ path: 'a.ts' }] });
+    expect(git.diff).toHaveBeenCalledWith('main', 'feat/x');
   });
 });

@@ -60,8 +60,9 @@ describe('App review jobs', () => {
     await fireEvent.click(reviewButton);
 
     await waitFor(() => expect(send).toHaveBeenCalledWith('review.start', {
-      sourceBranch: 'feature',
-      targetBranch: 'main',
+      kind: 'branch',
+      baseRef: 'feature',
+      headRef: 'main',
       provider: 'claude',
       model: 'default',
     }));
@@ -88,8 +89,9 @@ describe('App review jobs', () => {
     await fireEvent.click(reviewButton);
 
     await waitFor(() => expect(send).toHaveBeenCalledWith('review.start', expect.objectContaining({
-      sourceBranch: 'feature',
-      targetBranch: 'main',
+      kind: 'branch',
+      baseRef: 'feature',
+      headRef: 'main',
     })));
     // A cache hit short-circuits on the host with no status transition, so
     // review.changed is never emitted for this id (the mocked `on` here never
