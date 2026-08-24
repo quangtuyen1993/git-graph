@@ -1,4 +1,4 @@
-import { cleanup, render, waitFor } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const { send, on } = vi.hoisted(() => ({ send: vi.fn(), on: vi.fn(() => vi.fn()) }));
@@ -16,8 +16,9 @@ const branch = {
   behind: 0,
 };
 
-function stubBridge() {
+function stubBridge(overrides: Record<string, unknown> = {}) {
   send.mockImplementation(async (method: string) => {
+    if (method in overrides) return overrides[method];
     switch (method) {
       case 'ping.hello': return { ok: true };
       case 'repo.list': return { repos: [{ name: 'git-graph', path: '/repo', active: true }] };
@@ -35,8 +36,8 @@ function stubBridge() {
   });
 }
 
-async function renderApp() {
-  stubBridge();
+async function renderApp(overrides: Record<string, unknown> = {}) {
+  stubBridge(overrides);
   vi.stubGlobal('acquireVsCodeApi', () => ({ postMessage: vi.fn(), getState: () => null, setState: vi.fn() }));
   const result = render(App);
   await waitFor(() => expect(send).toHaveBeenCalledWith('repo.list'));
@@ -86,5 +87,23 @@ describe('App toolbar', () => {
     for (const glyph of glyphs) {
       expect(glyph.getAttribute('width')).toBe('16');
     }
+  });
+
+  it('offers submodules alongside repositories and opens them by switching', async () => {
+    const { getByRole } = await renderApp({
+      'git.submoduleList': [
+        { name: 'sdk', path: 'packages/sdk', head: 'b'.repeat(40), state: 'initialized' },
+        { name: 'legacy', path: 'vendor/legacy', head: null, state: 'uninitialized' },
+      ],
+    });
+
+    const select = await waitFor(() => getByRole('combobox', { name: 'Repository' }) as HTMLSelectElement);
+    const values = Array.from(select.options).map((option) => option.value);
+
+    expect(values).toEqual(['repo:/repo', 'submodule:packages/sdk']);
+
+    await fireEvent.change(select, { target: { value: 'submodule:packages/sdk' } });
+
+    await waitFor(() => expect(send).toHaveBeenCalledWith('ui.openSubmodule', { path: 'packages/sdk' }));
   });
 });

@@ -197,6 +197,10 @@
   // Computed graph column width
   $: graphColWidth = (maxLane + 1) * 16 + 24;
 
+  // Uninitialised submodules have no repository on disk to show.
+  $: openableSubmodules = submodules.filter((submodule) => submodule.state !== 'uninitialized');
+  $: repoOptionCount = repos.length + openableSubmodules.length;
+
   onMount(async () => {
     try {
       await bridge.send('ping.hello');
@@ -282,15 +286,23 @@
     savePanelState();
   }
 
-  async function switchRepo(path: string) {
+  /**
+   * One reset path for every repository change. The repo list is re-fetched
+   * rather than patched locally: opening a submodule adds an entry the webview
+   * has never seen.
+   */
+  async function applyRepositoryChange(
+    request: () => Promise<{ name: string; path: string }>,
+  ) {
     graphRefreshGate.issue();
     graphWindowRequestGate.issue();
     loading = false;
     try {
-      const result = await bridge.send('repo.switch', { path }) as { name: string };
+      const result = await request();
       branches = [];
       activeRepoName = result.name;
-      repos = repos.map(r => ({ ...r, active: r.path === path }));
+      const repoResult = await bridge.send('repo.list') as { repos: RepoEntry[] };
+      repos = repoResult.repos;
       selectedBranchFilter = null;
       clearBranchHighlight();
       selectedHash = null;
@@ -303,6 +315,23 @@
       error = e instanceof Error ? e.message : String(e);
       setTimeout(() => { error = ''; }, 5000);
     }
+  }
+
+  async function switchRepo(path: string) {
+    await applyRepositoryChange(
+      () => bridge.send('repo.switch', { path }) as Promise<{ name: string; path: string }>,
+    );
+  }
+
+  async function openSubmodule(path: string) {
+    await applyRepositoryChange(
+      () => bridge.send('ui.openSubmodule', { path }) as Promise<{ name: string; path: string }>,
+    );
+  }
+
+  function selectRepoOption(value: string) {
+    if (value.startsWith('submodule:')) return openSubmodule(value.slice('submodule:'.length));
+    if (value.startsWith('repo:')) return switchRepo(value.slice('repo:'.length));
   }
 
   async function refreshGraph() {
@@ -802,12 +831,7 @@
   }
 
   async function handleSidebarSubmoduleOpen(event: CustomEvent<{ path: string }>) {
-    try {
-      await bridge.send('ui.openSubmodule', { path: event.detail.path });
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-      setTimeout(() => { error = ''; }, 5000);
-    }
+    await openSubmodule(event.detail.path);
   }
 
   const mutationLabels: Record<string, string> = {
@@ -1265,17 +1289,26 @@
       on:click={toggleLeftSidebar}
     ><Icon name="layout-sidebar-left" /></button>
 
-    <div class="toolbar-group" class:static={repos.length <= 1}>
+    <div class="toolbar-group" class:static={repoOptionCount <= 1}>
       <span class="toolbar-glyph"><Icon name="repo" /></span>
-      {#if repos.length > 1}
+      {#if repoOptionCount > 1}
         <select
           class="toolbar-select"
           aria-label="Repository"
-          on:change={(e) => switchRepo(e.currentTarget.value)}
+          on:change={(e) => selectRepoOption(e.currentTarget.value)}
         >
-          {#each repos as repo}
-            <option value={repo.path} selected={repo.active}>{repo.name}</option>
-          {/each}
+          <optgroup label="Repositories">
+            {#each repos as repo (repo.path)}
+              <option value="repo:{repo.path}" selected={repo.active}>{repo.name}</option>
+            {/each}
+          </optgroup>
+          {#if openableSubmodules.length > 0}
+            <optgroup label="Submodules">
+              {#each openableSubmodules as submodule (submodule.path)}
+                <option value="submodule:{submodule.path}">{submodule.name}</option>
+              {/each}
+            </optgroup>
+          {/if}
         </select>
       {:else if activeRepoName}
         <span class="repo-name">{activeRepoName}</span>
