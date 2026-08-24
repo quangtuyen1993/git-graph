@@ -380,7 +380,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           return { success: true };
         }
         case 'ui.openSubmodule': {
-          const gitService = session.getGitService();
+          // The picker lists submodules from every workspace repository, so the
+          // one being opened may not belong to the active repo. Resolve against
+          // its owner when the caller names one; without this, picking a
+          // submodule of a non-selected repo fails with "Submodule not found".
+          const ownerPath = p.repoPath as string | undefined;
+          const gitService = ownerPath
+            ? new GitService(ownerPath)
+            : session.getGitService();
           if (!gitService) throw new Error('No git repository found');
           const submodule = await gitService.resolveSubmodule(p.path as string);
           const added = await session.addRepository({

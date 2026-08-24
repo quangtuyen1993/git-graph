@@ -83,6 +83,14 @@
     path: string;
     active: boolean;
   }
+  /** A workspace submodule tagged with the repository that owns it. */
+  type WorkspaceSubmodule = SubmoduleEntry & { repoPath: string; repoName: string };
+
+  interface RepoListResult {
+    repos: RepoEntry[];
+    submodules?: WorkspaceSubmodule[];
+  }
+
   let repos: RepoEntry[] = [];
   let activeRepoName = '';
 
@@ -201,16 +209,25 @@
   // Computed graph column width
   $: graphColWidth = (maxLane + 1) * 16 + 24;
 
+  /**
+   * Submodules across every workspace repository, for the picker. Distinct from
+   * `submodules`, which is the ACTIVE repo's list and feeds the sidebar section —
+   * scoping the picker that way made its contents depend on the current
+   * selection, hiding every other repository's submodules.
+   */
+  let workspaceSubmodules: WorkspaceSubmodule[] = [];
+
   // Uninitialised submodules have no repository on disk to show.
-  $: openableSubmodules = submodules.filter((submodule) => submodule.state !== 'uninitialized');
+  $: openableSubmodules = workspaceSubmodules.filter((submodule) => submodule.state !== 'uninitialized');
   $: repoOptionCount = repos.length + openableSubmodules.length;
 
   onMount(async () => {
     try {
       await bridge.send('ping.hello');
       // Load repos list
-      const repoResult = await bridge.send('repo.list') as { repos: RepoEntry[] };
+      const repoResult = await bridge.send('repo.list') as RepoListResult;
       repos = repoResult.repos;
+      workspaceSubmodules = repoResult.submodules ?? [];
       const active = repos.find(r => r.active);
       activeRepoName = active?.name ?? repos[0]?.name ?? '';
       await refreshGraph();
@@ -313,8 +330,9 @@
       const result = await request();
       branches = [];
       activeRepoName = result.name;
-      const repoResult = await bridge.send('repo.list') as { repos: RepoEntry[] };
+      const repoResult = await bridge.send('repo.list') as RepoListResult;
       repos = repoResult.repos;
+      workspaceSubmodules = repoResult.submodules ?? [];
       selectedBranchFilter = null;
       clearBranchHighlight();
       selectedHash = null;
@@ -335,15 +353,20 @@
     );
   }
 
-  async function openSubmodule(path: string) {
+  async function openSubmodule(path: string, repoPath?: string) {
     await applyRepositoryChange(
-      () => bridge.send('ui.openSubmodule', { path }) as Promise<{ name: string; path: string }>,
+      () => bridge.send('ui.openSubmodule', { path, repoPath }) as Promise<{ name: string; path: string }>,
     );
   }
 
   function selectRepoOption(value: string) {
-    if (value.startsWith('submodule:')) return openSubmodule(value.slice('submodule:'.length));
     if (value.startsWith('repo:')) return switchRepo(value.slice('repo:'.length));
+    if (value.startsWith('submodule:')) {
+      // Two repositories can both own `packages/sdk`, so the option value
+      // carries the owner alongside the relative path.
+      const [repoPath, path] = value.slice('submodule:'.length).split('\u0000');
+      return openSubmodule(path, repoPath);
+    }
   }
 
   async function refreshGraph() {
@@ -1310,8 +1333,10 @@
           </optgroup>
           {#if openableSubmodules.length > 0}
             <optgroup label="Submodules">
-              {#each openableSubmodules as submodule (submodule.path)}
-                <option value="submodule:{submodule.path}">{submodule.name}</option>
+              {#each openableSubmodules as submodule (`${submodule.repoPath}/${submodule.path}`)}
+                <option value={`submodule:${submodule.repoPath}\u0000${submodule.path}`}>
+                  {repos.length > 1 ? `${submodule.repoName} / ${submodule.name}` : submodule.name}
+                </option>
               {/each}
             </optgroup>
           {/if}

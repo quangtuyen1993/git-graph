@@ -3,6 +3,10 @@ import { handleGitMethod } from './git-method-handler';
 import { GraphMethodHandler } from './graph-method-handler';
 import { GitService } from '../services/git.service';
 import { GraphService } from '../services/graph.service';
+import type { SubmoduleEntry } from '../types/git.types';
+
+/** A submodule plus the repository it belongs to, so the picker can open it. */
+export type WorkspaceSubmodule = SubmoduleEntry & { repoPath: string; repoName: string };
 
 export interface RepositoryInfo {
   name: string;
@@ -76,6 +80,7 @@ export class RepositorySession {
             ...repository,
             active: repository.path === this.currentRepository?.path,
           })),
+          submodules: await this.listWorkspaceSubmodules(),
         };
       case 'repo.switch': {
         const targetPath = p.path as string;
@@ -92,6 +97,34 @@ export class RepositorySession {
       default:
         throw new Error(`Unknown method: ${method}`);
     }
+  }
+
+  /**
+   * Submodules across every known repository, each tagged with its owner.
+   *
+   * Scoping this to the active repository would make the picker's contents
+   * depend on the current selection, so a submodule of a non-selected repo
+   * could never be reached. One repository failing to enumerate contributes
+   * nothing rather than emptying the whole list.
+   */
+  private async listWorkspaceSubmodules(): Promise<WorkspaceSubmodule[]> {
+    const perRepository = await Promise.all(
+      this.repositories.map(async (repository) => {
+        // Wrapped rather than chained off .catch(): a service that throws
+        // synchronously — or has no submoduleList at all — would otherwise
+        // escape before a rejection handler could attach and take the whole
+        // repository list down with it.
+        const entries = await Promise.resolve()
+          .then(() => this.createGitService(repository.path).submoduleList())
+          .catch(() => []);
+        return entries.map((entry) => ({
+          ...entry,
+          repoPath: repository.path,
+          repoName: repository.name,
+        }));
+      }),
+    );
+    return perRepository.flat();
   }
 
   public async handleGit(method: string, params: unknown): Promise<unknown> {

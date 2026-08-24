@@ -91,19 +91,53 @@ describe('App toolbar', () => {
 
   it('offers submodules alongside repositories and opens them by switching', async () => {
     const { getByRole } = await renderApp({
-      'git.submoduleList': [
-        { name: 'sdk', path: 'packages/sdk', head: 'b'.repeat(40), state: 'initialized' },
-        { name: 'legacy', path: 'vendor/legacy', head: null, state: 'uninitialized' },
-      ],
+      'repo.list': {
+        repos: [{ name: 'git-graph', path: '/repo', active: true }],
+        submodules: [
+          { name: 'sdk', path: 'packages/sdk', head: 'b'.repeat(40), state: 'initialized', absolutePath: '/repo/packages/sdk', repoPath: '/repo', repoName: 'git-graph' },
+          { name: 'legacy', path: 'vendor/legacy', head: null, state: 'uninitialized', absolutePath: '/repo/vendor/legacy', repoPath: '/repo', repoName: 'git-graph' },
+        ],
+      },
     });
 
     const select = await waitFor(() => getByRole('combobox', { name: 'Repository' }) as HTMLSelectElement);
     const values = Array.from(select.options).map((option) => option.value);
 
-    expect(values).toEqual(['repo:/repo', 'submodule:packages/sdk']);
+    expect(values).toEqual(['repo:/repo', 'submodule:/repo\u0000packages/sdk']);
 
-    await fireEvent.change(select, { target: { value: 'submodule:packages/sdk' } });
+    await fireEvent.change(select, { target: { value: 'submodule:/repo\u0000packages/sdk' } });
 
-    await waitFor(() => expect(send).toHaveBeenCalledWith('ui.openSubmodule', { path: 'packages/sdk' }));
+    await waitFor(() => expect(send).toHaveBeenCalledWith(
+      'ui.openSubmodule',
+      { path: 'packages/sdk', repoPath: '/repo' },
+    ));
+  });
+
+  it('lists submodules of a repository that is not the selected one', async () => {
+    const { getByRole } = await renderApp({
+      'repo.list': {
+        repos: [
+          { name: 'git-graph', path: '/repo', active: true },
+          { name: 'other', path: '/other', active: false },
+        ],
+        submodules: [
+          { name: 'vendor-lib', path: 'vendor/lib', head: 'c'.repeat(40), state: 'initialized', absolutePath: '/other/vendor/lib', repoPath: '/other', repoName: 'other' },
+        ],
+      },
+    });
+
+    const select = await waitFor(() => getByRole('combobox', { name: 'Repository' }) as HTMLSelectElement);
+    const values = Array.from(select.options).map((option) => option.value);
+
+    // The submodule belongs to /other while /repo is selected; scoping the
+    // picker to the active repo would hide it entirely.
+    expect(values).toContain('submodule:/other\u0000vendor/lib');
+
+    await fireEvent.change(select, { target: { value: 'submodule:/other\u0000vendor/lib' } });
+
+    await waitFor(() => expect(send).toHaveBeenCalledWith(
+      'ui.openSubmodule',
+      { path: 'vendor/lib', repoPath: '/other' },
+    ));
   });
 });

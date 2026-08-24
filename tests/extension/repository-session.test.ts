@@ -32,7 +32,25 @@ function fakeGitServiceFactory(repositoryPath: string): GitService {
     log: async () => [commit(repositoryPath)],
     getShortStats: async () => new Map(),
     branches: async () => [{ name: repositoryPath }],
+    submoduleList: async () => [],
   } as unknown as GitService;
+}
+
+/** A factory whose repos each own one submodule, named after the repo. */
+function submoduleAwareFactory(failingRepoPath?: string) {
+  return (repositoryPath: string): GitService => ({
+    ...fakeGitServiceFactory(repositoryPath),
+    submoduleList: async () => {
+      if (repositoryPath === failingRepoPath) throw new Error('not a git repository');
+      return [{
+        name: `${repositoryPath}-sub`,
+        path: 'packages/sdk',
+        head: 'f'.repeat(40),
+        state: 'initialized' as const,
+        absolutePath: `${repositoryPath}/packages/sdk`,
+      }];
+    },
+  }) as unknown as GitService;
 }
 
 describe('RepositorySession', () => {
@@ -44,7 +62,7 @@ describe('RepositorySession', () => {
     });
 
     expect(await root.handleGit('git.branches', {})).toEqual([{ name: '/root' }]);
-    expect(await root.handleRepo('repo.list', {})).toEqual({
+    expect(await root.handleRepo('repo.list', {})).toMatchObject({
       repos: [
         { name: 'root', path: '/root', active: true },
         { name: 'other', path: '/other', active: false },
@@ -103,7 +121,7 @@ describe('RepositorySession', () => {
     const again = await session.addRepository({ name: 'sdk', path: '/root/packages/sdk' });
     expect(again).toBe(added);
 
-    expect(await session.handleRepo('repo.list', {})).toEqual({
+    expect(await session.handleRepo('repo.list', {})).toMatchObject({
       repos: [
         { name: 'root', path: '/root', active: true },
         { name: 'sdk', path: '/root/packages/sdk', active: false },
@@ -134,5 +152,53 @@ describe('RepositorySession', () => {
     });
 
     expect(session.getActiveRepositoryPath()).toBeUndefined();
+  });
+});
+
+describe('RepositorySession workspace submodules', () => {
+  const repositories = [{ name: 'root', path: '/root' }, { name: 'other', path: '/other' }];
+
+  it('lists submodules from every repository, not just the active one', async () => {
+    const session = new RepositorySession({
+      initialRepository: repositories[0],
+      repositories,
+      createGitService: submoduleAwareFactory(),
+    });
+
+    const { submodules } = await session.handleRepo('repo.list', {}) as {
+      submodules: { name: string; repoPath: string }[];
+    };
+
+    expect(submodules.map(s => s.repoPath).sort()).toEqual(['/other', '/root']);
+  });
+
+  it('tags each submodule with the repository that owns it', async () => {
+    const session = new RepositorySession({
+      initialRepository: repositories[0],
+      repositories,
+      createGitService: submoduleAwareFactory(),
+    });
+
+    const { submodules } = await session.handleRepo('repo.list', {}) as {
+      submodules: { repoPath: string; repoName: string; absolutePath: string }[];
+    };
+    const fromOther = submodules.find(s => s.repoPath === '/other');
+
+    expect(fromOther?.repoName).toBe('other');
+    expect(fromOther?.absolutePath).toBe('/other/packages/sdk');
+  });
+
+  it('keeps the list usable when one repository cannot be enumerated', async () => {
+    const session = new RepositorySession({
+      initialRepository: repositories[0],
+      repositories,
+      createGitService: submoduleAwareFactory('/other'),
+    });
+
+    const { submodules } = await session.handleRepo('repo.list', {}) as {
+      submodules: { repoPath: string }[];
+    };
+
+    expect(submodules.map(s => s.repoPath)).toEqual(['/root']);
   });
 });

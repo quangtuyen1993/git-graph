@@ -456,6 +456,23 @@ describe('extension view sessions', () => {
     await vi.waitFor(() => expect(hostMocks.createFileSystemWatcher).toHaveBeenCalledTimes(2));
   });
 
+  it('opens a submodule owned by a repository that is not the active one', async () => {
+    const view = await activateAndResolveView();
+    hostMocks.resolveSubmodule.mockClear();
+
+    // Active repo is /repo/root; the submodule belongs to /repo/other.
+    view.receive({
+      id: 'sub-other',
+      type: 'request',
+      method: 'ui.openSubmodule',
+      params: { path: 'packages/sdk', repoPath: '/repo/other' },
+    });
+    await responseFor(view, 'sub-other');
+
+    // Resolving against the active repo would fail with "Submodule not found".
+    expect(hostMocks.resolveSubmodule).toHaveBeenCalledWith('/repo/other', 'packages/sdk');
+  });
+
   it('keeps the Open File action by using the active repository file for a HEAD diff', async () => {
     hostMocks.getHeadHash.mockResolvedValue('commit');
     const view = await activateAndResolveView();
