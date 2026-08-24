@@ -58,6 +58,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const { ReviewRunner } = await import('./services/review-runner');
   const { createReviewHandler } = await import('./controllers/review-method-handler');
   const { repoIdFor } = await import('./services/review-key');
+  const { ReviewTreeProvider } = await import('./providers/review-tree-provider');
+  const { registerReviewView } = await import('./providers/review-view-registration');
 
   // ReviewStore's constructor only assigns a field; it cannot throw. reconcileOrphans()
   // does real I/O (readdir/readFile/writeFile against globalStorageUri) and must never
@@ -77,6 +79,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // below and cleared on dispose.
   let activeSession: RepositorySession | undefined;
   let activeRouter: MessageRouter | undefined;
+  // The current session's review method handler, for the reviews tree view's
+  // rerun command — it has no webview message to piggyback on, so it needs a
+  // direct line to whichever session is live. Mirrors activeSession/activeRouter.
+  let activeReviewHandler: ((method: string, params: unknown) => Promise<unknown>) | undefined;
 
   const getRepoId = (): string | undefined => {
     const repoPath = activeSession?.getActiveRepositoryPath();
@@ -100,6 +106,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void syncTicker?.();              // undefined until Task 11 adds the clock
   });
   activeRunner = reviewRunner;         // held at module scope so deactivate() can cancelAll()
+
+  // Hoisted out of createSession: it only touches reviewStore and vscode, not
+  // the session, so the reviews tree view (Task 11) can share it too.
+  const openBody = async (repoId: string, id: string): Promise<void> => {
+    const doc = await vscode.workspace.openTextDocument(
+      vscode.Uri.file(reviewStore.bodyPath(repoId, id)),
+    );
+    await vscode.languages.setTextDocumentLanguage(doc, 'markdown');
+    await vscode.window.showTextDocument(doc, { preview: false });
+  };
 
   function createSession(host: WebviewHost): () => void {
     const panelSessionId = ++nextPanelSessionId;
@@ -392,14 +408,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     });
 
-    const openBody = async (repoId: string, id: string): Promise<void> => {
-      const doc = await vscode.workspace.openTextDocument(
-        vscode.Uri.file(reviewStore.bodyPath(repoId, id)),
-      );
-      await vscode.languages.setTextDocumentLanguage(doc, 'markdown');
-      await vscode.window.showTextDocument(doc, { preview: false });
-    };
-
     const reviewHandler = createReviewHandler({
       store: reviewStore,
       runner: reviewRunner,
@@ -410,6 +418,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       openBody,
     });
     router.register('review', reviewHandler);
+    activeReviewHandler = reviewHandler;
 
     router.setHost(host);
     void bindGitWatcher();
@@ -424,6 +433,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       gitWatcher = undefined;
       if (activeSession === session) activeSession = undefined;
       if (activeRouter === router) activeRouter = undefined;
+      if (activeReviewHandler === reviewHandler) activeReviewHandler = undefined;
       router.dispose();
     };
 
@@ -449,6 +459,64 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void vscode.commands.executeCommand('gitGraphPro.graph.focus');
   });
   context.subscriptions.push(openCommand);
+
+  const treeProvider = new ReviewTreeProvider(reviewStore, getRepoId);
+  reviewTree = treeProvider;
+
+  // One timer for the whole view, started only while a run is in flight and
+  // stopped when the last one ends, so a running row's clock advances without
+  // a stray setInterval outliving the extension.
+  let tick: ReturnType<typeof setInterval> | undefined;
+  syncTicker = async () => {
+    let running = false;
+    try {
+      // getRepoId() does a synchronous realpathSync — a repo that vanished (or
+      // renamed) between the run starting and this tick can throw. A ticker
+      // glitch must not throw out of onChange or leave a dangling interval;
+      // treat "can't tell" as "not running" and let the next onChange retry.
+      const repoId = getRepoId();
+      if (repoId) {
+        running = (await reviewStore.list(repoId)).some(entry => entry.status === 'running');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[extension] Failed to check in-flight reviews: ${message}`);
+    }
+    if (running && !tick) {
+      tick = setInterval(() => treeProvider.refresh(), 1000);
+    } else if (!running && tick) {
+      clearInterval(tick);
+      tick = undefined;
+    }
+  };
+  context.subscriptions.push({
+    dispose: () => {
+      if (tick) clearInterval(tick);
+      tick = undefined;
+    },
+  });
+
+  registerReviewView({
+    tree: treeProvider,
+    runner: reviewRunner,
+    store: reviewStore,
+    getRepoId,
+    openBody,
+    rerun: async (entry) => {
+      const repoId = getRepoId();
+      if (!repoId || !activeReviewHandler) return;
+      await reviewStore.remove(repoId, entry.id);
+      await activeReviewHandler('review.start', {
+        sourceBranch: entry.sourceBranch,
+        targetBranch: entry.targetBranch,
+        provider: entry.provider,
+        model: entry.model,
+      });
+    },
+    registerCommand: (id, fn) => vscode.commands.registerCommand(id, fn),
+    registerTreeView: (id, tree) => vscode.window.createTreeView(id, { treeDataProvider: tree }),
+    subscribe: (d) => context.subscriptions.push(d),
+  });
 }
 
 export function deactivate(): void {

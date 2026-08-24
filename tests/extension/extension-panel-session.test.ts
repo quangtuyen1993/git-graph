@@ -12,6 +12,8 @@ const hostMocks = vi.hoisted(() => ({
   registerWebviewViewProvider: vi.fn(),
   resolveSubmodule: vi.fn(),
   registerCommand: vi.fn(),
+  createTreeView: vi.fn(() => ({ dispose: vi.fn() })),
+  getConfiguration: vi.fn(() => ({ get: () => undefined })),
   showFile: vi.fn(),
   showWarningMessage: vi.fn(),
   globalState: new Map<string, unknown>(),
@@ -38,6 +40,27 @@ vi.mock('vscode', () => ({
   RelativePattern: class {
     constructor(public readonly base: string, public readonly pattern: string) {}
   },
+  EventEmitter: class {
+    private listeners: Array<() => void> = [];
+    event = (listener: () => void) => {
+      this.listeners.push(listener);
+      return { dispose: () => {} };
+    };
+    fire(): void {
+      this.listeners.forEach(listener => listener());
+    }
+  },
+  ThemeIcon: class {
+    constructor(public readonly id: string) {}
+  },
+  TreeItem: class {
+    description?: string;
+    iconPath?: unknown;
+    contextValue?: string;
+    tooltip?: string;
+    command?: unknown;
+    constructor(public readonly label: string) {}
+  },
   commands: {
     executeCommand: hostMocks.executeCommand,
     registerCommand: hostMocks.registerCommand,
@@ -45,6 +68,7 @@ vi.mock('vscode', () => ({
   window: {
     createWebviewPanel: hostMocks.createWebviewPanel,
     registerWebviewViewProvider: hostMocks.registerWebviewViewProvider,
+    createTreeView: hostMocks.createTreeView,
     showInputBox: vi.fn(),
     showQuickPick: vi.fn(),
     showWarningMessage: hostMocks.showWarningMessage,
@@ -55,6 +79,7 @@ vi.mock('vscode', () => ({
     },
     createFileSystemWatcher: hostMocks.createFileSystemWatcher,
     registerTextDocumentContentProvider: hostMocks.registerTextDocumentContentProvider,
+    getConfiguration: hostMocks.getConfiguration,
   },
 }));
 
