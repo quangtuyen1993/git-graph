@@ -214,3 +214,31 @@ describe('CommitDetail owns the panel header', () => {
     expect(panel.firstElementChild).toHaveClass('detail-files-header');
   });
 });
+
+describe('CommitDetail view-mode persistence contract', () => {
+  afterEach(cleanup);
+
+  it('starts in the mode the initialViewMode prop names', () => {
+    const { getByRole } = render(CommitDetail, {
+      commit, files, loading: false, initialViewMode: 'flat',
+    });
+
+    expect(getByRole('button', { name: 'Show files as a flat list' }))
+      .toHaveAttribute('aria-pressed', 'true');
+    expect(getByRole('button', { name: 'Group files by folder' }))
+      .toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('dispatches viewModeChange when the toggle is clicked', async () => {
+    const { getByRole, component } = render(CommitDetail, { commit, files, loading: false });
+    const seen: string[] = [];
+    component.$on('viewModeChange', (event: CustomEvent<{ mode: string }>) => {
+      seen.push(event.detail.mode);
+    });
+
+    await fireEvent.click(getByRole('button', { name: 'Show files as a flat list' }));
+    await fireEvent.click(getByRole('button', { name: 'Group files by folder' }));
+
+    expect(seen).toEqual(['flat', 'tree']);
+  });
+});

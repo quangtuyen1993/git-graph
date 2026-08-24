@@ -294,14 +294,24 @@
   }
 
   async function restorePanelState() {
-    const [storedLeft, storedRight, storedOpen] = await Promise.all([
+    const [storedLeft, storedRight, storedOpen, storedViewMode] = await Promise.all([
       bridge.send('ui.getState', { key: 'layout.leftWidth' }),
       bridge.send('ui.getState', { key: 'layout.rightWidth' }),
       bridge.send('ui.getState', { key: 'layout.leftSidebarOpen' }),
+      bridge.send('ui.getState', { key: 'detail.viewMode' }),
     ]);
     if (typeof storedLeft === 'number') desiredLeftWidth = storedLeft;
     if (typeof storedRight === 'number') desiredRightWidth = storedRight;
     if (typeof storedOpen === 'boolean') leftSidebarOpen = storedOpen;
+    if (storedViewMode === 'tree' || storedViewMode === 'flat') detailViewMode = storedViewMode;
+  }
+
+  // Shared with the review tab through the same key, so choosing tree in one
+  // place is remembered by both.
+  let detailViewMode: 'tree' | 'flat' = 'tree';
+  function handleViewModeChange(mode: 'tree' | 'flat') {
+    detailViewMode = mode;
+    bridge.send('ui.setState', { key: 'detail.viewMode', value: mode });
   }
 
   function handlePanelResize(side: PanelSide, event: CustomEvent<{ width: number }>) {
@@ -1555,7 +1565,9 @@
           commit={detailCommit}
           files={detailFiles}
           loading={detailLoading}
+          initialViewMode={detailViewMode}
           on:close={closeRightPanel}
+          on:viewModeChange={(e) => handleViewModeChange(e.detail.mode)}
           on:openFile={(e) => bridge.send('ui.openDiff', e.detail)}
         />
       </aside>

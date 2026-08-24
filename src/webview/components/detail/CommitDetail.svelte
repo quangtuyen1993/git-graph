@@ -42,7 +42,15 @@
   let filterText = '';
 
   /** Grouped by folder, or one flat row per file. */
-  let viewMode: 'tree' | 'flat' = 'tree';
+  /** Last persisted choice, injected by the shell that owns storage. */
+  export let initialViewMode: 'tree' | 'flat' = 'tree';
+
+  let viewMode: 'tree' | 'flat' = initialViewMode;
+
+  function chooseViewMode(mode: 'tree' | 'flat'): void {
+    viewMode = mode;
+    dispatch('viewModeChange', { mode });
+  }
   let collapsedFolders: Record<string, boolean> = {};
 
   function toggleFolder(path: string): void {
@@ -107,7 +115,7 @@
           aria-label="Group files by folder"
           aria-pressed={viewMode === 'tree'}
           title="Group by folder"
-          on:click={() => { viewMode = 'tree'; }}
+          on:click={() => chooseViewMode('tree')}
         ><Icon name="list-tree" /></button>
         <button
           type="button"
@@ -116,7 +124,7 @@
           aria-label="Show files as a flat list"
           aria-pressed={viewMode === 'flat'}
           title="Flat list"
-          on:click={() => { viewMode = 'flat'; }}
+          on:click={() => chooseViewMode('flat')}
         ><Icon name="list-flat" /></button>
       </span>
       <button
