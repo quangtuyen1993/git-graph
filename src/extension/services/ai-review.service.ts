@@ -1,6 +1,14 @@
 import { spawn } from 'child_process';
 import * as vscode from 'vscode';
 
+/** Thrown when a caller aborts a review. Distinct from a CLI failure. */
+export class ReviewCancelledError extends Error {
+  constructor() {
+    super('Review cancelled');
+    this.name = 'ReviewCancelledError';
+  }
+}
+
 export interface AIProvider {
   id: string;
   name: string;
@@ -15,6 +23,15 @@ export interface ReviewRequest {
   customPrompt?: string;
   /** Pre-assembled payload text. When present, `diff` is ignored. */
   payloadText?: string;
+  /** Called with each stdout chunk as it arrives, for live progress. */
+  onChunk?: (text: string) => void;
+  /** Aborting kills the CLI process group and rejects with ReviewCancelledError. */
+  signal?: AbortSignal;
+}
+
+export interface SpawnHooks {
+  onChunk?: (text: string) => void;
+  signal?: AbortSignal;
 }
 
 export interface ReviewResult {
@@ -104,24 +121,26 @@ export class AIReviewService {
 
     console.log(`[AIReview] ${request.provider}: sending ${fullInput.length} chars`);
 
+    const hooks: SpawnHooks = { onChunk: request.onChunk, signal: request.signal };
+
     let content: string;
     let model = request.model || '';
 
     switch (request.provider) {
       case 'claude':
-        content = await this.runClaude(fullInput, model);
+        content = await this.runClaude(fullInput, model, hooks);
         break;
       case 'codex':
-        content = await this.runCodex(fullInput, model);
+        content = await this.runCodex(fullInput, model, hooks);
         break;
       case 'kiro':
-        content = await this.runKiro(fullInput);
+        content = await this.runKiro(fullInput, hooks);
         break;
       case 'openai':
-        content = await this.runOpenAI(fullInput, model);
+        content = await this.runOpenAI(fullInput, model, hooks);
         break;
       case 'deepseek':
-        content = await this.runDeepSeek(fullInput, model);
+        content = await this.runDeepSeek(fullInput, model, hooks);
         break;
       default:
         throw new Error(`Unknown AI provider: ${request.provider}`);
@@ -135,16 +154,16 @@ export class AIReviewService {
     };
   }
 
-  private async runClaude(input: string, model: string): Promise<string> {
+  private async runClaude(input: string, model: string, hooks: SpawnHooks): Promise<string> {
     const args = ['--print'];
     if (model && model !== 'default') args.push('--model', model);
-    return this.spawnWithStdin('claude', args, input);
+    return this.spawnWithStdin('claude', args, input, hooks);
   }
 
-  private async runCodex(input: string, model: string): Promise<string> {
+  private async runCodex(input: string, model: string, hooks: SpawnHooks): Promise<string> {
     const args = ['exec', '--skip-git-repo-check'];
     if (model && model !== 'default') args.push('-c', `model="${model}"`);
-    const raw = await this.spawnWithStdin('codex', args, input);
+    const raw = await this.spawnWithStdin('codex', args, input, hooks);
     // Strip ANSI escape codes
     const clean = raw.replace(/\x1b\[[0-9;]*m/g, '');
     // Extract content between "codex\n" and "tokens used\n"
@@ -166,20 +185,20 @@ export class AIReviewService {
       .trim();
   }
 
-  private async runKiro(input: string): Promise<string> {
+  private async runKiro(input: string, hooks: SpawnHooks): Promise<string> {
     const args = ['chat', '--no-interactive', '--trust-all-tools', '--wrap=never'];
-    const raw = await this.spawnWithStdin('kiro-cli', args, input);
+    const raw = await this.spawnWithStdin('kiro-cli', args, input, hooks);
     // Strip ANSI escape codes from output
     return raw.replace(/\x1b\[[0-9;]*m/g, '');
   }
 
-  private async runOpenAI(input: string, model: string): Promise<string> {
+  private async runOpenAI(input: string, model: string, hooks: SpawnHooks): Promise<string> {
     const m = (model && model !== 'default') ? model : 'gpt-4o';
     const args = ['api', 'chat.completions.create', '-m', m, '-g', 'user', input];
-    return this.spawnWithStdin('openai', args, '');
+    return this.spawnWithStdin('openai', args, '', hooks);
   }
 
-  private async runDeepSeek(input: string, model: string): Promise<string> {
+  private async runDeepSeek(input: string, model: string, hooks: SpawnHooks): Promise<string> {
     const config = vscode.workspace.getConfiguration('gitGraphPro.aiReview');
     const apiKey = config.get<string>('deepseekApiKey');
     if (!apiKey) {
@@ -205,7 +224,7 @@ export class AIReviewService {
       '-d', body,
     ];
 
-    const raw = await this.spawnWithStdin('curl', args, '');
+    const raw = await this.spawnWithStdin('curl', args, '', hooks);
     try {
       const response = JSON.parse(raw);
       if (response.error) {
@@ -274,7 +293,7 @@ export class AIReviewService {
    * runtime, so a model that keeps emitting output is never killed mid-answer.
    */
   private armInactivityTimeout(
-    proc: ReturnType<typeof spawn>,
+    kill: () => void,
     onTimeout: (idleMs: number) => void,
   ): { bump: () => void; clear: () => void } {
     const idleMs = this.getTimeoutMs();
@@ -283,7 +302,10 @@ export class AIReviewService {
     let timer: ReturnType<typeof setTimeout>;
     const arm = () => {
       timer = setTimeout(() => {
-        proc.kill('SIGTERM');
+        // The CLI's own grandchildren keep running (and billing) after the
+        // direct child dies, so the timeout path must kill the whole tree,
+        // not just proc — the same reason a cancel is a tree-kill.
+        kill();
         onTimeout(idleMs);
       }, idleMs);
     };
@@ -294,29 +316,110 @@ export class AIReviewService {
     };
   }
 
-  private spawnWithStdin(command: string, args: string[], stdin: string): Promise<string> {
-    // Use resolved full path if available
+  private spawnWithStdin(
+    command: string,
+    args: string[],
+    stdin: string,
+    hooks: SpawnHooks = {},
+  ): Promise<string> {
     const resolvedCommand = this.commandPaths.get(command) || command;
-    console.log(`[AIReview] Spawning: ${resolvedCommand} ${args.join(' ')}`);
     return new Promise((resolve, reject) => {
+      // A signal that is already aborted before we even spawn must not start
+      // the CLI at all — otherwise a cancel-before-start silently runs (and
+      // pays for) a full review.
+      if (hooks.signal?.aborted) {
+        reject(new ReviewCancelledError());
+        return;
+      }
+
+      // Never log the arguments. For DeepSeek the argv carries
+      // `Authorization: Bearer <key>` and the entire request body; for the CLIs
+      // it can carry the prompt. The command and an argument count are enough
+      // to debug a spawn.
+      console.log(`[AIReview] Spawning: ${resolvedCommand} (${args.length} args)`);
+
+      // detached puts the CLI in its own process group so a cancel reaches the
+      // grandchildren these tools spawn, not just the process we started.
       const proc = spawn(resolvedCommand, args, {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: this.getEnv(),
+        detached: process.platform !== 'win32',
       });
 
       let stdout = '';
       let stderr = '';
+      let cancelled = false;
+      let sigkillTimer: ReturnType<typeof setTimeout> | undefined;
       const startedAt = Date.now();
 
-      const idle = this.armInactivityTimeout(proc, (idleMs) => {
+      const clearSigkillTimer = () => {
+        if (sigkillTimer) clearTimeout(sigkillTimer);
+        sigkillTimer = undefined;
+      };
+
+      const killTree = () => {
+        // A second killTree() call (e.g. timeout fires, then the user cancels)
+        // must not orphan the first SIGKILL handle — an uncleared one still
+        // fires a real signal 5s later at a possibly-recycled pgid.
+        clearSigkillTimer();
+        if (proc.pid === undefined) return;
+        // Between 'exit' and 'close' the child is already gone and its pgid can
+        // have been recycled — signalling it then hits whatever process
+        // inherited the number.
+        if (proc.exitCode !== null || proc.signalCode !== null) return;
+        if (process.platform === 'win32') {
+          // A ChildProcess that emits 'error' with no listener *throws*. On the
+          // cancel path that is an uncaught exception in the extension host.
+          const killer = spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F']);
+          killer.on('error', () => { /* the tree is already gone, or taskkill is missing */ });
+          return;
+        }
+        try {
+          process.kill(-proc.pid, 'SIGTERM');
+        } catch {
+          proc.kill('SIGTERM');
+        }
+        sigkillTimer = setTimeout(() => {
+          try { process.kill(-proc.pid!, 'SIGKILL'); } catch { /* already gone */ }
+        }, 5000);
+        sigkillTimer.unref();
+      };
+
+      const onAbort = () => {
+        cancelled = true;
+        idle.clear();
+        killTree();
+        reject(new ReviewCancelledError());
+      };
+      hooks.signal?.addEventListener('abort', onAbort, { once: true });
+      const cleanup = () => hooks.signal?.removeEventListener('abort', onAbort);
+
+      // The timeout path must kill the whole tree too — it exists for exactly
+      // the same "grandchildren keep running" reason a cancel does. It does
+      // NOT remove the abort listener: killTree() here already stops the
+      // tree, but leaving cancel wired up means a later abort (e.g. a user
+      // pressing Cancel right after a timeout) is never a silent no-op.
+      const idle = this.armInactivityTimeout(killTree, (idleMs) => {
         reject(new Error(
           `${command} produced no output for ${Math.round(idleMs / 1000)}s and was stopped. ` +
           `Raise gitGraphPro.aiReview.timeoutSeconds (0 disables the timeout).`
         ));
       });
 
-      // Any output means the model is still working — push the deadline out.
-      proc.stdout.on('data', (data: Buffer) => { stdout += data.toString(); idle.bump(); });
+      proc.stdout.on('data', (data: Buffer) => {
+        const text = data.toString();
+        stdout += text;
+        // Any output means the model is still working — push the deadline
+        // out before touching caller code, so a throwing onChunk can never
+        // cause a live run to be killed for "no output".
+        idle.bump();
+        try {
+          hooks.onChunk?.(text);
+        } catch {
+          // onChunk is caller-supplied (e.g. a webview panel that may have
+          // been disposed) — its failure is not this run's failure.
+        }
+      });
       proc.stderr.on('data', (data: Buffer) => { stderr += data.toString(); idle.bump(); });
 
       if (stdin) {
@@ -326,6 +429,9 @@ export class AIReviewService {
 
       proc.on('close', (code) => {
         idle.clear();
+        clearSigkillTimer();
+        cleanup();
+        if (cancelled) return;
         const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
         console.log(`[AIReview] ${command} exited ${code} after ${elapsed}s (${stdout.length} bytes)`);
         if (code === 0) {
@@ -337,6 +443,9 @@ export class AIReviewService {
 
       proc.on('error', (err) => {
         idle.clear();
+        clearSigkillTimer();
+        cleanup();
+        if (cancelled) return;
         reject(new Error(`Failed to run ${command}: ${err.message}`));
       });
     });

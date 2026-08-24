@@ -15,18 +15,17 @@
   "activationEvents": [],
   "main": "./dist/extension.cjs",
   "contributes": {
-    "commands": [
-      {
-        "command": "gitGraphPro.open",
-        "title": "Git Graph Pro: Open"
-      }
-    ],
     "viewsContainers": {
       "panel": [
         {
           "id": "gitGraphPro",
           "title": "Git Graph",
           "icon": "resources/icon.svg"
+        },
+        {
+          "id": "gitGraphProReview",
+          "title": "Code Review",
+          "icon": "resources/review.svg"
         }
       ]
     },
@@ -39,6 +38,66 @@
           "webviewOptions": {
             "retainContextWhenHidden": true
           }
+        }
+      ],
+      "gitGraphProReview": [
+        {
+          "id": "gitGraphPro.reviews",
+          "name": "Reviews"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "gitGraphPro.open",
+        "title": "Git Graph Pro: Open"
+      },
+      {
+        "command": "gitGraphPro.review.cancel",
+        "title": "Cancel Review",
+        "icon": "$(stop-circle)"
+      },
+      {
+        "command": "gitGraphPro.review.rerun",
+        "title": "Re-run Review",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "gitGraphPro.review.delete",
+        "title": "Delete Review",
+        "icon": "$(trash)"
+      }
+    ],
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "gitGraphPro.review.cancel",
+          "when": "view == gitGraphPro.reviews && viewItem == running",
+          "group": "inline"
+        },
+        {
+          "command": "gitGraphPro.review.rerun",
+          "when": "view == gitGraphPro.reviews && viewItem != running",
+          "group": "inline"
+        },
+        {
+          "command": "gitGraphPro.review.delete",
+          "when": "view == gitGraphPro.reviews && viewItem != running",
+          "group": "inline"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "gitGraphPro.review.cancel",
+          "when": "false"
+        },
+        {
+          "command": "gitGraphPro.review.rerun",
+          "when": "false"
+        },
+        {
+          "command": "gitGraphPro.review.delete",
+          "when": "false"
         }
       ]
     },

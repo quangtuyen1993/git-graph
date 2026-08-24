@@ -185,7 +185,7 @@
   let aiProviders: { id: string; name: string; available: boolean; group: 'cli' | 'api' }[] = [];
   let savedProvider = '';
   let savedModel = '';
-  let aiReviewResult: { content: string; provider: string; model: string; timestamp: string } | null = null;
+  let aiReviewJobId: string | null = null;
   let aiReviewLoading = false;
   let aiReviewError = '';
 
@@ -227,6 +227,11 @@
 
     bridge.on('graph.invalidated', () => {
       refreshGraph();
+    });
+
+    bridge.on('review.changed', (data) => {
+      const changed = data as { id: string };
+      if (changed.id === aiReviewJobId) aiReviewLoading = false;
     });
   });
 
@@ -1205,7 +1210,6 @@
     compareFiles = null;
     rightPanelOpen = true;
     rightPanelMode = 'review';
-    aiReviewResult = null;
     aiReviewError = '';
 
     // If both branches set, fetch comparison immediately
@@ -1226,12 +1230,15 @@
     const { sourceBranch, targetBranch, provider, model } = event.detail;
     aiReviewLoading = true;
     aiReviewError = '';
-    aiReviewResult = null;
     try {
-      aiReviewResult = await bridge.send('ai.review', { sourceBranch, targetBranch, provider, model }) as typeof aiReviewResult;
+      const started = await bridge.send('review.start', { sourceBranch, targetBranch, provider, model }) as { id: string; cached: boolean };
+      aiReviewJobId = started.id;
+      // A cache hit resolves an already-`done` run and opens its document on the
+      // host side without any status transition — no review.changed will ever
+      // fire for it, so nothing else will clear the spinner.
+      if (started.cached) aiReviewLoading = false;
     } catch (e) {
       aiReviewError = e instanceof Error ? e.message : String(e);
-    } finally {
       aiReviewLoading = false;
     }
   }
@@ -1240,14 +1247,6 @@
     const { sourceBranch, targetBranch, path, oldPath, status } = event.detail;
     try {
       await bridge.send('ui.compareDiff', { sourceBranch, targetBranch, path, oldPath, status });
-    } catch (e) {
-      aiReviewError = e instanceof Error ? e.message : String(e);
-    }
-  }
-
-  async function handleOpenReviewInEditor(event: CustomEvent<{ content: string; label: string }>) {
-    try {
-      await bridge.send('ui.openReviewDocument', event.detail);
     } catch (e) {
       aiReviewError = e instanceof Error ? e.message : String(e);
     }
@@ -1501,13 +1500,11 @@
             initialTarget={compareTarget}
             initialProvider={savedProvider}
             initialModel={savedModel}
-            reviewResult={aiReviewResult}
             reviewLoading={aiReviewLoading}
             error={aiReviewError}
             on:compare={(e) => compareBranches(e.detail.sourceBranch, e.detail.targetBranch)}
             on:review={handleAIReview}
             on:openDiff={handleCompareOpenDiff}
-            on:openReview={handleOpenReviewInEditor}
             on:settingsChange={(e) => {
               savedProvider = e.detail.provider;
               savedModel = e.detail.model;

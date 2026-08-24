@@ -3,8 +3,14 @@ import { MessageRouter } from './controllers/message-router';
 import { RepositorySession, type RepositoryInfo } from './controllers/repository-session';
 import { GitGraphWebviewProvider } from './providers/webview-provider';
 import { GitService } from './services/git.service';
-import { buildReviewPayload } from './services/review-payload';
+import type { ReviewRunner } from './services/review-runner';
 import type { WebviewHost } from './types/webview-host.types';
+
+// The single ReviewRunner constructed in activate() below. Held here so
+// deactivate() can kill every in-flight CLI process — without this, a
+// detached review process keeps running (and keeps spending) after the
+// window closes.
+let activeRunner: ReviewRunner | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -45,6 +51,84 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const aiReview = new AIReviewService();
   let nextPanelSessionId = 0;
 
+  const { ReviewStore } = await import('./services/review-store');
+  const { ReviewRunner } = await import('./services/review-runner');
+  const { createReviewHandler } = await import('./controllers/review-method-handler');
+  const { ReviewTreeProvider } = await import('./providers/review-tree-provider');
+  const { registerReviewView } = await import('./providers/review-view-registration');
+  const { createActiveRepo } = await import('./services/active-repo');
+
+  // ReviewStore's constructor only assigns a field; it cannot throw. reconcileOrphans()
+  // does real I/O (readdir/readFile/writeFile against globalStorageUri) and must never
+  // take activation down with it — a missing directory or an unreadable index degrades
+  // to "orphaned runs stay marked running" rather than a failed activation.
+  const reviewStore = new ReviewStore(vscode.Uri.joinPath(context.globalStorageUri, 'reviews').fsPath);
+  try {
+    await reviewStore.reconcileOrphans();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[extension] Failed to reconcile orphaned reviews: ${message}`);
+  }
+
+  // The live session/router, for routing events back to whichever webview is
+  // currently attached. Assigned by createSession below and cleared on dispose.
+  let activeSession: RepositorySession | undefined;
+  let activeRouter: MessageRouter | undefined;
+
+  // Repository identity for the review side. Deliberately NOT tied to the
+  // graph webview: the reviews view activates on its own (onView:...reviews)
+  // and must list what is on disk before any webview exists, and keep working
+  // after one is disposed.
+  const activeRepo = createActiveRepo<GitService>({
+    getSession: () => activeSession,
+    initialPath: repos[0]?.path,
+    createGitService: (path) => new GitService(path),
+  });
+  const getRepoId = () => activeRepo.getRepoId();
+
+  // Assigned by Task 11 once the review tree view and status-bar clock exist.
+  // Declared here (rather than left undefined-and-optional-chained on an
+  // undeclared name) so the onChange callback below type-checks today.
+  let reviewTree: { refresh(): void } | undefined;
+  let syncTicker: (() => Promise<void>) | undefined;
+
+  // One runner for the whole extension, not one per session: its in-flight
+  // map is the source of truth for cross-session dedup (review.start
+  // idempotency), so a second session for the same repo must see the first
+  // session's in-flight run rather than falling back to the store's
+  // persisted status.
+  const reviewRunner = new ReviewRunner(reviewStore, aiReview, (_repoId, id) => {
+    activeRouter?.sendEvent('review.changed', { id });
+    reviewTree?.refresh();            // undefined until Task 11 registers the view
+    void syncTicker?.();              // undefined until Task 11 adds the clock
+  });
+  activeRunner = reviewRunner;         // held at module scope so deactivate() can cancelAll()
+
+  // Hoisted out of createSession: it only touches reviewStore and vscode, not
+  // the session, so the reviews tree view (Task 11) can share it too.
+  const openBody = async (repoId: string, id: string): Promise<void> => {
+    const doc = await vscode.workspace.openTextDocument(
+      vscode.Uri.file(reviewStore.bodyPath(repoId, id)),
+    );
+    await vscode.languages.setTextDocumentLanguage(doc, 'markdown');
+    await vscode.window.showTextDocument(doc, { preview: false });
+  };
+
+  // One review handler for the host, not one per session. The tree view's
+  // commands are not attached to any webview, so a handler scoped to a live
+  // session left `rerun` a silent no-op whenever the graph was closed. Both the
+  // webview router and the tree view now call this same handler, and it
+  // resolves the repository through activeRepo rather than a session.
+  const reviewHandler = createReviewHandler({
+    store: reviewStore,
+    runner: reviewRunner,
+    getGitService: () => activeRepo.getGitService() as never,
+    getRepoId,
+    getMaxDiffChars: () =>
+      vscode.workspace.getConfiguration('gitGraphPro.aiReview').get<number>('maxDiffChars') ?? 0,
+    openBody,
+  });
+
   function createSession(host: WebviewHost): () => void {
     const panelSessionId = ++nextPanelSessionId;
     let virtualDocumentRequestSequence = 0;
@@ -53,6 +137,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       initialRepository: repos[0] ?? null,
       repositories: repos,
     });
+    activeSession = session;
+    activeRouter = router;
 
     let gitWatcher: vscode.FileSystemWatcher | undefined;
     let debounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -227,35 +313,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           await vscode.commands.executeCommand('vscode.openFolder', folderUri, { forceNewWindow: true });
           return { success: true };
         }
-        case 'ui.openReviewDocument': {
-          const content = p.content as string;
-          const label = (p.label as string) ?? 'review';
-          if (!content?.trim()) throw new Error('Nothing to open — run a review first');
-
-          // Write to a real file so the editor tab gets a meaningful name and the
-          // user can edit/save it. The path is derived from the label, so
-          // re-running the same comparison overwrites instead of accumulating.
-          const os = await import('os');
-          const fsp = await import('fs/promises');
-          const path = await import('path');
-
-          const slug = label
-            .replace(/[^\w.-]+/g, '-')
-            .replace(/^-+|-+$/g, '')
-            .slice(0, 80) || 'review';
-          const dir = path.join(os.tmpdir(), 'git-graph-pro-reviews');
-          await fsp.mkdir(dir, { recursive: true });
-          const file = path.join(dir, `${slug}.md`);
-          await fsp.writeFile(file, content, 'utf8');
-
-          const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
-          await vscode.languages.setTextDocumentLanguage(doc, 'markdown');
-          await vscode.window.showTextDocument(doc, {
-            viewColumn: vscode.ViewColumn.Active,
-            preview: false,
-          });
-          return { success: true, path: file };
-        }
         case 'ui.pickBranch': {
           const gitService = session.getGitService();
           if (!gitService) throw new Error('No git repository found');
@@ -352,63 +409,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           const result = await gitService.diff(baseBranch, headBranch);
           return { files: result.files };
         }
-        case 'ai.review': {
-          const gitService = session.getGitService();
-          if (!gitService) throw new Error('No git repository found');
-          const sourceBranch = p.sourceBranch as string;
-          const targetBranch = p.targetBranch as string;
-          const provider = p.provider as string;
-          const model = p.model as string | undefined;
-          const diff = await gitService.getDiff(sourceBranch, targetBranch);
-          if (!diff.trim()) {
-            return {
-              content: 'No differences found between branches.',
-              provider,
-              model: model ?? 'default',
-              timestamp: new Date().toISOString(),
-            };
-          }
-
-          // Give the reviewer the real change: the complete diff, plus the file
-          // stats and commit subjects it cannot infer from hunks alone. Nothing is
-          // trimmed unless the user opts into a budget.
-          const [changed, commits] = await Promise.all([
-            gitService.diff(sourceBranch, targetBranch).then((d) => d.files).catch(() => undefined),
-            gitService.log({ revisions: [`${sourceBranch}..${targetBranch}`], maxCount: 100 })
-              .then((cs) => cs.map((c) => c.subject))
-              .catch(() => undefined),
-          ]);
-
-          const budget = vscode.workspace
-            .getConfiguration('gitGraphPro.aiReview')
-            .get<number>('maxDiffChars') ?? 0;
-
-          const payload = buildReviewPayload({
-            baseBranch: sourceBranch,
-            headBranch: targetBranch,
-            diff,
-            files: changed,
-            commits,
-            budget,
-          });
-
-          console.log(
-            `[AIReview] payload ${payload.text.length} chars, ` +
-            `${payload.includedFiles} files included, ${payload.omittedFiles.length} omitted`
-          );
-
-          return aiReview.review({ diff, payloadText: payload.text, provider, model });
-        }
-        case 'ai.reviewDiff': {
-          const diff = p.diff as string;
-          const provider = p.provider as string;
-          const model = p.model as string | undefined;
-          return aiReview.review({ diff, provider, model });
-        }
         default:
           throw new Error(`Unknown method: ${method}`);
       }
     });
+
+    router.register('review', reviewHandler);
 
     router.setHost(host);
     void bindGitWatcher();
@@ -422,6 +428,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       gitWatcher?.dispose();
       gitWatcher = undefined;
       visibilitySubscription?.dispose();
+      if (activeSession === session) activeSession = undefined;
+      if (activeRouter === router) activeRouter = undefined;
       router.dispose();
     };
 
@@ -447,10 +455,84 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void vscode.commands.executeCommand('gitGraphPro.graph.focus');
   });
   context.subscriptions.push(openCommand);
+
+  const treeProvider = new ReviewTreeProvider(reviewStore, getRepoId);
+  reviewTree = treeProvider;
+  context.subscriptions.push(treeProvider);
+
+  // One timer for the whole view, started only while a run is in flight and
+  // stopped when the last one ends, so a running row's clock advances without
+  // a stray setInterval outliving the extension.
+  let tick: ReturnType<typeof setInterval> | undefined;
+  syncTicker = async () => {
+    let running = false;
+    try {
+      // getRepoId() does a synchronous realpathSync — a repo that vanished (or
+      // renamed) between the run starting and this tick can throw. A ticker
+      // glitch must not throw out of onChange or leave a dangling interval;
+      // treat "can't tell" as "not running" and let the next onChange retry.
+      const repoId = getRepoId();
+      if (repoId) {
+        running = (await reviewStore.list(repoId)).some(entry => entry.status === 'running');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[extension] Failed to check in-flight reviews: ${message}`);
+    }
+    if (running && !tick) {
+      tick = setInterval(() => treeProvider.refresh(), 1000);
+    } else if (!running && tick) {
+      clearInterval(tick);
+      tick = undefined;
+    }
+  };
+  context.subscriptions.push({
+    dispose: () => {
+      if (tick) clearInterval(tick);
+      tick = undefined;
+    },
+  });
+
+  registerReviewView({
+    tree: treeProvider,
+    runner: reviewRunner,
+    store: reviewStore,
+    getRepoId,
+    openBody,
+    rerun: async (entry) => {
+      let repoId: string | undefined;
+      try {
+        // Same hazard as syncTicker above: getRepoId() can throw if the repo
+        // path is gone. Rerun must be a no-op then, not an unhandled rejection.
+        repoId = getRepoId();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[extension] Failed to resolve repo for rerun: ${message}`);
+        return;
+      }
+      if (!repoId) return;
+      await reviewStore.remove(repoId, entry.id);
+      await reviewHandler('review.start', {
+        sourceBranch: entry.sourceBranch,
+        targetBranch: entry.targetBranch,
+        provider: entry.provider,
+        model: entry.model,
+      });
+    },
+    registerCommand: (id, fn) => vscode.commands.registerCommand(id, fn),
+    registerTreeView: (id, tree) => vscode.window.createTreeView(id, { treeDataProvider: tree }),
+    subscribe: (d) => context.subscriptions.push(d),
+  });
 }
 
 export function deactivate(): void {
-  // Nothing to do here: each session's disposer is registered on the view's
-  // onDidDispose and is also invoked by the provider when the view is
-  // resolved again, so teardown is driven by view disposal, not by deactivate.
+  // Session teardown is driven by view disposal: each session's disposer is
+  // registered on the view's onDidDispose and is also invoked by the provider
+  // when the view is resolved again.
+
+  // Review processes are not. Nothing must outlive the window — without this,
+  // detached CLI process groups keep running and keep spending after VS Code
+  // is gone.
+  activeRunner?.cancelAll();
+  activeRunner = undefined;
 }

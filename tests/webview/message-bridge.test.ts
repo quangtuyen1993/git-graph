@@ -78,10 +78,10 @@ describe('MessageBridge', () => {
     });
   });
 
-  it('lets a multi-minute AI review finish instead of timing out at 30s', async () => {
-    // Regression: ai.review was absent from the unbounded set, so the webview
-    // rejected at the 30s default while the CLI was still producing a review.
-    for (const method of ['ai.review', 'ai.reviewDiff', 'ai.compare', 'ai.providers']) {
+  it('lets a slow host-owned AI request finish instead of timing out at 30s', async () => {
+    // Regression: these were absent from the unbounded set, so the webview
+    // rejected at the 30s default while the host was still working.
+    for (const method of ['ai.compare', 'ai.providers']) {
       vi.useFakeTimers();
       const postMessage = vi.fn();
       vi.stubGlobal('acquireVsCodeApi', () => ({ postMessage, getState: () => ({}), setState: vi.fn() }));

@@ -14,12 +14,6 @@ const compareFiles = [
   { path: 'src/a.ts', oldPath: null, status: 'modified', additions: 3, deletions: 1, binary: false },
   { path: 'src/b.ts', oldPath: null, status: 'added', additions: 9, deletions: 0, binary: false },
 ];
-const reviewResult = {
-  content: '## Summary\n\nLooks good.',
-  provider: 'claude',
-  model: 'sonnet',
-  timestamp: '2026-08-24T00:00:00.000Z',
-};
 
 function renderPanel(props: Record<string, unknown> = {}) {
   return render(AIReviewPanel, {
@@ -28,7 +22,6 @@ function renderPanel(props: Record<string, unknown> = {}) {
     compareFiles,
     initialSource: 'main',
     initialTarget: 'feature',
-    reviewResult,
     ...props,
   });
 }
@@ -36,67 +29,78 @@ function renderPanel(props: Record<string, unknown> = {}) {
 describe('AIReviewPanel', () => {
   afterEach(() => cleanup());
 
-  it('renders the review as markdown rather than raw text', () => {
-    const { container } = renderPanel();
-    const heading = container.querySelector('.result-content h2');
-    expect(heading?.textContent).toBe('Summary');
-    expect(container.querySelector('.result-content')?.textContent).not.toContain('##');
+  it('renders no review-result surface even if a reviewResult-shaped value is forced onto the instance', () => {
+    // The component no longer declares a `reviewResult` prop, so this value is
+    // inert — but forcing it onto the instance is exactly what would have hit
+    // the old `{#if reviewResult}` block if the removal were incomplete. A
+    // plain `renderPanel()` with nothing forced would pass whether or not the
+    // markup was actually removed (App itself never passes a truthy
+    // reviewResult, before or after this task), so it proves nothing on its
+    // own — this is the one that is actually sensitive to the removal.
+    const { container } = renderPanel({
+      reviewResult: { content: 'Looks good.', provider: 'claude', model: 'sonnet', timestamp: '2026-08-24T00:00:00.000Z' },
+    });
+    expect(container.querySelector('.review-result')).toBeNull();
   });
 
-  it('collapses and expands the files and review sections independently', async () => {
+  it('collapses and expands the files section', async () => {
     const { container, getByRole } = renderPanel();
 
     const filesToggle = getByRole('button', { name: /files changed/i });
-    const reviewToggle = getByRole('button', { name: /^\s*▶?\s*review/i });
-
     expect(container.querySelector('.file-list')).not.toBeNull();
-    expect(container.querySelector('.result-content')).not.toBeNull();
 
     await fireEvent.click(filesToggle);
     expect(container.querySelector('.file-list')).toBeNull();
-    // Collapsing files must not affect the review section.
-    expect(container.querySelector('.result-content')).not.toBeNull();
     expect(filesToggle.getAttribute('aria-expanded')).toBe('false');
-
-    await fireEvent.click(reviewToggle);
-    expect(container.querySelector('.result-content')).toBeNull();
-    expect(reviewToggle.getAttribute('aria-expanded')).toBe('false');
 
     await fireEvent.click(filesToggle);
     expect(container.querySelector('.file-list')).not.toBeNull();
     expect(filesToggle.getAttribute('aria-expanded')).toBe('true');
   });
 
-  it('re-expands the review section when a newer review arrives', async () => {
-    const { container, getByRole, component } = renderPanel();
+  it('dispatches review with the selected branches, provider and model, then hints where to find the result', async () => {
+    const { getByRole, container, component } = renderPanel({ initialProvider: 'claude', initialModel: 'sonnet' });
+    const onReview = vi.fn();
+    component.$on('review', onReview);
 
-    await fireEvent.click(getByRole('button', { name: /^\s*▶?\s*review/i }));
-    expect(container.querySelector('.result-content')).toBeNull();
+    expect(container.querySelector('.review-started-hint')).toBeNull();
 
-    component.$set({
-      reviewResult: { ...reviewResult, content: '## Next\n\nOther.', timestamp: '2026-08-24T01:00:00.000Z' },
+    await fireEvent.click(getByRole('button', { name: /Review Changes/ }));
+
+    expect(onReview).toHaveBeenCalledTimes(1);
+    expect(onReview.mock.calls[0][0].detail).toEqual({
+      sourceBranch: 'main',
+      targetBranch: 'feature',
+      provider: 'claude',
+      model: 'sonnet',
     });
-    await Promise.resolve();
-
-    expect(container.querySelector('.result-content')?.textContent).toContain('Other.');
+    expect(container.querySelector('.review-started-hint')?.textContent)
+      .toContain('Started — see the Code Review panel.');
   });
 
-  it('emits a markdown document with comparison context when opening in the editor', async () => {
-    const { getByTitle, component } = renderPanel();
-    const onOpenReview = vi.fn();
-    component.$on('openReview', onOpenReview);
+  it('hides the started hint once a review.start failure surfaces as an error', async () => {
+    const { getByRole, container, component } = renderPanel({ initialProvider: 'claude' });
 
-    await fireEvent.click(getByTitle('Open review in editor'));
+    await fireEvent.click(getByRole('button', { name: /Review Changes/ }));
+    expect(container.querySelector('.review-started-hint')).not.toBeNull();
 
-    expect(onOpenReview).toHaveBeenCalledTimes(1);
-    const { content, label } = onOpenReview.mock.calls[0][0].detail;
-    expect(label).toBe('review-main-to-feature');
-    expect(content).toContain('# Code review: main → feature');
-    expect(content).toContain('- Base: `main`');
-    expect(content).toContain('- Head: `feature`');
-    expect(content).toContain('- Reviewer: claude/sonnet');
-    expect(content).toContain('- Files changed: 2');
-    expect(content).toContain('Looks good.');
+    // Mirrors what App.svelte does on a review.start rejection: it sets
+    // aiReviewError, which flows into this prop. Nothing was actually queued,
+    // so pointing the user at the Code Review panel would be wrong.
+    component.$set({ error: 'Nothing to review — no changes between these branches' });
+    await Promise.resolve();
+
+    expect(container.querySelector('.review-started-hint')).toBeNull();
+  });
+
+  it('clears the started hint once a new comparison begins', async () => {
+    const { getByRole, container } = renderPanel({ initialProvider: 'claude' });
+
+    await fireEvent.click(getByRole('button', { name: /Review Changes/ }));
+    expect(container.querySelector('.review-started-hint')).not.toBeNull();
+
+    await fireEvent.click(getByRole('button', { name: /Compare/ }));
+    expect(container.querySelector('.review-started-hint')).toBeNull();
   });
 
   it('explains an empty comparison instead of showing a blank list', () => {

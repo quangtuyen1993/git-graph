@@ -1,7 +1,6 @@
 <script lang="ts">
   import Icon from '../common/Icon.svelte';
   import { createEventDispatcher, onDestroy } from 'svelte';
-  import { marked } from 'marked';
 
   interface FileChange {
     path: string;
@@ -27,7 +26,6 @@
   export let initialTarget = '';
   export let initialProvider = '';
   export let initialModel = '';
-  export let reviewResult: { content: string; provider: string; model: string; timestamp: string } | null = null;
   export let reviewLoading = false;
   export let error = '';
 
@@ -39,7 +37,7 @@
   let modelInput = '';
   let filterText = '';
   let filesExpanded = true;
-  let reviewExpanded = true;
+  let reviewStarted = false;
 
   // Sync initial source/target from parent (right-click context) — only on change
   let lastInitialSource = '';
@@ -89,62 +87,11 @@
 
   onDestroy(() => {
     if (elapsedTimer !== undefined) clearInterval(elapsedTimer);
-    if (copyTimer !== undefined) clearTimeout(copyTimer);
   });
 
   $: elapsedLabel = elapsedSeconds >= 60
     ? `${Math.floor(elapsedSeconds / 60)}m ${String(elapsedSeconds % 60).padStart(2, '0')}s`
     : `${elapsedSeconds}s`;
-
-  // A newly arrived review should always be visible, even if the section was
-  // collapsed while reading the previous one.
-  let lastShownReview: string | null = null;
-  $: if (reviewResult && reviewResult.timestamp !== lastShownReview) {
-    lastShownReview = reviewResult.timestamp;
-    reviewExpanded = true;
-  }
-
-  /** Markdown document for the current review, with the comparison as context. */
-  function buildReviewDocument(): string {
-    if (!reviewResult) return '';
-    const when = new Date(reviewResult.timestamp).toLocaleString();
-    return [
-      `# Code review: ${sourceBranch} → ${targetBranch}`,
-      '',
-      `- Base: \`${sourceBranch}\``,
-      `- Head: \`${targetBranch}\``,
-      `- Reviewer: ${reviewResult.provider}/${reviewResult.model}`,
-      `- Generated: ${when}`,
-      ...(compareFiles ? [`- Files changed: ${compareFiles.length}`] : []),
-      '',
-      '---',
-      '',
-      reviewResult.content.trim(),
-      '',
-    ].join('\n');
-  }
-
-  function handleOpenInEditor() {
-    if (!reviewResult) return;
-    dispatch('openReview', {
-      content: buildReviewDocument(),
-      label: `review-${sourceBranch}-to-${targetBranch}`,
-    });
-  }
-
-  let copied = false;
-  let copyTimer: ReturnType<typeof setTimeout> | undefined;
-  async function handleCopy() {
-    if (!reviewResult) return;
-    try {
-      await navigator.clipboard.writeText(buildReviewDocument());
-      copied = true;
-      clearTimeout(copyTimer);
-      copyTimer = setTimeout(() => { copied = false; }, 1500);
-    } catch {
-      copied = false;
-    }
-  }
 
   $: filteredFiles = compareFiles?.filter(f =>
     f.path.toLowerCase().includes(filterText.toLowerCase())
@@ -153,8 +100,16 @@
   $: totalAdditions = compareFiles?.reduce((sum, f) => sum + f.additions, 0) ?? 0;
   $: totalDeletions = compareFiles?.reduce((sum, f) => sum + f.deletions, 0) ?? 0;
 
+  // The hint is only true while a job is genuinely queued: a `review.start`
+  // failure (e.g. the empty-diff refusal) surfaces as `error`, which must
+  // retract the hint rather than leave it sitting next to the failure. A new
+  // comparison also retracts it, so re-running doesn't leave a stale pointer
+  // to a job that finished (or failed) long ago.
+  $: if (error) reviewStarted = false;
+
   function handleCompare() {
     if (!sourceBranch || !targetBranch) return;
+    reviewStarted = false;
     dispatch('compare', { sourceBranch, targetBranch });
   }
 
@@ -166,6 +121,7 @@
       provider: selectedProvider,
       model: modelInput || 'default',
     });
+    reviewStarted = true;
   }
 
   function handleFileClick(file: FileChange) {
@@ -190,10 +146,6 @@
     const parts = path.split('/');
     parts.pop();
     return parts.join('/');
-  }
-
-  function formatMarkdown(text: string): string {
-    return marked.parse(text, { async: false, gfm: true, breaks: true }) as string;
   }
 </script>
 
@@ -237,6 +189,10 @@
         {reviewLoading ? `⏳ Reviewing… ${elapsedLabel}` : '🤖 Review Changes'}
       </button>
     </div>
+
+    {#if reviewStarted}
+      <p class="review-started-hint">Started — see the Code Review panel.</p>
+    {/if}
   </div>
 
   <!-- AI Provider config (collapsible) -->
@@ -333,38 +289,6 @@
           </p>
         {/if}
       </div>
-      {/if}
-    </div>
-  {/if}
-
-  <!-- Review result -->
-  {#if reviewResult}
-    <div class="review-result" class:collapsed={!reviewExpanded}>
-      <div class="result-header">
-        <button
-          class="section-toggle result-toggle"
-          aria-expanded={reviewExpanded}
-          on:click={() => { reviewExpanded = !reviewExpanded; }}
-        >
-          <span class="chevron" class:collapsed={!reviewExpanded}><Icon name="chevron-right" /></span>
-          <span class="result-title">REVIEW</span>
-        </button>
-        <span class="result-meta">{reviewResult.provider}/{reviewResult.model}</span>
-        <button
-          class="result-action"
-          title="Copy review as Markdown"
-          on:click={handleCopy}
-        >{copied ? '✓' : '⧉'}</button>
-        <button
-          class="result-action"
-          title="Open review in editor"
-          on:click={handleOpenInEditor}
-        >↗</button>
-      </div>
-      {#if reviewExpanded}
-        <div class="result-content">
-          {@html formatMarkdown(reviewResult.content)}
-        </div>
       {/if}
     </div>
   {/if}
@@ -544,9 +468,8 @@
     transform: rotate(0deg);
   }
 
-  /* The review section grows to fill the panel while open, but must not keep
+  /* The files section grows to fill the panel while open, but must not keep
      reserving that space once collapsed. */
-  .review-result.collapsed,
   .files-section.collapsed {
     flex: 0 0 auto;
   }
@@ -647,129 +570,9 @@
     font-size: 10px;
   }
 
-  /* Review result */
-  .review-result {
-    flex: 1;
-    overflow-y: auto;
-  }
-
-  .result-header {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 0 8px 0 0;
-    border-bottom: 1px solid var(--vscode-panel-border, #2b2b2b);
-  }
-
-  /* The toggle owns the left side; actions sit outside it so clicking them does
-     not also collapse the section. */
-  .result-toggle {
-    width: auto;
-    flex: 1;
-    min-width: 0;
-  }
-
-  .result-title {
+  .review-started-hint {
+    margin: 0;
     font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
     color: var(--vscode-descriptionForeground, #888);
-  }
-
-  .result-meta {
-    font-size: 10px;
-    opacity: 0.6;
-    margin-left: auto;
-  }
-
-  .result-action {
-    border: none;
-    background: transparent;
-    color: var(--vscode-foreground, #ccc);
-    font-size: 13px;
-    line-height: 1;
-    padding: 2px 5px;
-    border-radius: 3px;
-    cursor: pointer;
-    opacity: 0.65;
-  }
-
-  .result-action:hover {
-    opacity: 1;
-    background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.1));
-  }
-
-  .result-action:focus-visible {
-    outline: 1px solid var(--vscode-focusBorder, #007acc);
-    outline-offset: -1px;
-  }
-
-  .result-content {
-    padding: 16px;
-    font-size: 13px;
-    line-height: 1.7;
-    /* Reviews are prose: allow selection and keep long paths/URLs from
-       overflowing the narrow panel. */
-    user-select: text;
-    overflow-wrap: anywhere;
-    word-break: break-word;
-  }
-
-  .result-content :global(h2), .result-content :global(h3), .result-content :global(h4) {
-    margin: 16px 0 8px;
-  }
-
-  .result-content :global(h2:first-child),
-  .result-content :global(h3:first-child),
-  .result-content :global(h4:first-child) {
-    margin-top: 0;
-  }
-
-  .result-content :global(p) {
-    margin: 0 0 12px;
-  }
-
-  .result-content :global(p:last-child) {
-    margin-bottom: 0;
-  }
-
-  .result-content :global(strong) { color: var(--vscode-foreground, #eee); }
-
-  .result-content :global(code) {
-    background: var(--vscode-textCodeBlock-background, #2a2a2a);
-    padding: 2px 5px;
-    border-radius: 3px;
-    font-family: var(--vscode-editor-font-family, monospace);
-    font-size: 12px;
-  }
-
-  .result-content :global(pre) {
-    background: var(--vscode-textCodeBlock-background, #2a2a2a);
-    padding: 12px;
-    border-radius: 4px;
-    overflow-x: auto;
-    margin: 12px 0;
-  }
-
-  .result-content :global(pre code) { background: none; padding: 0; }
-
-  .result-content :global(ul), .result-content :global(ol) {
-    margin: 8px 0 12px;
-    padding-left: 24px;
-  }
-
-  .result-content :global(li) { margin: 6px 0; }
-
-  .result-content :global(hr) {
-    border: none;
-    border-top: 1px solid var(--vscode-panel-border, #333);
-    margin: 16px 0;
-  }
-
-  .result-content :global(blockquote) {
-    margin: 12px 0;
-    padding: 8px 12px;
-    border-left: 3px solid var(--vscode-textBlockQuote-border, #4fc1ff);
-    background: var(--vscode-textBlockQuote-background, rgba(255,255,255,0.02));
   }
 </style>

@@ -12,6 +12,8 @@ const hostMocks = vi.hoisted(() => ({
   registerWebviewViewProvider: vi.fn(),
   resolveSubmodule: vi.fn(),
   registerCommand: vi.fn(),
+  createTreeView: vi.fn(() => ({ dispose: vi.fn() })),
+  getConfiguration: vi.fn(() => ({ get: () => undefined })),
   showFile: vi.fn(),
   showWarningMessage: vi.fn(),
   globalState: new Map<string, unknown>(),
@@ -38,6 +40,27 @@ vi.mock('vscode', () => ({
   RelativePattern: class {
     constructor(public readonly base: string, public readonly pattern: string) {}
   },
+  EventEmitter: class {
+    private listeners: Array<() => void> = [];
+    event = (listener: () => void) => {
+      this.listeners.push(listener);
+      return { dispose: () => {} };
+    };
+    fire(): void {
+      this.listeners.forEach(listener => listener());
+    }
+  },
+  ThemeIcon: class {
+    constructor(public readonly id: string) {}
+  },
+  TreeItem: class {
+    description?: string;
+    iconPath?: unknown;
+    contextValue?: string;
+    tooltip?: string;
+    command?: unknown;
+    constructor(public readonly label: string) {}
+  },
   commands: {
     executeCommand: hostMocks.executeCommand,
     registerCommand: hostMocks.registerCommand,
@@ -45,6 +68,7 @@ vi.mock('vscode', () => ({
   window: {
     createWebviewPanel: hostMocks.createWebviewPanel,
     registerWebviewViewProvider: hostMocks.registerWebviewViewProvider,
+    createTreeView: hostMocks.createTreeView,
     showInputBox: vi.fn(),
     showQuickPick: vi.fn(),
     showWarningMessage: hostMocks.showWarningMessage,
@@ -55,6 +79,7 @@ vi.mock('vscode', () => ({
     },
     createFileSystemWatcher: hostMocks.createFileSystemWatcher,
     registerTextDocumentContentProvider: hostMocks.registerTextDocumentContentProvider,
+    getConfiguration: hostMocks.getConfiguration,
   },
 }));
 
@@ -103,7 +128,33 @@ vi.mock('../../src/extension/services/ai-review.service', () => ({
   },
 }));
 
-import { activate } from '../../src/extension/extension';
+// A stand-in that tracks construction and captures the onChange callback, so
+// tests can assert on cancelAll() (hoisting: one runner for the whole
+// extension, not one per session) and on event delivery (the onChange
+// rewiring from a per-session `router` to the activate-scope `activeRouter`)
+// without exercising real review I/O.
+const reviewRunnerMocks = vi.hoisted(() => ({
+  instances: [] as Array<{
+    cancelAll: ReturnType<typeof vi.fn>;
+    onChange: (repoId: string, id: string) => void;
+  }>,
+}));
+
+vi.mock('../../src/extension/services/review-runner', () => ({
+  ReviewRunner: class {
+    cancelAll = vi.fn();
+    onChange: (repoId: string, id: string) => void;
+    constructor(_store: unknown, _service: unknown, onChange: (repoId: string, id: string) => void) {
+      this.onChange = onChange;
+      reviewRunnerMocks.instances.push(this as unknown as {
+        cancelAll: ReturnType<typeof vi.fn>;
+        onChange: (repoId: string, id: string) => void;
+      });
+    }
+  },
+}));
+
+import { activate, deactivate } from '../../src/extension/extension';
 import type { Request } from '../../src/extension/types/messages.types';
 
 interface FakeView {
@@ -228,6 +279,7 @@ async function activateAndResolveView(view: FakeView = fakeView()): Promise<Fake
 describe('extension view sessions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    reviewRunnerMocks.instances.length = 0;
     hostMocks.globalState.clear();
     hostMocks.workspaceFolders = [
       { name: 'root', uri: { fsPath: '/workspace/root' } },
@@ -459,5 +511,77 @@ describe('extension view sessions', () => {
     openCommand();
 
     expect(hostMocks.executeCommand).toHaveBeenCalledWith('gitGraphPro.graph.focus');
+  });
+
+  it('shares one ReviewRunner across sessions and cancels its in-flight runs on deactivate', async () => {
+    await activateAndResolveView();
+    expect(reviewRunnerMocks.instances).toHaveLength(1);
+
+    const provider = hostMocks.registerWebviewViewProvider.mock.calls
+      .find(([viewType]) => viewType === 'gitGraphPro.graph')?.[1] as {
+        resolveWebviewView(view: unknown): void;
+      };
+
+    // Resolving a second view (a hide/re-show) tears down and rebuilds the
+    // session, but must not construct a second ReviewRunner: a per-session
+    // runner would fragment the in-flight map that review.start relies on for
+    // cross-session dedup.
+    provider.resolveWebviewView(fakeView());
+    expect(reviewRunnerMocks.instances).toHaveLength(1);
+
+    deactivate();
+
+    expect(reviewRunnerMocks.instances[0].cancelAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('delivers review.changed to the live webview when the runner reports a change', async () => {
+    const view = await activateAndResolveView();
+    const runner = reviewRunnerMocks.instances[0];
+
+    runner.onChange('repo-a', 'review-1');
+
+    expect(view.webview.postMessage).toHaveBeenCalledWith({
+      type: 'event',
+      event: 'review.changed',
+      data: { id: 'review-1' },
+    });
+  });
+
+  it('does not post review.changed once the webview has been disposed', async () => {
+    const view = await activateAndResolveView();
+    const runner = reviewRunnerMocks.instances[0];
+
+    view.disposeView();
+    view.webview.postMessage.mockClear();
+
+    runner.onChange('repo-a', 'review-2');
+
+    expect(view.webview.postMessage).not.toHaveBeenCalled();
+  });
+
+  it('routes review.changed to whichever session is currently live after a hide/re-show', async () => {
+    const view1 = await activateAndResolveView();
+    const provider = hostMocks.registerWebviewViewProvider.mock.calls
+      .find(([viewType]) => viewType === 'gitGraphPro.graph')?.[1] as {
+        resolveWebviewView(view: unknown): void;
+      };
+
+    // Resolving a second view disposes session 1 (clearing activeRouter back
+    // to undefined) and builds session 2 (reassigning activeRouter to it) —
+    // exactly the identity-guarded handoff in extension.ts's dispose().
+    const view2 = fakeView();
+    provider.resolveWebviewView(view2);
+    view1.webview.postMessage.mockClear();
+    view2.webview.postMessage.mockClear();
+
+    const runner = reviewRunnerMocks.instances[0];
+    runner.onChange('repo-a', 'review-3');
+
+    expect(view2.webview.postMessage).toHaveBeenCalledWith({
+      type: 'event',
+      event: 'review.changed',
+      data: { id: 'review-3' },
+    });
+    expect(view1.webview.postMessage).not.toHaveBeenCalled();
   });
 });

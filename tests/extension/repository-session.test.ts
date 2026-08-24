@@ -115,4 +115,24 @@ describe('RepositorySession', () => {
     expect(session.getCurrentRepository()?.path).toBe('/root/packages/sdk');
     expect(await session.handleGit('git.branches', {})).toEqual([{ name: '/root/packages/sdk' }]);
   });
+
+  it('exposes the active repository path for consumers outside the webview', () => {
+    const session = new RepositorySession({
+      initialRepository: { name: 'root', path: '/root' },
+      repositories: [{ name: 'root', path: '/root' }],
+      createGitService: fakeGitServiceFactory,
+    });
+
+    expect(session.getActiveRepositoryPath()).toBe('/root');
+  });
+
+  it('reports undefined before any repository is active', () => {
+    const session = new RepositorySession({
+      initialRepository: null,
+      repositories: [],
+      createGitService: fakeGitServiceFactory,
+    });
+
+    expect(session.getActiveRepositoryPath()).toBeUndefined();
+  });
 });
