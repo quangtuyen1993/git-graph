@@ -194,6 +194,13 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+function sentEvents(view: FakeView): string[] {
+  return view.webview.postMessage.mock.calls
+    .map(([message]) => message as Record<string, unknown>)
+    .filter((message) => message.type === 'event')
+    .map((message) => message.event as string);
+}
+
 async function responseFor(panel: FakePanel | FakeView, id: string): Promise<Record<string, unknown>> {
   let response: Record<string, unknown> | undefined;
   await vi.waitFor(() => {
@@ -420,6 +427,28 @@ describe('extension view sessions', () => {
       .find(([command]) => command === 'vscode.diff')!;
     expect(parentUri.toString()).toContain('git-graph-pro-diff:');
     expect(currentUri.toString()).toBe('/repo/root/src/shared.ts');
+  });
+
+  it('holds refresh events until the hidden view comes back', async () => {
+    const view = await activateAndResolveView(fakeView(false));
+
+    await vi.waitFor(() => expect(hostMocks.createFileSystemWatcher).toHaveBeenCalledTimes(1));
+    const watcher = hostMocks.createFileSystemWatcher.mock.results[0].value;
+
+    vi.useFakeTimers();
+    watcher.fireChange();
+    vi.advanceTimersByTime(500);
+    vi.useRealTimers();
+
+    expect(sentEvents(view)).toEqual([]);
+
+    view.setVisible(true);
+
+    expect(sentEvents(view)).toEqual(['git.refsChanged', 'graph.invalidated']);
+
+    view.setVisible(true);
+
+    expect(sentEvents(view)).toEqual(['git.refsChanged', 'graph.invalidated']);
   });
 
   it('registers the graph as a panel view and focuses it from the open command', async () => {

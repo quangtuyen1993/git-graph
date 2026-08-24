@@ -62,6 +62,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     let disposed = false;
     let repositorySwitchQueue = Promise.resolve();
 
+    let refreshPending = false;
+
+    const isVisible = () => host.visible !== false;
+
+    /**
+     * The bottom Panel shares its space with the terminal, so the graph spends
+     * most of its life hidden. Running git for a view nobody is looking at is
+     * pure waste — remember that it went stale and catch up on the way back.
+     */
+    function requestRefresh(): void {
+      if (!isVisible()) {
+        refreshPending = true;
+        return;
+      }
+      router.sendEvent('git.refsChanged');
+      router.sendEvent('graph.invalidated');
+    }
+
+    const visibilitySubscription = host.onDidChangeVisibility?.(() => {
+      if (!isVisible() || !refreshPending) return;
+      refreshPending = false;
+      requestRefresh();
+    });
+
     async function bindGitWatcher(): Promise<void> {
       const generation = ++watcherGeneration;
       gitWatcher?.dispose();
@@ -83,8 +107,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           debounceTimer = setTimeout(() => {
             debounceTimer = undefined;
             session.invalidate();
-            router.sendEvent('git.refsChanged');
-            router.sendEvent('graph.invalidated');
+            requestRefresh();
           }, 500);
         };
         gitWatcher.onDidChange(invalidate);
@@ -400,6 +423,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       debounceTimer = undefined;
       gitWatcher?.dispose();
       gitWatcher = undefined;
+      visibilitySubscription?.dispose();
       router.dispose();
     };
 
