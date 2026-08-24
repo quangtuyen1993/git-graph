@@ -4,58 +4,112 @@
   import { LatestRequestGate, runLatestRequest } from './lib/latest-request';
   import FileTreeList from './components/detail/FileTreeList.svelte';
   import { buildPathTree } from './lib/path-tree';
+  import Combobox from './components/Combobox.svelte';
 
-  type ReviewTargetKind = 'branch' | 'commit' | 'range';
+  type Mode = 'commit' | 'range' | 'branch';
   type ReviewStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
 
+  interface Repo { path: string; name: string; active: boolean }
   interface Branch { name: string; current?: boolean }
-  interface Provider { id: string; name: string; available: boolean; group: 'cli' | 'api' }
+  interface Commit { hash: string; abbreviatedHash: string; subject: string; authorDate: string }
+  interface Provider { id: string; name: string; available: boolean; group: string }
   interface FileChange {
     path: string; oldPath: string | null; status: string;
     additions: number; deletions: number; binary: boolean;
   }
-  interface ReviewTarget { kind: ReviewTargetKind; baseRef: string; headRef: string; subject?: string }
   interface ReviewEntry {
-    id: string; kind: ReviewTargetKind;
+    id: string; kind: Mode;
     baseRef: string; baseSha: string; headRef: string; headSha: string;
     subject?: string; provider: string; model: string; status: ReviewStatus;
     startedAt: string; finishedAt?: string; error?: string;
   }
+  interface ComboItem { label: string; value: string; detail?: string }
 
+  // --- State ---
+  let repos: Repo[] = [];
+  let selectedRepoPath = '';
+  let mode: Mode = 'branch';
   let branches: Branch[] = [];
+  let commits: Commit[] = [];
   let providers: Provider[] = [];
   let reviews: ReviewEntry[] = [];
-  let target: ReviewTarget = { kind: 'branch', baseRef: '', headRef: '' };
-  let files: FileChange[] | null = null;
-  let compareLoading = false;
+
+  // Input values per mode
+  let commitValue = '';
+  let baseCommitValue = '';
+  let headCommitValue = '';
+  let baseBranchValue = '';
+  let headBranchValue = '';
+
+  // Action bar
   let selectedProvider = '';
   let modelInput = '';
-  let error = '';
-  let latestStartedId = '';
+
+  // Files pane
+  let files: FileChange[] | null = null;
+  let compareLoading = false;
   let viewMode: 'tree' | 'flat' = 'flat';
   let collapsedFolders: Record<string, boolean> = {};
+
+  // Misc
+  let error = '';
+  let latestStartedId = '';
   let now = Date.now();
-  // Một sự kiện review.target có thể tới trước khi init() lấy xong target mặc định
-  // (host gửi ngay khi người dùng chọn "Review" từ graph); cờ này giữ cho init()
-  // không ghi đè lựa chọn đó bằng giá trị mặc định đến muộn hơn.
   let targetOverridden = false;
 
   const compareGate = new LatestRequestGate();
   const unsubscribers: Array<() => void> = [];
 
+  // --- Derived ---
+  $: branchItems = branches.map((b): ComboItem => ({
+    label: b.name,
+    value: b.name,
+    detail: b.current ? '● current' : undefined,
+  }));
+
+  $: commitItems = commits.map((c): ComboItem => ({
+    label: `${c.abbreviatedHash} ${c.subject}`,
+    value: c.hash,
+    detail: relativeDate(c.authorDate),
+  }));
+
+  $: canCompare = (() => {
+    switch (mode) {
+      case 'commit': return !!commitValue;
+      case 'range': return !!baseCommitValue && !!headCommitValue;
+      case 'branch': return !!baseBranchValue && !!headBranchValue;
+    }
+  })();
+
+  $: canReview = canCompare && !!selectedProvider;
+
+  $: fileTree = viewMode === 'tree' && files ? buildPathTree(files, (f) => f.path) : [];
+  $: totalAdditions = files?.reduce((sum, f) => sum + f.additions, 0) ?? 0;
+  $: totalDeletions = files?.reduce((sum, f) => sum + f.deletions, 0) ?? 0;
+
+  // Ticker for running reviews
+  let ticker: ReturnType<typeof setInterval> | undefined;
+  $: hasRunning = reviews.some(r => r.status === 'running');
+  $: if (hasRunning && ticker === undefined) {
+    ticker = setInterval(() => { now = Date.now(); }, 1000);
+  } else if (!hasRunning && ticker !== undefined) {
+    clearInterval(ticker);
+    ticker = undefined;
+    now = Date.now();
+  }
+
+  // --- Lifecycle ---
   onMount(() => {
     unsubscribers.push(bridge.on('review.changed', () => { void refreshReviews(); }));
     unsubscribers.push(bridge.on('review.target', (data) => {
       targetOverridden = true;
-      target = data as ReviewTarget;
+      const t = data as { kind: Mode; baseRef: string; headRef: string; subject?: string };
+      mode = t.kind;
+      applyTarget(t);
       files = null;
       error = '';
       void compare();
     }));
-    // The review webview is retainContextWhenHidden and never re-resolved, so
-    // a host-side repo switch (graph's repo picker) never reaches it on its
-    // own. Drop the stale branch list/target/files and re-run the same
-    // initialization used at mount, against the newly active repo.
     unsubscribers.push(bridge.on('repo.changed', () => {
       targetOverridden = false;
       files = null;
@@ -66,31 +120,53 @@
   });
 
   onDestroy(() => {
-    unsubscribers.forEach(unsubscribe => unsubscribe());
+    unsubscribers.forEach(unsub => unsub());
     if (ticker !== undefined) clearInterval(ticker);
   });
 
+  // --- Init ---
   async function init(): Promise<void> {
     try {
-      const [branchList, providerList, savedProvider, savedModel, storedTarget, savedViewMode] = await Promise.all([
+      const [repoList, branchList, commitList, providerList, savedProvider, savedModel, storedTarget, savedViewMode, savedMode] = await Promise.all([
+        bridge.send('review.getRepos') as Promise<Repo[]>,
         bridge.send('git.branches') as Promise<Branch[]>,
+        bridge.send('review.getCommits') as Promise<Commit[]>,
         bridge.send('ai.providers') as Promise<Provider[]>,
         bridge.send('ui.getState', { key: 'aiReview.provider' }) as Promise<string | null>,
         bridge.send('ui.getState', { key: 'aiReview.model' }) as Promise<string | null>,
-        bridge.send('review.getTarget') as Promise<ReviewTarget | null>,
+        bridge.send('review.getTarget') as Promise<{ kind: Mode; baseRef: string; headRef: string; subject?: string } | null>,
         bridge.send('ui.getState', { key: 'detail.viewMode' }) as Promise<string | null>,
+        bridge.send('ui.getState', { key: 'review.mode' }) as Promise<string | null>,
       ]);
-      if (savedViewMode === 'tree' || savedViewMode === 'flat') viewMode = savedViewMode;
+
+      repos = repoList ?? [];
+      const activeRepo = repos.find(r => r.active);
+      selectedRepoPath = activeRepo?.path ?? (repos[0]?.path ?? '');
+
       branches = branchList ?? [];
+      commits = commitList ?? [];
       providers = providerList ?? [];
+
+      if (savedViewMode === 'tree' || savedViewMode === 'flat') viewMode = savedViewMode;
+
       const available = providers.filter(p => p.available);
       selectedProvider = savedProvider && available.some(p => p.id === savedProvider)
         ? savedProvider
         : (available[0]?.id ?? '');
       modelInput = savedModel ?? '';
+
       if (!targetOverridden) {
-        target = storedTarget ?? defaultTarget();
+        if (savedMode && ['commit', 'range', 'branch'].includes(savedMode)) {
+          mode = savedMode as Mode;
+        }
+        if (storedTarget) {
+          mode = storedTarget.kind;
+          applyTarget(storedTarget);
+        } else {
+          applyDefaults();
+        }
       }
+
       await refreshReviews();
       void compare();
     } catch (e) {
@@ -98,32 +174,84 @@
     }
   }
 
-  function defaultTarget(): ReviewTarget {
-    const head = branches.find(b => b.current)?.name ?? '';
-    const base = ['main', 'master'].find(name =>
-      name !== head && branches.some(b => b.name === name)) ?? '';
-    return { kind: 'branch', baseRef: base, headRef: head };
-  }
-
-  async function refreshReviews(): Promise<void> {
-    try {
-      reviews = (await bridge.send('review.list') as ReviewEntry[]) ?? [];
-    } catch {
-      // Danh sách cũ trên màn hình vẫn đúng hơn là một danh sách trống.
+  function applyTarget(t: { kind: Mode; baseRef: string; headRef: string; subject?: string }): void {
+    switch (t.kind) {
+      case 'commit':
+        commitValue = t.headRef;
+        break;
+      case 'range':
+        baseCommitValue = t.baseRef;
+        headCommitValue = t.headRef;
+        break;
+      case 'branch':
+        baseBranchValue = t.baseRef;
+        headBranchValue = t.headRef;
+        break;
     }
   }
 
-  $: canCompare = !!target.headRef && !!target.baseRef;
+  function applyDefaults(): void {
+    if (mode === 'branch') {
+      headBranchValue = branches.find(b => b.current)?.name ?? '';
+      baseBranchValue = ['main', 'master'].find(name =>
+        name !== headBranchValue && branches.some(b => b.name === name)) ?? '';
+    }
+  }
 
+  // --- Mode switching ---
+  function setMode(newMode: Mode): void {
+    if (newMode === mode) return;
+    mode = newMode;
+    // Clear inputs and files on mode switch
+    commitValue = '';
+    baseCommitValue = '';
+    headCommitValue = '';
+    baseBranchValue = '';
+    headBranchValue = '';
+    files = null;
+    error = '';
+    // Apply defaults for branch mode
+    if (mode === 'branch') {
+      applyDefaults();
+      void compare();
+    }
+    void bridge.send('ui.setState', { key: 'review.mode', value: mode }).catch(() => {});
+  }
+
+  // --- Repo change ---
+  function handleRepoChange(e: globalThis.Event): void {
+    const target = e.target as HTMLSelectElement;
+    selectedRepoPath = target.value;
+    void bridge.send('ui.setState', { key: 'review.repo', value: selectedRepoPath }).catch(() => {});
+    // Reload branches + commits for new repo context
+    void reloadForRepo();
+  }
+
+  async function reloadForRepo(): Promise<void> {
+    try {
+      const [branchList, commitList] = await Promise.all([
+        bridge.send('git.branches') as Promise<Branch[]>,
+        bridge.send('review.getCommits') as Promise<Commit[]>,
+      ]);
+      branches = branchList ?? [];
+      commits = commitList ?? [];
+      applyDefaults();
+      files = null;
+      void compare();
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  // --- Compare ---
   async function compare(): Promise<void> {
     if (!canCompare) { files = null; return; }
     compareLoading = true;
+    const params = getCompareParams();
     try {
       await runLatestRequest(
         compareGate,
-        () => bridge.send('review.compare', {
-          kind: target.kind, baseRef: target.baseRef, headRef: target.headRef,
-        }) as Promise<{ files: FileChange[] }>,
+        () => bridge.send('review.compare', params) as Promise<{ files: FileChange[] }>,
         (result) => { files = result.files; error = ''; },
       );
     } catch (e) {
@@ -133,55 +261,70 @@
     }
   }
 
-  // Write-behind so a window reload reopens on the pair being compared. A
-  // failed save only costs the next session its default — never surface it.
+  function getCompareParams(): { kind: Mode; baseRef: string; headRef: string } {
+    switch (mode) {
+      case 'commit': return { kind: 'commit', baseRef: `${commitValue}~1`, headRef: commitValue };
+      case 'range': return { kind: 'range', baseRef: baseCommitValue, headRef: headCommitValue };
+      case 'branch': return { kind: 'branch', baseRef: baseBranchValue, headRef: headBranchValue };
+    }
+  }
+
   function saveTarget(): void {
-    void Promise.resolve(bridge.send('review.saveTarget', {
-      kind: target.kind, baseRef: target.baseRef, headRef: target.headRef,
-      ...(target.subject ? { subject: target.subject } : {}),
-    })).catch(() => {});
+    const params = getCompareParams();
+    void Promise.resolve(bridge.send('review.saveTarget', params)).catch(() => {});
   }
 
-  function setBranch(side: 'base' | 'head', name: string): void {
-    target = side === 'base'
-      ? { kind: 'branch', baseRef: name, headRef: target.headRef }
-      : { kind: 'branch', baseRef: target.baseRef, headRef: name };
+  // --- Combobox handlers ---
+  function handleCommitSelect(): void {
+    if (commitValue) {
+      saveTarget();
+      void compare();
+    }
+  }
+
+  function handleRangeSelect(): void {
+    if (baseCommitValue && headCommitValue) {
+      saveTarget();
+      void compare();
+    }
+  }
+
+  function handleBranchSelect(): void {
+    if (baseBranchValue && headBranchValue) {
+      saveTarget();
+      void compare();
+    }
+  }
+
+  function swapInputs(): void {
+    if (mode === 'range') {
+      [baseCommitValue, headCommitValue] = [headCommitValue, baseCommitValue];
+    } else if (mode === 'branch') {
+      [baseBranchValue, headBranchValue] = [headBranchValue, baseBranchValue];
+    }
     files = null;
     saveTarget();
     void compare();
   }
 
-  function swap(): void {
-    target = { ...target, baseRef: target.headRef, headRef: target.baseRef };
-    files = null;
-    saveTarget();
-    void compare();
-  }
-
-  function clearChip(): void {
-    target = defaultTarget();
-    files = null;
-    error = '';
-    saveTarget();
-    void compare();
-  }
-
-  function setViewMode(mode: 'tree' | 'flat'): void {
-    viewMode = mode;
-    void Promise.resolve(bridge.send('ui.setState', { key: 'detail.viewMode', value: mode })).catch(() => {});
-  }
-
-  function toggleFolder(path: string): void {
-    collapsedFolders = { ...collapsedFolders, [path]: !collapsedFolders[path] };
+  // --- Reviews ---
+  async function refreshReviews(): Promise<void> {
+    try {
+      reviews = (await bridge.send('review.list') as ReviewEntry[]) ?? [];
+    } catch {
+      // Keep stale list visible rather than showing empty
+    }
   }
 
   async function startReview(): Promise<void> {
-    if (!canCompare || !selectedProvider) return;
+    if (!canReview) return;
     error = '';
+    const params = getCompareParams();
     try {
       const started = await bridge.send('review.start', {
-        kind: target.kind, baseRef: target.baseRef, headRef: target.headRef,
-        provider: selectedProvider, model: modelInput,
+        ...params,
+        provider: selectedProvider,
+        model: modelInput,
       }) as { id: string };
       latestStartedId = started.id;
       await refreshReviews();
@@ -190,15 +333,27 @@
     }
   }
 
+  // --- Action bar ---
   function saveSettings(): void {
     void bridge.send('ui.setState', { key: 'aiReview.provider', value: selectedProvider });
     void bridge.send('ui.setState', { key: 'aiReview.model', value: modelInput });
   }
 
+  // --- Files pane ---
+  function setViewMode(newMode: 'tree' | 'flat'): void {
+    viewMode = newMode;
+    void Promise.resolve(bridge.send('ui.setState', { key: 'detail.viewMode', value: newMode })).catch(() => {});
+  }
+
+  function toggleFolder(path: string): void {
+    collapsedFolders = { ...collapsedFolders, [path]: !collapsedFolders[path] };
+  }
+
   async function openFile(file: FileChange): Promise<void> {
+    const params = getCompareParams();
     try {
       await bridge.send('ui.compareDiff', {
-        sourceBranch: target.baseRef, targetBranch: target.headRef,
+        sourceBranch: params.baseRef, targetBranch: params.headRef,
         path: file.path, oldPath: file.oldPath, status: file.status,
       });
     } catch (e) {
@@ -206,6 +361,7 @@
     }
   }
 
+  // --- Review rows ---
   async function rowAction(
     method: 'review.open' | 'review.cancel' | 'review.delete' | 'review.rerun',
     entry: ReviewEntry,
@@ -216,12 +372,6 @@
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
-  }
-
-  function chipLabel(t: ReviewTarget): string {
-    return t.kind === 'commit'
-      ? `${t.headRef.slice(0, 7)}${t.subject ? ` "${t.subject}"` : ''}`
-      : `${t.baseRef.slice(0, 7)}..${t.headRef.slice(0, 7)}`;
   }
 
   function entryLabel(entry: ReviewEntry): string {
@@ -257,51 +407,106 @@
     return hours < 24 ? `${hours}h ago` : `${Math.floor(hours / 24)}d ago`;
   }
 
-  // Đồng hồ chỉ chạy khi có run đang chạy — không có interval mồ côi lúc im ắng.
-  let ticker: ReturnType<typeof setInterval> | undefined;
-  $: hasRunning = reviews.some(r => r.status === 'running');
-  $: if (hasRunning && ticker === undefined) {
-    ticker = setInterval(() => { now = Date.now(); }, 1000);
-  } else if (!hasRunning && ticker !== undefined) {
-    clearInterval(ticker);
-    ticker = undefined;
-    now = Date.now();
+  function relativeDate(isoDate: string): string {
+    const diff = Date.now() - new Date(isoDate).getTime();
+    const minutes = Math.floor(diff / 60_000);
+    if (minutes < 1) return 'just now';
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    return `${Math.floor(hours / 24)}d ago`;
   }
-
-  $: fileTree = viewMode === 'tree' && files ? buildPathTree(files, (f) => f.path) : [];
-
-  $: totalAdditions = files?.reduce((sum, f) => sum + f.additions, 0) ?? 0;
-  $: totalDeletions = files?.reduce((sum, f) => sum + f.deletions, 0) ?? 0;
 </script>
 
 <div class="review-app">
-  <header class="toolbar" aria-label="Review toolbar">
-    {#if target.kind === 'branch'}
-      <select aria-label="Base branch" value={target.baseRef}
-        on:change={(e) => setBranch('base', e.currentTarget.value)}>
-        <option value="" disabled>base…</option>
-        {#each branches as branch (branch.name)}<option value={branch.name}>{branch.name}</option>{/each}
-      </select>
-      <span class="arrow">←</span>
-      <select aria-label="Head branch" value={target.headRef}
-        on:change={(e) => setBranch('head', e.currentTarget.value)}>
-        <option value="" disabled>head…</option>
-        {#each branches as branch (branch.name)}<option value={branch.name}>{branch.name}</option>{/each}
-      </select>
-      <button class="icon-btn" title="Swap base and head" aria-label="Swap base and head"
-        on:click={swap} disabled={!canCompare}>⇄</button>
+  <!-- Repo picker -->
+  <section class="repo-picker" aria-label="Repository selector">
+    <select aria-label="Repository" bind:value={selectedRepoPath} on:change={handleRepoChange}>
+      {#each repos as repo (repo.path)}
+        <option value={repo.path}>{repo.name}</option>
+      {/each}
+    </select>
+  </section>
+
+  <!-- Mode tabs -->
+  <div class="mode-tabs" role="tablist" aria-label="Compare mode">
+    <button
+      role="tab"
+      aria-selected={mode === 'commit'}
+      on:click={() => setMode('commit')}
+    >1 Commit</button>
+    <button
+      role="tab"
+      aria-selected={mode === 'range'}
+      on:click={() => setMode('range')}
+    >2 Commits</button>
+    <button
+      role="tab"
+      aria-selected={mode === 'branch'}
+      on:click={() => setMode('branch')}
+    >2 Branches</button>
+  </div>
+
+  <!-- Input area -->
+  <section class="input-area" aria-label="Compare inputs">
+    {#if mode === 'commit'}
+      <div class="input-row">
+        <Combobox
+          items={commitItems}
+          bind:value={commitValue}
+          placeholder="Select commit…"
+          aria-label="Commit"
+          on:select={handleCommitSelect}
+          on:blur={handleCommitSelect}
+        />
+      </div>
+    {:else if mode === 'range'}
+      <div class="input-row dual">
+        <Combobox
+          items={commitItems}
+          bind:value={baseCommitValue}
+          placeholder="Base commit…"
+          aria-label="Base commit"
+          on:select={handleRangeSelect}
+          on:blur={handleRangeSelect}
+        />
+        <button class="icon-btn swap-btn" title="Swap base and head" aria-label="Swap base and head"
+          on:click={swapInputs}>⇄</button>
+        <Combobox
+          items={commitItems}
+          bind:value={headCommitValue}
+          placeholder="Head commit…"
+          aria-label="Head commit"
+          on:select={handleRangeSelect}
+          on:blur={handleRangeSelect}
+        />
+      </div>
     {:else}
-      <span class="chip">
-        {chipLabel(target)}
-        {#if target.kind === 'range'}
-          <button class="icon-btn" title="Swap base and head" aria-label="Swap base and head"
-            on:click={swap}>⇄</button>
-        {/if}
-        <button class="icon-btn" title="Back to branch compare" aria-label="Back to branch compare"
-          on:click={clearChip}>✕</button>
-      </span>
+      <div class="input-row dual">
+        <Combobox
+          items={branchItems}
+          bind:value={baseBranchValue}
+          placeholder="Base branch…"
+          aria-label="Base branch"
+          on:select={handleBranchSelect}
+          on:blur={handleBranchSelect}
+        />
+        <button class="icon-btn swap-btn" title="Swap base and head" aria-label="Swap base and head"
+          on:click={swapInputs}>⇄</button>
+        <Combobox
+          items={branchItems}
+          bind:value={headBranchValue}
+          placeholder="Head branch…"
+          aria-label="Head branch"
+          on:select={handleBranchSelect}
+          on:blur={handleBranchSelect}
+        />
+      </div>
     {/if}
-    <span class="spacer"></span>
+  </section>
+
+  <!-- Action bar -->
+  <section class="action-bar" aria-label="Review actions">
     <select aria-label="Provider" bind:value={selectedProvider} on:change={saveSettings}>
       {#each providers as provider (provider.id)}
         <option value={provider.id} disabled={!provider.available}>{provider.name}</option>
@@ -309,13 +514,14 @@
     </select>
     <input aria-label="Model" placeholder="model (optional)"
       bind:value={modelInput} on:change={saveSettings} />
-    <button class="review-btn" disabled={!canCompare || !selectedProvider} on:click={startReview}>
+    <button class="review-btn" disabled={!canReview} on:click={startReview}>
       Review
     </button>
-  </header>
+  </section>
 
   {#if error}<div class="error" role="alert">{error}</div>{/if}
 
+  <!-- Body: files + reviews side by side -->
   <div class="body">
     <section class="pane files-pane" aria-label="Changed files">
       <h3>
@@ -328,16 +534,16 @@
         <span class="view-toggle">
           <button class="icon-btn" class:active={viewMode === 'tree'} title="View as tree"
             aria-label="View as tree" aria-pressed={viewMode === 'tree'}
-            on:click={() => setViewMode('tree')}>&#x2637;</button>
+            on:click={() => setViewMode('tree')}>☷</button>
           <button class="icon-btn" class:active={viewMode === 'flat'} title="View as list"
             aria-label="View as list" aria-pressed={viewMode === 'flat'}
-            on:click={() => setViewMode('flat')}>&#x2630;</button>
+            on:click={() => setViewMode('flat')}>☰</button>
         </span>
       </h3>
       {#if compareLoading}
         <p class="hint">Comparing…</p>
       {:else if !canCompare}
-        <p class="hint">Pick a base and a head to compare.</p>
+        <p class="hint">Pick inputs to compare.</p>
       {:else if files && files.length === 0}
         <p class="hint">No differences.</p>
       {:else if files && viewMode === 'tree'}
@@ -401,7 +607,51 @@
     color: var(--vscode-foreground);
     font-size: 12px;
   }
-  .toolbar {
+  .repo-picker {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+    flex: none;
+  }
+  .repo-picker select {
+    width: 100%;
+    background: var(--vscode-dropdown-background);
+    color: var(--vscode-dropdown-foreground);
+    border: 1px solid var(--vscode-dropdown-border, transparent);
+    border-radius: 2px;
+    padding: 3px 6px;
+  }
+  .mode-tabs {
+    display: flex;
+    gap: 0;
+    padding: 0 10px;
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+    flex: none;
+  }
+  .mode-tabs button {
+    flex: 1;
+    padding: 6px 8px;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--vscode-foreground);
+    cursor: pointer;
+    font-size: 12px;
+    opacity: 0.7;
+  }
+  .mode-tabs button[aria-selected="true"] {
+    opacity: 1;
+    border-bottom-color: var(--vscode-focusBorder, #007acc);
+  }
+  .mode-tabs button:hover { opacity: 1; }
+  .input-area {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+    flex: none;
+  }
+  .input-row { display: flex; align-items: center; gap: 6px; }
+  .input-row.dual { display: flex; }
+  .swap-btn { flex: none; }
+  .action-bar {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -409,7 +659,7 @@
     border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
     flex: none;
   }
-  .toolbar select, .toolbar input {
+  .action-bar select, .action-bar input {
     background: var(--vscode-dropdown-background);
     color: var(--vscode-dropdown-foreground);
     border: 1px solid var(--vscode-dropdown-border, transparent);
@@ -417,19 +667,7 @@
     padding: 2px 4px;
     max-width: 180px;
   }
-  .toolbar input { width: 140px; }
-  .arrow { opacity: 0.7; }
-  .spacer { flex: 1; }
-  .chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 2px 8px;
-    border-radius: 10px;
-    background: var(--vscode-badge-background);
-    color: var(--vscode-badge-foreground);
-    font-family: var(--vscode-editor-font-family, monospace);
-  }
+  .action-bar input { width: 140px; }
   .icon-btn {
     background: none;
     border: none;
