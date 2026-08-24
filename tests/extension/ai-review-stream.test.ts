@@ -188,4 +188,42 @@ describe('AIReviewService streaming', () => {
     expect(processKill).toHaveBeenCalledWith(-FAKE_PID, 'SIGTERM');
     processKill.mockRestore();
   });
+
+  it('does not leave a stray SIGKILL armed when killTree runs twice in one run', async () => {
+    // Reachable order: the inactivity timeout fires killTree() first, then
+    // the user cancels and onAbort fires killTree() again (the timeout path
+    // deliberately leaves the abort listener attached). The first SIGKILL
+    // handle must not survive uncleared, or it fires a stray real signal
+    // 5s later at a possibly-recycled pgid.
+    hoisted.timeoutSeconds = 5;
+    const proc = fakeProcess();
+    hoisted.spawn.mockReturnValue(proc);
+    const controller = new AbortController();
+    const processKill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    const service = new AIReviewService();
+    const promise = service.review({
+      diff: 'd', provider: 'claude', payloadText: 'p', signal: controller.signal,
+    });
+    const assertion = expect(promise).rejects.toThrow(/produced no output/);
+
+    // First killTree(): the inactivity timeout fires, arming a SIGKILL for t+5s.
+    await vi.advanceTimersByTimeAsync(5000);
+    await assertion;
+
+    processKill.mockClear();
+
+    // Second killTree(): the user cancels afterward, which should clear the
+    // first SIGKILL handle and arm its own.
+    controller.abort();
+
+    // Advance exactly to when both the (stale, should-be-cleared) first
+    // handle and the second handle would fire. Only the second may go off.
+    await vi.advanceTimersByTimeAsync(5000);
+
+    const sigkillCalls = processKill.mock.calls.filter((call) => call[1] === 'SIGKILL');
+    expect(sigkillCalls.length).toBe(1);
+
+    processKill.mockRestore();
+  });
 });

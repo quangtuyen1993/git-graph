@@ -323,7 +323,6 @@ export class AIReviewService {
     hooks: SpawnHooks = {},
   ): Promise<string> {
     const resolvedCommand = this.commandPaths.get(command) || command;
-    console.log(`[AIReview] Spawning: ${resolvedCommand} ${args.join(' ')}`);
     return new Promise((resolve, reject) => {
       // A signal that is already aborted before we even spawn must not start
       // the CLI at all — otherwise a cancel-before-start silently runs (and
@@ -332,6 +331,8 @@ export class AIReviewService {
         reject(new ReviewCancelledError());
         return;
       }
+
+      console.log(`[AIReview] Spawning: ${resolvedCommand} ${args.join(' ')}`);
 
       // detached puts the CLI in its own process group so a cancel reaches the
       // grandchildren these tools spawn, not just the process we started.
@@ -353,6 +354,10 @@ export class AIReviewService {
       };
 
       const killTree = () => {
+        // A second killTree() call (e.g. timeout fires, then the user cancels)
+        // must not orphan the first SIGKILL handle — an uncleared one still
+        // fires a real signal 5s later at a possibly-recycled pgid.
+        clearSigkillTimer();
         if (proc.pid === undefined) return;
         if (process.platform === 'win32') {
           spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F']);
