@@ -57,6 +57,10 @@ export class RepositorySession {
     return entry;
   }
 
+  public getRepositories(): readonly RepositoryInfo[] {
+    return this.repositories;
+  }
+
   public getGitService(): GitService | null {
     return this.gitService;
   }

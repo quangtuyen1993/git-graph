@@ -141,6 +141,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     runner: reviewRunner,
     getGitService: () => activeRepo.getGitService() as never,
     getRepoId,
+    getRepos: () => {
+      const session = activeSession;
+      if (!session) return repos.map((r, i) => ({ ...r, active: i === 0 }));
+      const current = session.getCurrentRepository();
+      return session.getRepositories().map((r) => ({
+        path: r.path,
+        name: r.name,
+        active: r.path === current?.path,
+      }));
+    },
     getMaxDiffChars: () =>
       vscode.workspace.getConfiguration('gitGraphPro.aiReview').get<number>('maxDiffChars') ?? 0,
     openBody,

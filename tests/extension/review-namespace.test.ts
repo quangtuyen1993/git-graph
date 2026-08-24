@@ -29,6 +29,7 @@ function harness(over: Record<string, unknown> = {}) {
     runner: runner as never,
     getGitService: () => git as never,
     getRepoId: () => 'repo-a',
+    getRepos: () => [{ path: '/repo/a', name: 'repo-a', active: true }],
     getMaxDiffChars: () => 0,
     openBody: vi.fn(async () => {}),
     targets,
@@ -214,6 +215,40 @@ describe('review namespace', () => {
 
     expect(result).toEqual({ files: [{ path: 'a.ts' }] });
     expect(git.diff).toHaveBeenCalledWith('main', 'feat/x');
+  });
+
+  it('review.getRepos returns the repository list', async () => {
+    const repos = [
+      { path: '/repo/a', name: 'repo-a', active: true },
+      { path: '/repo/b', name: 'repo-b', active: false },
+    ];
+    const { handler } = harness({ getRepos: () => repos });
+    const result = await handler('review.getRepos', {});
+    expect(result).toEqual(repos);
+  });
+
+  it('review.getCommits returns recent commits mapped to summary fields', async () => {
+    const { handler, git } = harness();
+    git.log.mockResolvedValue([
+      {
+        hash: 'a'.repeat(40), abbreviatedHash: 'aaaaaaa',
+        parents: [], author: 'A', authorEmail: 'a@test', authorDate: '2026-08-24T00:00:00Z',
+        committer: 'A', committerEmail: 'a@test', committerDate: '2026-08-24T00:00:00Z',
+        message: 'First', subject: 'First', refs: [],
+      },
+    ]);
+    const result = await handler('review.getCommits', { limit: 50 });
+    expect(result).toEqual([
+      { hash: 'a'.repeat(40), abbreviatedHash: 'aaaaaaa', subject: 'First', authorDate: '2026-08-24T00:00:00Z' },
+    ]);
+    expect(git.log).toHaveBeenCalledWith({ maxCount: 50 });
+  });
+
+  it('review.getCommits defaults to 100 when no limit is given', async () => {
+    const { handler, git } = harness();
+    git.log.mockResolvedValue([]);
+    await handler('review.getCommits', {});
+    expect(git.log).toHaveBeenCalledWith({ maxCount: 100 });
   });
 });
 

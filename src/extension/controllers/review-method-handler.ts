@@ -10,7 +10,7 @@ interface GitLike {
   revParse(ref: string): Promise<string>;
   getDiff(source: string, target: string): Promise<string>;
   diff(source: string, target: string): Promise<{ files: unknown[] }>;
-  log(options: { revisions: string[]; maxCount: number }): Promise<{ subject: string }[]>;
+  log(options: { revisions?: string[]; maxCount: number }): Promise<{ hash: string; abbreviatedHash: string; subject: string; authorDate: string }[]>;
   getParents(hash: string): Promise<string[]>;
 }
 
@@ -19,6 +19,7 @@ export interface ReviewHandlerDeps {
   runner: ReviewRunner;
   getGitService: () => GitLike | undefined;
   getRepoId: () => string | undefined;
+  getRepos: () => Array<{ path: string; name: string; active: boolean }>;
   getMaxDiffChars: () => number;
   openBody: (repoId: string, id: string) => Promise<void>;
   targets: ReviewTargetState;
@@ -183,6 +184,22 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
         const resolved = await resolveReviewTarget(git, targetFromParams(p));
         const result = await git.diff(resolved.baseRef, resolved.headRef);
         return { files: result.files };
+      }
+
+      case 'review.getRepos':
+        return deps.getRepos();
+
+      case 'review.getCommits': {
+        const git = deps.getGitService();
+        if (!git) throw new Error('No git repository found');
+        const limit = typeof p.limit === 'number' && p.limit > 0 ? p.limit : 100;
+        const commits = await git.log({ maxCount: limit });
+        return commits.map(c => ({
+          hash: c.hash,
+          abbreviatedHash: c.abbreviatedHash,
+          subject: c.subject,
+          authorDate: c.authorDate,
+        }));
       }
 
       default:
