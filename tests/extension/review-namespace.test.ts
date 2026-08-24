@@ -108,4 +108,17 @@ describe('review namespace', () => {
     expect(git.diff).not.toHaveBeenCalled();
     expect(git.log).not.toHaveBeenCalled();
   });
+
+  it.each(['review.get', 'review.cancel', 'review.delete', 'review.open'])(
+    '%s refuses an id that would escape the store',
+    async (method) => {
+      const { handler, store, runner } = harness();
+
+      await expect(handler(method, { id: '../../../../tmp/victim' })).rejects.toThrow(/invalid review id/i);
+
+      expect(store.get).not.toHaveBeenCalled();
+      expect(store.remove).not.toHaveBeenCalled();
+      expect(runner.cancel).not.toHaveBeenCalled();
+    },
+  );
 });

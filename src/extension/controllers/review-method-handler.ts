@@ -1,4 +1,4 @@
-import { buildReviewId } from '../services/review-key';
+import { assertSafeReviewId, buildReviewId } from '../services/review-key';
 import { buildReviewPayload } from '../services/review-payload';
 import type { ReviewRunner } from '../services/review-runner';
 import type { ReviewStore } from '../services/review-store';
@@ -29,18 +29,21 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
       case 'review.list':
         return deps.store.list(repoId);
 
+      // Every id below arrives in a message and ends up as a filename, so it is
+      // validated at the boundary rather than trusted because today's only
+      // sender happens to be our own bundled webview.
       case 'review.get':
-        return (await deps.store.get(repoId, p.id as string)) ?? null;
+        return (await deps.store.get(repoId, assertSafeReviewId(p.id))) ?? null;
 
       case 'review.cancel':
-        return { cancelled: deps.runner.cancel(repoId, p.id as string) };
+        return { cancelled: deps.runner.cancel(repoId, assertSafeReviewId(p.id)) };
 
       case 'review.delete':
-        await deps.store.remove(repoId, p.id as string);
+        await deps.store.remove(repoId, assertSafeReviewId(p.id));
         return { success: true };
 
       case 'review.open':
-        await deps.openBody(repoId, p.id as string);
+        await deps.openBody(repoId, assertSafeReviewId(p.id));
         return { success: true };
 
       case 'review.start': {

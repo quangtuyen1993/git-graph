@@ -1,5 +1,6 @@
 import { appendFile, mkdir, readdir, readFile, rename, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
+import { assertSafeReviewId } from './review-key';
 
 export type ReviewStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
 
@@ -29,8 +30,13 @@ export class ReviewStore {
 
   constructor(private readonly rootDir: string) {}
 
+  /**
+   * The one place an id becomes a path. Validated here as well as at the
+   * message boundary: a `join` with an id containing `..` escapes the store,
+   * and `remove()` would then delete a file that is none of its business.
+   */
   public bodyPath(repoId: string, id: string): string {
-    return join(this.rootDir, repoId, `${id}.md`);
+    return join(this.rootDir, repoId, `${assertSafeReviewId(id)}.md`);
   }
 
   /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildReviewId, repoIdFor, slugSegment } from '../../src/extension/services/review-key';
+import { buildReviewId, isSafeReviewId, repoIdFor, slugSegment } from '../../src/extension/services/review-key';
 
 describe('slugSegment', () => {
   it('keeps word characters, dots and dashes untouched', () => {
@@ -54,5 +54,27 @@ describe('repoIdFor', () => {
 
   it('is a short filesystem-safe token', () => {
     expect(repoIdFor('/repo/with spaces/and#hash')).toMatch(/^[0-9a-f]{12}$/);
+  });
+});
+
+describe('isSafeReviewId', () => {
+  it('accepts an id built by buildReviewId', () => {
+    expect(isSafeReviewId(buildReviewId({
+      sourceSha: 'a'.repeat(40), targetSha: 'b'.repeat(40), provider: 'claude', model: 'anthropic/sonnet-4',
+    }))).toBe(true);
+  });
+
+  it('refuses anything that could escape the store directory', () => {
+    // These become filenames: `remove()` on a traversing id deletes a file
+    // outside the store entirely.
+    expect(isSafeReviewId('../../../../etc/passwd')).toBe(false);
+    expect(isSafeReviewId('..%2f..%2fx')).toBe(false);
+    expect(isSafeReviewId('a/b')).toBe(false);
+    expect(isSafeReviewId('a\\b')).toBe(false);
+    expect(isSafeReviewId('/absolute')).toBe(false);
+    expect(isSafeReviewId('')).toBe(false);
+    expect(isSafeReviewId(undefined)).toBe(false);
+    expect(isSafeReviewId({ toString: () => 'ok' })).toBe(false);
+    expect(isSafeReviewId('x'.repeat(201))).toBe(false);
   });
 });

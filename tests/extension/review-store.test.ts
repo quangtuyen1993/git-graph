@@ -343,4 +343,8 @@ describe('ReviewStore', () => {
     const files = await readdir(join(root, REPO));
     expect(files.filter(name => name.endsWith('.tmp'))).toEqual([]);
   });
+
+  it('refuses to turn a traversing id into a path', () => {
+    expect(() => store.bodyPath(REPO, '../../../../tmp/victim')).toThrow(/invalid review id/i);
+  });
 });

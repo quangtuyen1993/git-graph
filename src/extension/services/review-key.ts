@@ -9,6 +9,22 @@ export function slugSegment(value: string): string {
   return value.replace(/[^\w.-]+/g, '-').replace(/^[-.]+|-+$/g, '');
 }
 
+/**
+ * Review ids become filenames under the store root, so anything that is not a
+ * single path segment of word characters, dots and dashes is refused. Without
+ * this an id of `../../../../some/file` makes `remove()` delete an arbitrary
+ * `.md` outside the store. Ids built by `buildReviewId` always pass; only ids
+ * arriving from outside (a webview message) can fail.
+ */
+export function isSafeReviewId(id: unknown): id is string {
+  return typeof id === 'string' && id.length > 0 && id.length <= 200 && /^[\w.-]+$/.test(id);
+}
+
+export function assertSafeReviewId(id: unknown): string {
+  if (!isSafeReviewId(id)) throw new Error(`Invalid review id: ${String(id)}`);
+  return id;
+}
+
 export function buildReviewId(input: {
   sourceSha: string;
   targetSha: string;
