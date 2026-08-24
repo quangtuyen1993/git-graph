@@ -37,11 +37,18 @@ export function formatDescription(entry: ReviewEntry, now: number): string {
     return elapsed(now - Date.parse(entry.startedAt));
   }
   const finishedAt = entry.finishedAt ?? entry.startedAt;
-  const relative = ago(now - Date.parse(finishedAt));
+  const stamp = Date.parse(finishedAt);
+  // An entry recovered by rebuildIndex() has no real timestamps — startedAt is
+  // the epoch — and "interrupted · 20000d ago" is noise dressed up as fact.
+  // Name the status and say nothing about when.
+  if (!Number.isFinite(stamp) || stamp <= 0) {
+    return entry.status === 'done' ? '' : entry.status;
+  }
+  const relative = ago(now - stamp);
   return entry.status === 'done' ? relative : `${entry.status} · ${relative}`;
 }
 
-export class ReviewTreeProvider implements vscode.TreeDataProvider<ReviewEntry> {
+export class ReviewTreeProvider implements vscode.TreeDataProvider<ReviewEntry>, vscode.Disposable {
   private readonly changed = new vscode.EventEmitter<void>();
   public readonly onDidChangeTreeData = this.changed.event;
 
@@ -52,6 +59,11 @@ export class ReviewTreeProvider implements vscode.TreeDataProvider<ReviewEntry> 
 
   public refresh(): void {
     this.changed.fire();
+  }
+
+  /** Pushed into context.subscriptions, so the emitter dies with the extension. */
+  public dispose(): void {
+    this.changed.dispose();
   }
 
   public getTreeItem(entry: ReviewEntry): vscode.TreeItem {
@@ -69,7 +81,19 @@ export class ReviewTreeProvider implements vscode.TreeDataProvider<ReviewEntry> 
   }
 
   public async getChildren(): Promise<ReviewEntry[]> {
-    const repoId = this.getRepoId();
+    let repoId: string | undefined;
+    try {
+      // getRepoId() resolves the real filesystem path (realpathSync) under the
+      // hood, so a repo deleted or unmounted while its rows are on screen makes
+      // this throw. The row commands already guard it; without the same guard
+      // here the whole view becomes a tree-loading error instead of an empty
+      // list.
+      repoId = this.getRepoId();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[review-tree] Failed to resolve active repository: ${message}`);
+      return [];
+    }
     if (!repoId) return [];
     return this.store.list(repoId);
   }

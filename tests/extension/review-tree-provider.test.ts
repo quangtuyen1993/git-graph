@@ -64,6 +64,27 @@ describe('formatDescription', () => {
 
     expect(formatDescription(entry({ status: 'interrupted' }), now)).toBe('interrupted · 8m ago');
   });
+
+  it('says nothing about when for an entry recovered without timestamps', () => {
+    // M1: rebuildIndex() stamps recovered entries with the epoch, which read as
+    // "interrupted · 20000d ago" — noise dressed up as fact.
+    const now = new Date('2026-08-24T10:13:00Z').getTime();
+    const recovered = entry({
+      status: 'interrupted',
+      sourceSha: '',
+      targetSha: '',
+      startedAt: new Date(0).toISOString(),
+      finishedAt: undefined,
+    });
+
+    expect(formatDescription(recovered, now)).toBe('interrupted');
+  });
+
+  it('says nothing about when for an unparseable timestamp', () => {
+    const now = new Date('2026-08-24T10:13:00Z').getTime();
+
+    expect(formatDescription(entry({ finishedAt: 'not a date' }), now)).toBe('');
+  });
 });
 
 describe('statusIcon', () => {
@@ -107,5 +128,29 @@ describe('ReviewTreeProvider', () => {
 
     expect(await provider.getChildren()).toHaveLength(1);
     expect(store.list).toHaveBeenCalledWith('repo-a');
+  });
+
+  it('shows an empty list, not a tree error, when getRepoId throws', async () => {
+    // I3: the row commands guard the realpathSync ENOENT; getChildren did not,
+    // so a repo unmounted while rows were on screen took the whole view down.
+    const store = { list: vi.fn(async () => [entry()]) };
+    const provider = new ReviewTreeProvider(store as never, () => {
+      throw new Error('ENOENT: repo directory gone');
+    });
+
+    await expect(provider.getChildren()).resolves.toEqual([]);
+    expect(store.list).not.toHaveBeenCalled();
+  });
+
+  it('disposes its event emitter', () => {
+    // M2: the provider is pushed into context.subscriptions, so this is what
+    // releases the emitter when the extension shuts down.
+    const store = { list: vi.fn(async () => []) };
+    const provider = new ReviewTreeProvider(store as never, () => 'repo-a');
+
+    provider.dispose();
+
+    expect((provider as never as { changed: { dispose: () => void } }).changed.dispose)
+      .toHaveBeenCalled();
   });
 });

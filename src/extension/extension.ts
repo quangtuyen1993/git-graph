@@ -1,4 +1,3 @@
-import { realpathSync } from 'fs';
 import * as vscode from 'vscode';
 import { MessageRouter } from './controllers/message-router';
 import { RepositorySession, type RepositoryInfo } from './controllers/repository-session';
@@ -57,9 +56,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const { ReviewStore } = await import('./services/review-store');
   const { ReviewRunner } = await import('./services/review-runner');
   const { createReviewHandler } = await import('./controllers/review-method-handler');
-  const { repoIdFor } = await import('./services/review-key');
   const { ReviewTreeProvider } = await import('./providers/review-tree-provider');
   const { registerReviewView } = await import('./providers/review-view-registration');
+  const { createActiveRepo } = await import('./services/active-repo');
 
   // ReviewStore's constructor only assigns a field; it cannot throw. reconcileOrphans()
   // does real I/O (readdir/readFile/writeFile against globalStorageUri) and must never
@@ -73,21 +72,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     console.error(`[extension] Failed to reconcile orphaned reviews: ${message}`);
   }
 
-  // The live session/router, for consumers that have no webview to ask (the
-  // review tree view, Task 11's status-bar clock) and for routing events back
-  // to whichever webview is currently attached. Assigned by createSession
-  // below and cleared on dispose.
+  // The live session/router, for routing events back to whichever webview is
+  // currently attached. Assigned by createSession below and cleared on dispose.
   let activeSession: RepositorySession | undefined;
   let activeRouter: MessageRouter | undefined;
-  // The current session's review method handler, for the reviews tree view's
-  // rerun command — it has no webview message to piggyback on, so it needs a
-  // direct line to whichever session is live. Mirrors activeSession/activeRouter.
-  let activeReviewHandler: ((method: string, params: unknown) => Promise<unknown>) | undefined;
 
-  const getRepoId = (): string | undefined => {
-    const repoPath = activeSession?.getActiveRepositoryPath();
-    return repoPath ? repoIdFor(realpathSync(repoPath)) : undefined;
-  };
+  // Repository identity for the review side. Deliberately NOT tied to the
+  // graph webview: the reviews view activates on its own (onView:...reviews)
+  // and must list what is on disk before any webview exists, and keep working
+  // after one is disposed.
+  const activeRepo = createActiveRepo<GitService>({
+    getSession: () => activeSession,
+    initialPath: repos[0]?.path,
+    createGitService: (path) => new GitService(path),
+  });
+  const getRepoId = () => activeRepo.getRepoId();
 
   // Assigned by Task 11 once the review tree view and status-bar clock exist.
   // Declared here (rather than left undefined-and-optional-chained on an
@@ -116,6 +115,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await vscode.languages.setTextDocumentLanguage(doc, 'markdown');
     await vscode.window.showTextDocument(doc, { preview: false });
   };
+
+  // One review handler for the host, not one per session. The tree view's
+  // commands are not attached to any webview, so a handler scoped to a live
+  // session left `rerun` a silent no-op whenever the graph was closed. Both the
+  // webview router and the tree view now call this same handler, and it
+  // resolves the repository through activeRepo rather than a session.
+  const reviewHandler = createReviewHandler({
+    store: reviewStore,
+    runner: reviewRunner,
+    getGitService: () => activeRepo.getGitService() as never,
+    getRepoId,
+    getMaxDiffChars: () =>
+      vscode.workspace.getConfiguration('gitGraphPro.aiReview').get<number>('maxDiffChars') ?? 0,
+    openBody,
+  });
 
   function createSession(host: WebviewHost): () => void {
     const panelSessionId = ++nextPanelSessionId;
@@ -379,17 +393,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     });
 
-    const reviewHandler = createReviewHandler({
-      store: reviewStore,
-      runner: reviewRunner,
-      getGitService: () => session.getGitService() as never,
-      getRepoId,
-      getMaxDiffChars: () =>
-        vscode.workspace.getConfiguration('gitGraphPro.aiReview').get<number>('maxDiffChars') ?? 0,
-      openBody,
-    });
     router.register('review', reviewHandler);
-    activeReviewHandler = reviewHandler;
 
     router.setHost(host);
     void bindGitWatcher();
@@ -404,7 +408,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       gitWatcher = undefined;
       if (activeSession === session) activeSession = undefined;
       if (activeRouter === router) activeRouter = undefined;
-      if (activeReviewHandler === reviewHandler) activeReviewHandler = undefined;
       router.dispose();
     };
 
@@ -433,6 +436,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const treeProvider = new ReviewTreeProvider(reviewStore, getRepoId);
   reviewTree = treeProvider;
+  context.subscriptions.push(treeProvider);
 
   // One timer for the whole view, started only while a run is in flight and
   // stopped when the last one ends, so a running row's clock advances without
@@ -484,9 +488,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         console.error(`[extension] Failed to resolve repo for rerun: ${message}`);
         return;
       }
-      if (!repoId || !activeReviewHandler) return;
+      if (!repoId) return;
       await reviewStore.remove(repoId, entry.id);
-      await activeReviewHandler('review.start', {
+      await reviewHandler('review.start', {
         sourceBranch: entry.sourceBranch,
         targetBranch: entry.targetBranch,
         provider: entry.provider,
