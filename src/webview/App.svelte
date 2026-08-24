@@ -15,7 +15,6 @@
   import CommitDetail from './components/detail/CommitDetail.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
   import ResizeHandle from './components/layout/ResizeHandle.svelte';
-  import AIReviewPanel from './components/review/AIReviewPanel.svelte';
 
   interface Branch {
     name: string;
@@ -163,7 +162,6 @@
   // Panel state
   let leftSidebarOpen = true;
   let rightPanelOpen = false;
-  let rightPanelMode: 'detail' | 'review' = 'detail';
   // The widths the user asked for. Only a drag, a reset or a restore writes
   // these; the rendered widths below are a pure projection of them, so
   // toggling the sidebar or dragging the panel narrow squeezes the panels
@@ -189,20 +187,15 @@
   $: rightPanelMinWidth = panelLayout.right.minWidth;
   $: rightPanelMaxWidth = panelLayout.right.maxWidth;
 
-  // AI Review state
-  let aiProviders: { id: string; name: string; available: boolean; group: 'cli' | 'api' }[] = [];
-  let savedProvider = '';
-  let savedModel = '';
-  let aiReviewJobId: string | null = null;
-  let aiReviewLoading = false;
-  let aiReviewError = '';
-
   // Context menu state
   let contextMenuVisible = false;
   let contextMenuX = 0;
   let contextMenuY = 0;
   let contextMenuItems: MenuItem[] = [];
   let contextMenuTarget: { type: 'commit' | 'branch' | 'working'; value: string } | null = null;
+  // Commit được đánh dấu bằng "Select for compare", chờ ghép cặp range.
+  // Chỉ bị thay khi chọn commit khác, bị xoá khi cặp đã gửi đi.
+  let selectedForCompare: string | null = null;
   const mutationGate = new MutationGate();
   let mutationProgress: string | null = null;
 
@@ -231,11 +224,6 @@
       const active = repos.find(r => r.active);
       activeRepoName = active?.name ?? repos[0]?.name ?? '';
       await refreshGraph();
-      // Load AI providers
-      aiProviders = await bridge.send('ai.providers') as typeof aiProviders;
-      // Restore cached provider/model selection
-      savedProvider = await bridge.send('ui.getState', { key: 'aiReview.provider' }) as string | null ?? '';
-      savedModel = await bridge.send('ui.getState', { key: 'aiReview.model' }) as string | null ?? '';
       await restorePanelState();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -244,11 +232,6 @@
 
     bridge.on('graph.invalidated', () => {
       refreshGraph();
-    });
-
-    bridge.on('review.changed', (data) => {
-      const changed = data as { id: string };
-      if (changed.id === aiReviewJobId) aiReviewLoading = false;
     });
   });
 
@@ -502,7 +485,6 @@
 
     if (hash && hash !== 'WORKING') {
       rightPanelOpen = true;
-      rightPanelMode = 'detail';
       fetchCommitDetail(hash);
     } else {
       detailCommit = null;
@@ -627,6 +609,11 @@
       { label: 'Reset hard to here', action: 'resetHard', danger: true, disabled: !onCurrentBranch },
       { label: '', action: '', divider: true },
       { label: 'Copy SHA', action: 'copySha' },
+      { label: '', action: '', divider: true },
+      { label: 'Review this commit', action: 'reviewCommit' },
+      selectedForCompare && selectedForCompare !== hash
+        ? { label: `Compare with selected ${selectedForCompare.slice(0, 7)}`, action: 'compareWithSelected' }
+        : { label: 'Select for compare', action: 'selectForCompare' },
     ];
     contextMenuVisible = true;
   }
@@ -1067,6 +1054,18 @@
             }
             break;
           }
+          case 'reviewCommit':
+            await bridge.send('review.setTarget', { kind: 'commit', headRef: hash });
+            break;
+          case 'selectForCompare':
+            selectedForCompare = hash;
+            break;
+          case 'compareWithSelected':
+            if (selectedForCompare) {
+              await bridge.send('review.setTarget', { kind: 'range', baseRef: selectedForCompare, headRef: hash });
+              selectedForCompare = null;
+            }
+            break;
           case 'copySha':
             await navigator.clipboard.writeText(hash);
             break;
@@ -1251,76 +1250,28 @@
           case 'worktreeOpen':
             await bridge.send('ui.openFolder', { path: branchName });
             break;
-          case 'aiReview':
-            // Unused — replaced by compareBranch
-            break;
           case 'compareBranch': {
-            // Compare: base = right-clicked branch (merge target), head = current branch (your changes)
             const currentBr = branches.find(b => b.current);
-            const head = currentBr && currentBr.name !== branchName ? currentBr.name : '';
-            compareBranches(branchName, head);
+            let base = branchName;
+            let head = currentBr?.name ?? '';
+            if (!head || head === branchName) {
+              // Right-click chính branch hiện tại: chọn base qua QuickPick, head = branch đó.
+              const picked = await bridge.send('ui.pickBranch', {
+                exclude: branchName, title: 'Compare with...', placeholder: 'Select the base branch',
+              }) as string | null;
+              if (!picked) break;
+              base = picked;
+              head = branchName;
+            }
+            await bridge.send('review.setTarget', { kind: 'branch', baseRef: base, headRef: head });
             break;
           }
         }
       }
 
-      return action !== 'copySha' && action !== 'copyShas';
+      return action !== 'copySha' && action !== 'copyShas' && action !== 'reviewCommit' && action !== 'selectForCompare' && action !== 'compareWithSelected';
     } finally {
       contextMenuTarget = null;
-    }
-  }
-
-  // Compare state
-  let compareSource = '';
-  let compareTarget = '';
-  let compareFiles: { path: string; oldPath: string | null; status: string; additions: number; deletions: number; binary: boolean }[] | null = null;
-  let compareLoading = false;
-
-  async function compareBranches(source: string, target: string) {
-    compareSource = source;
-    compareTarget = target;
-    compareFiles = null;
-    rightPanelOpen = true;
-    rightPanelMode = 'review';
-    aiReviewError = '';
-
-    // If both branches set, fetch comparison immediately
-    if (source && target) {
-      compareLoading = true;
-      try {
-        const result = await bridge.send('ai.compare', { sourceBranch: source, targetBranch: target }) as { files: typeof compareFiles };
-        compareFiles = result.files;
-      } catch (e) {
-        aiReviewError = e instanceof Error ? e.message : String(e);
-      } finally {
-        compareLoading = false;
-      }
-    }
-  }
-
-  async function handleAIReview(event: CustomEvent<{ sourceBranch: string; targetBranch: string; provider: string; model: string }>) {
-    const { sourceBranch, targetBranch, provider, model } = event.detail;
-    aiReviewLoading = true;
-    aiReviewError = '';
-    try {
-      const started = await bridge.send('review.start', { sourceBranch, targetBranch, provider, model }) as { id: string; cached: boolean };
-      aiReviewJobId = started.id;
-      // A cache hit resolves an already-`done` run and opens its document on the
-      // host side without any status transition — no review.changed will ever
-      // fire for it, so nothing else will clear the spinner.
-      if (started.cached) aiReviewLoading = false;
-    } catch (e) {
-      aiReviewError = e instanceof Error ? e.message : String(e);
-      aiReviewLoading = false;
-    }
-  }
-
-  async function handleCompareOpenDiff(event: CustomEvent<{ sourceBranch: string; targetBranch: string; path: string; oldPath: string | null; status: string }>) {
-    const { sourceBranch, targetBranch, path, oldPath, status } = event.detail;
-    try {
-      await bridge.send('ui.compareDiff', { sourceBranch, targetBranch, path, oldPath, status });
-    } catch (e) {
-      aiReviewError = e instanceof Error ? e.message : String(e);
     }
   }
 
@@ -1521,6 +1472,7 @@
                 style="top: {(node.row - graphWindow.startRow + currentStartRow) * ROW_HEIGHT + (hasWorkingChanges ? ROW_HEIGHT : 0)}px; --graph-col-width: {graphColWidth}px; --lane-rgb: {getColorRgb(node.color)}"
                 class:selected={selectedHash === node.hash || selectedHashes.has(node.hash)}
                 class:branch-focused={focusedBranchHash === node.hash}
+                class:compare-selected={selectedForCompare === node.hash}
                 on:click={(e) => handleRowClick(node.hash, e)}
                 on:keydown={(e) => { if (e.key === 'Enter') handleRowClick(node.hash); }}
                 on:contextmenu={(e) => handleRowContextMenu(e, node.hash)}
@@ -1561,45 +1513,16 @@
       />
       <aside class="right-panel" style="width: {rightPanelWidth}px;">
         <!--
-          Only the review panel gets a separate title bar. The commit detail
-          owns its own header — its CHANGED FILES row is the panel title, so
-          there is no redundant "COMMIT" bar stacked above it.
+          The commit detail owns its own header — its CHANGED FILES row is the
+          panel title, so there is no redundant "COMMIT" bar stacked above it.
         -->
-        {#if rightPanelMode === 'review'}
-          <div class="right-panel-header">
-            <span class="right-panel-title">COMPARE</span>
-            <button class="close-btn" aria-label="Close panel" title="Close panel" on:click={closeRightPanel}><Icon name="close" /></button>
-          </div>
-          <AIReviewPanel
-            providers={aiProviders}
-            branches={branches.map(b => ({ name: b.name, current: b.current }))}
-            {compareFiles}
-            {compareLoading}
-            initialSource={compareSource}
-            initialTarget={compareTarget}
-            initialProvider={savedProvider}
-            initialModel={savedModel}
-            reviewLoading={aiReviewLoading}
-            error={aiReviewError}
-            on:compare={(e) => compareBranches(e.detail.sourceBranch, e.detail.targetBranch)}
-            on:review={handleAIReview}
-            on:openDiff={handleCompareOpenDiff}
-            on:settingsChange={(e) => {
-              savedProvider = e.detail.provider;
-              savedModel = e.detail.model;
-              bridge.send('ui.setState', { key: 'aiReview.provider', value: e.detail.provider });
-              bridge.send('ui.setState', { key: 'aiReview.model', value: e.detail.model });
-            }}
-          />
-        {:else}
-          <CommitDetail
-            commit={detailCommit}
-            files={detailFiles}
-            loading={detailLoading}
-            on:close={closeRightPanel}
-            on:openFile={(e) => bridge.send('ui.openDiff', e.detail)}
-          />
-        {/if}
+        <CommitDetail
+          commit={detailCommit}
+          files={detailFiles}
+          loading={detailLoading}
+          on:close={closeRightPanel}
+          on:openFile={(e) => bridge.send('ui.openDiff', e.detail)}
+        />
       </aside>
     {/if}
   </div>
@@ -1785,49 +1708,6 @@
     overflow: hidden;
   }
 
-  .right-panel-header {
-    display: flex;
-    align-items: center;
-    height: var(--panel-header-height, 32px);
-    padding: 0 6px 0 12px;
-    border-bottom: 1px solid var(--vscode-panel-border, #2b2b2b);
-    flex-shrink: 0;
-  }
-
-  .right-panel-title {
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: var(--vscode-sideBarSectionHeader-foreground, #bbbbbb);
-  }
-
-  .close-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    margin-left: auto;
-    padding: 0;
-    background: none;
-    border: none;
-    border-radius: 5px;
-    color: var(--vscode-icon-foreground, #cccccc);
-    cursor: pointer;
-    opacity: 0.7;
-  }
-
-  .close-btn:focus-visible {
-    outline: 1px solid var(--vscode-focusBorder, #007acc);
-    outline-offset: -1px;
-  }
-
-  .close-btn:hover {
-    opacity: 1;
-    background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.1));
-  }
-
   /* Table header */
   .table-header {
     display: flex;
@@ -1930,6 +1810,11 @@
   .commit-row.selected {
     color: var(--vscode-list-activeSelectionForeground, #ffffff);
     box-shadow: inset 2px 0 0 0 rgb(var(--lane-rgb));
+  }
+
+  .commit-row.compare-selected {
+    outline: 1px dashed var(--vscode-focusBorder);
+    outline-offset: -1px;
   }
 
   .commit-row.branch-focused {

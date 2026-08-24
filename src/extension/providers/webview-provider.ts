@@ -1,7 +1,13 @@
+import * as fs from 'fs';
 import * as vscode from 'vscode';
 import type { WebviewHost } from '../types/webview-host.types';
 
 export type CreateSession = (host: WebviewHost) => () => void;
+
+export interface WebviewAppSpec {
+  asset: 'main' | 'review';
+  title: string;
+}
 
 export class GitGraphWebviewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'gitGraphPro.graph';
@@ -11,6 +17,7 @@ export class GitGraphWebviewProvider implements vscode.WebviewViewProvider {
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly createSession: CreateSession,
+    private readonly spec: WebviewAppSpec = { asset: 'main', title: 'Git Graph Pro' },
   ) {}
 
   /**
@@ -44,11 +51,18 @@ export class GitGraphWebviewProvider implements vscode.WebviewViewProvider {
     const nonce = this.getNonce();
 
     const scriptUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview', 'assets', 'main.js')
+      vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview', 'assets', `${this.spec.asset}.js`)
     );
     const styleUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview', 'assets', 'main.css')
+      vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview', 'assets', `${this.spec.asset}.css`)
     );
+
+    const globalStyleFsUri = vscode.Uri.joinPath(
+      this.extensionUri, 'dist', 'webview', 'assets', 'global.css'
+    );
+    const globalStyleLink = fs.existsSync(globalStyleFsUri.fsPath)
+      ? `<link rel="stylesheet" href="${webview.asWebviewUri(globalStyleFsUri)}">\n    `
+      : '';
 
     return /*html*/ `<!DOCTYPE html>
 <html lang="en">
@@ -62,12 +76,12 @@ export class GitGraphWebviewProvider implements vscode.WebviewViewProvider {
       img-src ${webview.cspSource} data: https://www.gravatar.com;
       font-src ${webview.cspSource};
     ">
-    <link rel="stylesheet" href="${styleUri}">
-    <title>Git Graph Pro</title>
+    ${globalStyleLink}<link rel="stylesheet" href="${styleUri}">
+    <title>${this.spec.title}</title>
 </head>
 <body>
     <div id="app"></div>
-    <script nonce="${nonce}" src="${scriptUri}"></script>
+    <script type="module" nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;
   }

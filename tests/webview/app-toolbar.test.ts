@@ -30,7 +30,6 @@ function stubBridge(overrides: Record<string, unknown> = {}) {
       case 'git.status': return { staged: [], unstaged: [], untracked: [], conflicted: [] };
       case 'graph.build': return { totalRows: 0, maxLane: 0, layoutVersion: 1 };
       case 'graph.getWindow': return { nodes: [], edges: [], startRow: 0, endRow: 0, maxLane: 0, layoutVersion: 1 };
-      case 'ai.providers': return [];
       default: return null;
     }
   });

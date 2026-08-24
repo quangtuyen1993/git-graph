@@ -1,8 +1,10 @@
 import * as vscode from 'vscode';
 import { MessageRouter } from './controllers/message-router';
+import { RouterRegistry } from './controllers/router-registry';
 import { RepositorySession, type RepositoryInfo } from './controllers/repository-session';
 import { GitGraphWebviewProvider } from './providers/webview-provider';
 import { GitService } from './services/git.service';
+import { openCompareDiff, type CompareDiffDeps } from './services/compare-diff';
 import type { ReviewRunner } from './services/review-runner';
 import type { WebviewHost } from './types/webview-host.types';
 
@@ -54,9 +56,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const { ReviewStore } = await import('./services/review-store');
   const { ReviewRunner } = await import('./services/review-runner');
   const { createReviewHandler } = await import('./controllers/review-method-handler');
-  const { ReviewTreeProvider } = await import('./providers/review-tree-provider');
-  const { registerReviewView } = await import('./providers/review-view-registration');
   const { createActiveRepo } = await import('./services/active-repo');
+  const { ReviewTargetState } = await import('./services/review-target');
 
   // ReviewStore's constructor only assigns a field; it cannot throw. reconcileOrphans()
   // does real I/O (readdir/readFile/writeFile against globalStorageUri) and must never
@@ -74,6 +75,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // currently attached. Assigned by createSession below and cleared on dispose.
   let activeSession: RepositorySession | undefined;
   let activeRouter: MessageRouter | undefined;
+  const routers = new RouterRegistry();
 
   // Repository identity for the review side. Deliberately NOT tied to the
   // graph webview: the reviews view activates on its own (onView:...reviews)
@@ -86,21 +88,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   const getRepoId = () => activeRepo.getRepoId();
 
-  // Assigned by Task 11 once the review tree view and status-bar clock exist.
-  // Declared here (rather than left undefined-and-optional-chained on an
-  // undeclared name) so the onChange callback below type-checks today.
-  let reviewTree: { refresh(): void } | undefined;
-  let syncTicker: (() => Promise<void>) | undefined;
-
   // One runner for the whole extension, not one per session: its in-flight
   // map is the source of truth for cross-session dedup (review.start
   // idempotency), so a second session for the same repo must see the first
   // session's in-flight run rather than falling back to the store's
   // persisted status.
   const reviewRunner = new ReviewRunner(reviewStore, aiReview, (_repoId, id) => {
-    activeRouter?.sendEvent('review.changed', { id });
-    reviewTree?.refresh();            // undefined until Task 11 registers the view
-    void syncTicker?.();              // undefined until Task 11 adds the clock
+    routers.broadcast('review.changed', { id });
   });
   activeRunner = reviewRunner;         // held at module scope so deactivate() can cancelAll()
 
@@ -114,11 +108,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await vscode.window.showTextDocument(doc, { preview: false });
   };
 
+  // Built per compareDiff call so it can bind the caller's own session tag
+  // and request counter — shared by the graph session today and the review
+  // webview session (Task 7) tomorrow.
+  const makeCompareDiffDeps = (
+    gitService: GitService,
+    sessionTag: number,
+    nextRequest: () => number,
+  ): CompareDiffDeps => ({
+    git: gitService,
+    setContent: (key, content) => contentProvider.setContent(key, content),
+    virtualUri: (path, query) => vscode.Uri.from({ scheme: GIT_GRAPH_SCHEME, path: `/${path}`, query }),
+    fileUri: (repoPath, path) => vscode.Uri.joinPath(vscode.Uri.file(repoPath), path),
+    executeDiff: async (left, right, title) => {
+      await vscode.commands.executeCommand('vscode.diff', left, right, title);
+    },
+    nextTag: () => `ts=${Date.now()}&session=${sessionTag}&request=${nextRequest()}`,
+  });
+
   // One review handler for the host, not one per session. The tree view's
   // commands are not attached to any webview, so a handler scoped to a live
   // session left `rerun` a silent no-op whenever the graph was closed. Both the
   // webview router and the tree view now call this same handler, and it
   // resolves the repository through activeRepo rather than a session.
+  const reviewTargets = new ReviewTargetState();
   const reviewHandler = createReviewHandler({
     store: reviewStore,
     runner: reviewRunner,
@@ -127,6 +140,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     getMaxDiffChars: () =>
       vscode.workspace.getConfiguration('gitGraphPro.aiReview').get<number>('maxDiffChars') ?? 0,
     openBody,
+    targets: reviewTargets,
+    focusReviewView: async () => {
+      await vscode.commands.executeCommand('gitGraphPro.reviews.focus');
+    },
+    broadcast: (event, data) => routers.broadcast(event, data),
   });
 
   function createSession(host: WebviewHost): () => void {
@@ -139,6 +157,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     activeSession = session;
     activeRouter = router;
+    const detachRouter = routers.attach(router);
 
     let gitWatcher: vscode.FileSystemWatcher | undefined;
     let debounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -216,6 +235,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const run = async () => {
         const result = await session.handleRepo('repo.switch', params);
         await bindGitWatcher();
+        // The review webview is retainContextWhenHidden and never re-resolved,
+        // so it never sees a fresh repo.switch response of its own. Broadcast
+        // so it can drop its stale branch list/reviews/target and re-init.
+        routers.broadcast('repo.changed', {});
         return result;
       };
       const result = repositorySwitchQueue.then(run, run);
@@ -337,51 +360,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         case 'ui.compareDiff': {
           const gitService = session.getGitService();
           if (!gitService) throw new Error('No git repository found');
-          const filePath = p.path as string;
-          const oldPath = p.oldPath as string | null | undefined;
-          const baseBranch = p.sourceBranch as string;
-          const headBranch = p.targetBranch as string;
-          const status = (p.status as string) ?? 'modified';
-          const baseContent = status !== 'added'
-            ? await gitService.showFile(baseBranch, oldPath ?? filePath) ?? ''
-            : '';
-          const fileName = filePath.split('/').pop() ?? filePath;
-          const virtualDocumentRequestId = ++virtualDocumentRequestSequence;
-          const baseUri = vscode.Uri.from({
-            scheme: GIT_GRAPH_SCHEME,
-            path: `/${oldPath ?? filePath}`,
-            query: `ref=${baseBranch}&ts=${Date.now()}&session=${panelSessionId}&request=${virtualDocumentRequestId}&side=base`,
-          });
-          contentProvider.setContent(baseUri.toString(), baseContent);
-
-          const branchList = await gitService.branches();
-          const currentBranch = branchList.find(branch => branch.current)?.name;
-          const headIsCheckedOut = !!currentBranch && currentBranch === headBranch;
-          let headUri: vscode.Uri;
-          if (headIsCheckedOut && status !== 'deleted') {
-            headUri = vscode.Uri.joinPath(vscode.Uri.file(gitService.getRepoPath()), filePath);
-          } else {
-            const headContent = status !== 'deleted'
-              ? await gitService.showFile(headBranch, filePath) ?? ''
-              : '';
-            headUri = vscode.Uri.from({
-              scheme: GIT_GRAPH_SCHEME,
-              path: `/${filePath}`,
-              query: `ref=${headBranch}&ts=${Date.now()}&session=${panelSessionId}&request=${virtualDocumentRequestId}&side=head`,
-            });
-            contentProvider.setContent(headUri.toString(), headContent);
-          }
-
-          let title: string;
-          if (status === 'added') {
-            title = `${fileName} (added in ${headBranch})`;
-          } else if (status === 'deleted') {
-            title = `${fileName} (deleted in ${headBranch})`;
-          } else {
-            title = `${fileName} (${baseBranch} → ${headBranch})`;
-          }
-          await vscode.commands.executeCommand('vscode.diff', baseUri, headUri, title);
-          return { success: true };
+          return openCompareDiff(
+            makeCompareDiffDeps(gitService, panelSessionId, () => ++virtualDocumentRequestSequence),
+            p as never,
+          );
         }
         case 'ui.openSubmodule': {
           // The picker lists submodules from every workspace repository, so the
@@ -407,24 +389,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     router.register('ping', async () => ({ pong: true, timestamp: Date.now() }));
 
-    router.register('ai', async (method: string, params: unknown) => {
-      const p = (params ?? {}) as Record<string, unknown>;
-      switch (method) {
-        case 'ai.providers':
-          return aiReview.detectProviders();
-        case 'ai.compare': {
-          const gitService = session.getGitService();
-          if (!gitService) throw new Error('No git repository found');
-          const baseBranch = p.sourceBranch as string;
-          const headBranch = p.targetBranch as string;
-          const result = await gitService.diff(baseBranch, headBranch);
-          return { files: result.files };
-        }
-        default:
-          throw new Error(`Unknown method: ${method}`);
-      }
-    });
-
     router.register('review', reviewHandler);
 
     router.setHost(host);
@@ -441,11 +405,71 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       visibilitySubscription?.dispose();
       if (activeSession === session) activeSession = undefined;
       if (activeRouter === router) activeRouter = undefined;
+      detachRouter();
       router.dispose();
     };
 
     host.onDidDispose(dispose);
 
+    return dispose;
+  }
+
+  /**
+   * The review tab's session. Deliberately thin: no RepositorySession, no file
+   * watcher — the store and the target state live on the host and survive this
+   * webview being rebuilt by hide/show. Every method resolves the repository
+   * through activeRepo, same as the review handler.
+   */
+  function createReviewSession(host: WebviewHost): () => void {
+    const sessionTag = ++nextPanelSessionId;
+    let requestSequence = 0;
+    const router = new MessageRouter();
+    const detachRouter = routers.attach(router);
+
+    router.register('review', reviewHandler);
+
+    router.register('ai', async (method: string) => {
+      if (method === 'ai.providers') return aiReview.detectProviders();
+      throw new Error(`Unknown method: ${method}`);
+    });
+
+    router.register('git', async (method: string) => {
+      if (method === 'git.branches') {
+        const gitService = activeRepo.getGitService();
+        if (!gitService) throw new Error('No git repository found');
+        return gitService.branches();
+      }
+      throw new Error(`Unknown method: ${method}`);
+    });
+
+    router.register('ui', async (method: string, params: unknown) => {
+      const p = (params ?? {}) as Record<string, unknown>;
+      switch (method) {
+        case 'ui.getState':
+          return context.globalState.get(p.key as string) ?? null;
+        case 'ui.setState':
+          await context.globalState.update(p.key as string, p.value);
+          return { success: true };
+        case 'ui.compareDiff': {
+          const gitService = activeRepo.getGitService();
+          if (!gitService) throw new Error('No git repository found');
+          return openCompareDiff(
+            makeCompareDiffDeps(gitService as GitService, sessionTag, () => ++requestSequence),
+            p as never,
+          );
+        }
+        default:
+          throw new Error(`Unknown method: ${method}`);
+      }
+    });
+
+    router.setHost(host);
+
+    const dispose = () => {
+      detachRouter();
+      router.dispose();
+    };
+    host.onDidDispose(dispose);
     return dispose;
   }
 
@@ -462,78 +486,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
   );
 
+  const reviewWebviewProvider = new GitGraphWebviewProvider(
+    context.extensionUri,
+    (host) => createReviewSession(host),
+    { asset: 'review', title: 'Code Review' },
+  );
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider('gitGraphPro.reviews', reviewWebviewProvider, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
+  );
+
   const openCommand = vscode.commands.registerCommand('gitGraphPro.open', () => {
     void vscode.commands.executeCommand('gitGraphPro.graph.focus');
   });
   context.subscriptions.push(openCommand);
-
-  const treeProvider = new ReviewTreeProvider(reviewStore, getRepoId);
-  reviewTree = treeProvider;
-  context.subscriptions.push(treeProvider);
-
-  // One timer for the whole view, started only while a run is in flight and
-  // stopped when the last one ends, so a running row's clock advances without
-  // a stray setInterval outliving the extension.
-  let tick: ReturnType<typeof setInterval> | undefined;
-  syncTicker = async () => {
-    let running = false;
-    try {
-      // getRepoId() does a synchronous realpathSync — a repo that vanished (or
-      // renamed) between the run starting and this tick can throw. A ticker
-      // glitch must not throw out of onChange or leave a dangling interval;
-      // treat "can't tell" as "not running" and let the next onChange retry.
-      const repoId = getRepoId();
-      if (repoId) {
-        running = (await reviewStore.list(repoId)).some(entry => entry.status === 'running');
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`[extension] Failed to check in-flight reviews: ${message}`);
-    }
-    if (running && !tick) {
-      tick = setInterval(() => treeProvider.refresh(), 1000);
-    } else if (!running && tick) {
-      clearInterval(tick);
-      tick = undefined;
-    }
-  };
-  context.subscriptions.push({
-    dispose: () => {
-      if (tick) clearInterval(tick);
-      tick = undefined;
-    },
-  });
-
-  registerReviewView({
-    tree: treeProvider,
-    runner: reviewRunner,
-    store: reviewStore,
-    getRepoId,
-    openBody,
-    rerun: async (entry) => {
-      let repoId: string | undefined;
-      try {
-        // Same hazard as syncTicker above: getRepoId() can throw if the repo
-        // path is gone. Rerun must be a no-op then, not an unhandled rejection.
-        repoId = getRepoId();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`[extension] Failed to resolve repo for rerun: ${message}`);
-        return;
-      }
-      if (!repoId) return;
-      await reviewStore.remove(repoId, entry.id);
-      await reviewHandler('review.start', {
-        sourceBranch: entry.baseRef,
-        targetBranch: entry.headRef,
-        provider: entry.provider,
-        model: entry.model,
-      });
-    },
-    registerCommand: (id, fn) => vscode.commands.registerCommand(id, fn),
-    registerTreeView: (id, tree) => vscode.window.createTreeView(id, { treeDataProvider: tree }),
-    subscribe: (d) => context.subscriptions.push(d),
-  });
 }
 
 export function deactivate(): void {

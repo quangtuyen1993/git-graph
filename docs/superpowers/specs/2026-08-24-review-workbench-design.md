@@ -96,8 +96,8 @@ Diff rỗng (mọi kind) → từ chối tạo entry, báo lỗi tại header �
 
 Cặp `{kind, baseRef, headRef}` đang hiện trên picker là state **host giữ,
 in-memory theo repoId** (`ReviewTargetState`). Không persist qua reload cửa sổ:
-mở mới thì picker mặc định head = branch hiện tại, base = branch mặc định của
-repo. Đổi repo active thì target theo repo nào hiện repo đó, không lẫn.
+mở mới thì picker mặc định head = branch hiện tại, base = `main`/`master` nếu
+tồn tại (heuristic, không đọc origin/HEAD). Đổi repo active thì target theo repo nào hiện repo đó, không lẫn.
 
 ## Kiến trúc
 
@@ -219,7 +219,7 @@ Nguyên tắc kế thừa spec trước: mọi kiểu hỏng kết thúc thành 
 
 | Tình huống | Kết quả |
 |---|---|
-| `setTarget` ref không resolve được | Tab focus, lỗi tại header kèm tên ref, picker giữ giá trị cũ |
+| `setTarget` ref không resolve được | Lỗi hiện tại graph (nơi người dùng click) kèm tên ref; tab review không bị focus, picker giữ giá trị cũ |
 | Review commit trên root commit | base = empty-tree, diff là toàn bộ commit — chạy bình thường |
 | Review commit trên merge commit | base = first parent; nhãn row ghi `(merge)` |
 | Diff rỗng | Từ chối tạo entry, báo tại header |

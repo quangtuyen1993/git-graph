@@ -42,8 +42,12 @@
       ],
       "gitGraphProReview": [
         {
+          "type": "webview",
           "id": "gitGraphPro.reviews",
-          "name": "Reviews"
+          "name": "Reviews",
+          "webviewOptions": {
+            "retainContextWhenHidden": true
+          }
         }
       ]
     },
@@ -51,56 +55,8 @@
       {
         "command": "gitGraphPro.open",
         "title": "Git Graph Pro: Open"
-      },
-      {
-        "command": "gitGraphPro.review.cancel",
-        "title": "Cancel Review",
-        "icon": "$(stop-circle)"
-      },
-      {
-        "command": "gitGraphPro.review.rerun",
-        "title": "Re-run Review",
-        "icon": "$(refresh)"
-      },
-      {
-        "command": "gitGraphPro.review.delete",
-        "title": "Delete Review",
-        "icon": "$(trash)"
       }
     ],
-    "menus": {
-      "view/item/context": [
-        {
-          "command": "gitGraphPro.review.cancel",
-          "when": "view == gitGraphPro.reviews && viewItem == running",
-          "group": "inline"
-        },
-        {
-          "command": "gitGraphPro.review.rerun",
-          "when": "view == gitGraphPro.reviews && viewItem != running",
-          "group": "inline"
-        },
-        {
-          "command": "gitGraphPro.review.delete",
-          "when": "view == gitGraphPro.reviews && viewItem != running",
-          "group": "inline"
-        }
-      ],
-      "commandPalette": [
-        {
-          "command": "gitGraphPro.review.cancel",
-          "when": "false"
-        },
-        {
-          "command": "gitGraphPro.review.rerun",
-          "when": "false"
-        },
-        {
-          "command": "gitGraphPro.review.delete",
-          "when": "false"
-        }
-      ]
-    },
     "configuration": {
       "title": "Git Graph Pro",
       "properties": {
