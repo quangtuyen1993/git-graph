@@ -4,3 +4,4 @@ coverage/
 *.vsix
 .vscode-test/
 .worktrees/
+.superpowers/
