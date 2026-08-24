@@ -34,7 +34,7 @@ host-owned (`ReviewStore`, `ReviewRunner`, cache theo sha) **giữ nguyên**; ph
 | Mục tiêu review | `kind: 'branch' \| 'commit' \| 'range'`, trường `base*` / `head*` |
 | Entry point từ graph | Right-click branch, right-click commit (per-commit), select-2-commit (range) |
 | Giao tiếp 2 webview | Host trung gian duy nhất; event broadcast tới mọi router đang attach |
-| Compare target đang chọn | Host giữ, in-memory theo repo; webview re-resolve thì hỏi lại |
+| Compare target đang chọn | Host giữ theo repo, persist qua `globalState`; webview re-resolve thì hỏi lại |
 | Cache | Không đổi luật: id ghép từ sha + provider + model |
 
 **Vì sao webview chứ không phải TreeView + QuickPick.** Yêu cầu trung tâm là 2
@@ -94,10 +94,13 @@ Diff rỗng (mọi kind) → từ chối tạo entry, báo lỗi tại header �
 
 ### Compare target đang chọn
 
-Cặp `{kind, baseRef, headRef}` đang hiện trên picker là state **host giữ,
-in-memory theo repoId** (`ReviewTargetState`). Không persist qua reload cửa sổ:
-mở mới thì picker mặc định head = branch hiện tại, base = `main`/`master` nếu
-tồn tại (heuristic, không đọc origin/HEAD). Đổi repo active thì target theo repo nào hiện repo đó, không lẫn.
+Cặp `{kind, baseRef, headRef}` đang hiện trên picker là state **host giữ theo
+repoId** (`ReviewTargetState`), memory-first và **persist qua `globalState`**
+(key `review.target.<repoId>`): reload cửa sổ mở lại đúng cặp đang so. Picker
+đổi giá trị thì webview ghi write-behind qua `review.saveTarget` (không
+resolve/focus/broadcast). Repo chưa từng chọn gì thì picker mặc định head =
+branch hiện tại, base = `main`/`master` nếu tồn tại (heuristic, không đọc
+origin/HEAD). Đổi repo active thì target theo repo nào hiện repo đó, không lẫn.
 
 ## Kiến trúc
 
