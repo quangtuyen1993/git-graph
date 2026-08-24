@@ -22,6 +22,8 @@ export interface ReviewEntry {
 export const MAX_ENTRIES_PER_REPO = 50;
 
 export class ReviewStore {
+  private readonly indexMutexes = new Map<string, Promise<unknown>>();
+
   constructor(private readonly rootDir: string) {}
 
   public bodyPath(repoId: string, id: string): string {
@@ -38,11 +40,13 @@ export class ReviewStore {
   }
 
   public async create(repoId: string, entry: ReviewEntry): Promise<void> {
-    await mkdir(join(this.rootDir, repoId), { recursive: true });
-    const entries = (await this.readIndex(repoId)).filter(e => e.id !== entry.id);
-    entries.push(entry);
-    await this.writeIndex(repoId, await this.evict(repoId, entries));
-    await writeFile(this.bodyPath(repoId, entry.id), '', 'utf8');
+    return this.withIndexLock(repoId, async () => {
+      await mkdir(join(this.rootDir, repoId), { recursive: true });
+      const entries = (await this.readIndex(repoId)).filter(e => e.id !== entry.id);
+      entries.push(entry);
+      await this.writeIndex(repoId, await this.evict(repoId, entries));
+      await writeFile(this.bodyPath(repoId, entry.id), '', 'utf8');
+    });
   }
 
   public async appendBody(repoId: string, id: string, chunk: string): Promise<void> {
@@ -55,17 +59,21 @@ export class ReviewStore {
   }
 
   public async finish(repoId: string, id: string, patch: Partial<ReviewEntry>): Promise<void> {
-    const entries = await this.readIndex(repoId);
-    const index = entries.findIndex(e => e.id === id);
-    if (index === -1) return;
-    entries[index] = { ...entries[index], ...patch };
-    await this.writeIndex(repoId, entries);
+    return this.withIndexLock(repoId, async () => {
+      const entries = await this.readIndex(repoId);
+      const index = entries.findIndex(e => e.id === id);
+      if (index === -1) return;
+      entries[index] = { ...entries[index], ...patch };
+      await this.writeIndex(repoId, entries);
+    });
   }
 
   public async remove(repoId: string, id: string): Promise<void> {
-    const entries = (await this.readIndex(repoId)).filter(e => e.id !== id);
-    await this.writeIndex(repoId, entries);
-    await rm(this.bodyPath(repoId, id), { force: true });
+    return this.withIndexLock(repoId, async () => {
+      const entries = (await this.readIndex(repoId)).filter(e => e.id !== id);
+      await this.writeIndex(repoId, entries);
+      await rm(this.bodyPath(repoId, id), { force: true });
+    });
   }
 
   private indexPath(repoId: string): string {
@@ -130,5 +138,17 @@ export class ReviewStore {
       await rm(this.bodyPath(repoId, dropped.id), { force: true });
     }
     return [...running, ...keepFinished];
+  }
+
+  /**
+   * Serialize index mutations per repo. Chains each critical section onto the tail
+   * for that repoId, ensuring read-modify-write cycles are atomic. A rejected
+   * critical section does not poison the chain for later callers.
+   */
+  private async withIndexLock<T>(repoId: string, fn: () => Promise<T>): Promise<T> {
+    const current = this.indexMutexes.get(repoId) ?? Promise.resolve();
+    const result = current.then(() => fn(), () => fn());
+    this.indexMutexes.set(repoId, result.catch(() => {}));
+    return result;
   }
 }

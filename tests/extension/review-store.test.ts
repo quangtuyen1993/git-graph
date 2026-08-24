@@ -123,4 +123,57 @@ describe('ReviewStore', () => {
 
     expect(await store.get('brand-new-repo', 'one')).toBeDefined();
   });
+
+  it('does not clobber concurrent mutations on the same repo', async () => {
+    // Start two creates concurrently (do not await the first before starting the second)
+    await Promise.all([
+      store.create(REPO, entry('first', { startedAt: '2026-08-24T00:00:00.000Z' })),
+      store.create(REPO, entry('second', { startedAt: '2026-08-24T00:01:00.000Z' })),
+    ]);
+
+    // Both entries should survive
+    const list = await store.list(REPO);
+    expect(list.map(e => e.id)).toEqual(['second', 'first']);
+    expect(list).toHaveLength(2);
+  });
+
+  it('does not clobber create racing with finish', async () => {
+    await store.create(REPO, entry('first'));
+
+    // Race a finish of the first entry with a create of a second entry
+    await Promise.all([
+      store.finish(REPO, 'first', { status: 'done', finishedAt: '2026-08-24T00:05:00.000Z' }),
+      store.create(REPO, entry('second')),
+    ]);
+
+    const first = await store.get(REPO, 'first');
+    const second = await store.get(REPO, 'second');
+
+    expect(first).toMatchObject({ status: 'done', finishedAt: '2026-08-24T00:05:00.000Z' });
+    expect(second).toBeDefined();
+    expect(await store.list(REPO)).toHaveLength(2);
+  });
+
+  it('does not deadlock when a critical section rejects', async () => {
+    // Write a body file for entry 'broken'
+    await mkdir(join(root, REPO), { recursive: true });
+    await writeFile(join(root, REPO, 'broken.md'), 'body', 'utf8');
+
+    // Corrupt the index so readIndex will throw
+    await writeFile(join(root, REPO, 'index.json'), '{ not json', 'utf8');
+
+    // Try to finish the entry. This will fail because readIndex fails
+    // But we should not deadlock or poison the chain for future callers.
+    try {
+      await store.finish(REPO, 'broken', { status: 'done' });
+    } catch {
+      // Expected to throw when index is corrupt
+    }
+
+    // A subsequent operation on the same repo should still work.
+    // After rebuilding, we should be able to list entries.
+    const list = await store.list(REPO);
+    expect(list).toHaveLength(1);
+    expect(list[0].id).toBe('broken');
+  });
 });
