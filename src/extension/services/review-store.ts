@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readdir, readFile, rm, writeFile } from 'fs/promises';
+import { appendFile, mkdir, readdir, readFile, rename, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 
 export type ReviewStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
@@ -23,6 +23,9 @@ export const MAX_ENTRIES_PER_REPO = 50;
 
 export class ReviewStore {
   private readonly indexMutexes = new Map<string, Promise<unknown>>();
+  /** One write chain per body file, so streamed chunks land in call order. */
+  private readonly bodyChains = new Map<string, Promise<unknown>>();
+  private tempCounter = 0;
 
   constructor(private readonly rootDir: string) {}
 
@@ -30,13 +33,20 @@ export class ReviewStore {
     return join(this.rootDir, repoId, `${id}.md`);
   }
 
+  /**
+   * Reads take the same lock as writes. An unsynchronised read can land in the
+   * middle of a write and see a half-written (or, before the atomic rename
+   * below, an empty) index — and `readIndex`'s recovery path *rewrites* the
+   * file, so a single torn read would destroy every entry's metadata.
+   */
   public async list(repoId: string): Promise<ReviewEntry[]> {
-    const entries = await this.readIndex(repoId);
+    const entries = await this.withIndexLock(repoId, () => this.readIndex(repoId));
     return [...entries].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   }
 
   public async get(repoId: string, id: string): Promise<ReviewEntry | undefined> {
-    return (await this.readIndex(repoId)).find(e => e.id === id);
+    const entries = await this.withIndexLock(repoId, () => this.readIndex(repoId));
+    return entries.find(e => e.id === id);
   }
 
   public async create(repoId: string, entry: ReviewEntry): Promise<void> {
@@ -44,14 +54,55 @@ export class ReviewStore {
       await mkdir(join(this.rootDir, repoId), { recursive: true });
       const entries = (await this.readIndex(repoId)).filter(e => e.id !== entry.id);
       entries.push(entry);
-      await this.writeIndex(repoId, await this.evict(repoId, entries));
+      // Body first: a crash between the two writes must leave an orphaned empty
+      // body (invisible, harmless) rather than an indexed row whose `open`
+      // throws because the file it points at was never created.
       await writeFile(this.bodyPath(repoId, entry.id), '', 'utf8');
+      await this.writeIndex(repoId, await this.evict(repoId, entries));
     });
   }
 
+  /**
+   * Appends are serialised per body file. Two `appendFile` calls issued in the
+   * same tick are two independent open/write/close cycles whose completion
+   * order the libuv threadpool decides, so unchained writes genuinely arrive
+   * scrambled under load — measured, not theoretical.
+   */
   public async appendBody(repoId: string, id: string, chunk: string): Promise<void> {
-    await mkdir(join(this.rootDir, repoId), { recursive: true });
-    await appendFile(this.bodyPath(repoId, id), chunk, 'utf8');
+    const key = `${repoId}/${id}`;
+    const previous = this.bodyChains.get(key) ?? Promise.resolve();
+    const result = previous.then(async () => {
+      await mkdir(join(this.rootDir, repoId), { recursive: true });
+      await appendFile(this.bodyPath(repoId, id), chunk, 'utf8');
+    });
+    // Normalised so one failed append never poisons the chain for the next
+    // chunk, and never surfaces as an unhandled rejection.
+    const settled = result.catch(() => {});
+    this.bodyChains.set(key, settled);
+    void settled.then(() => {
+      if (this.bodyChains.get(key) === settled) this.bodyChains.delete(key);
+    });
+    return result;
+  }
+
+  /**
+   * Replaces the body wholesale. The streamed text is raw CLI stdout; the
+   * provider-specific post-processing only exists on the value the service
+   * returns, so the finished document must be rewritten from that.
+   */
+  public async writeBody(repoId: string, id: string, content: string): Promise<void> {
+    const key = `${repoId}/${id}`;
+    const previous = this.bodyChains.get(key) ?? Promise.resolve();
+    const result = previous.then(async () => {
+      await mkdir(join(this.rootDir, repoId), { recursive: true });
+      await writeFile(this.bodyPath(repoId, id), content, 'utf8');
+    });
+    const settled = result.catch(() => {});
+    this.bodyChains.set(key, settled);
+    void settled.then(() => {
+      if (this.bodyChains.get(key) === settled) this.bodyChains.delete(key);
+    });
+    return result;
   }
 
   public async readBody(repoId: string, id: string): Promise<string> {
@@ -107,14 +158,28 @@ export class ReviewStore {
     return join(this.rootDir, repoId, 'index.json');
   }
 
-  private async readIndex(repoId: string): Promise<ReviewEntry[]> {
-    const raw = await readFile(this.indexPath(repoId), 'utf8').catch(() => null);
+  /** Split out so a test can make a single read observe a transient state. */
+  private async readIndexFile(repoId: string): Promise<string | null> {
+    return readFile(this.indexPath(repoId), 'utf8').catch(() => null);
+  }
+
+  /**
+   * `rebuildIndex` is destructive — it replaces every entry with an `unknown`
+   * skeleton — so it must only ever run for a genuinely corrupt file. An empty
+   * or unparseable read is treated as transient and retried once first.
+   */
+  private async readIndex(repoId: string, attempt = 0): Promise<ReviewEntry[]> {
+    const raw = await this.readIndexFile(repoId);
     if (raw === null) return [];
     try {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) return parsed as ReviewEntry[];
     } catch {
-      // fall through to the rebuild below
+      // fall through to the retry / rebuild below
+    }
+    if (attempt === 0) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      return this.readIndex(repoId, attempt + 1);
     }
     return this.rebuildIndex(repoId);
   }
@@ -146,9 +211,22 @@ export class ReviewStore {
     return recovered;
   }
 
+  /**
+   * Write-then-rename. A plain `writeFile` truncates before it writes, so any
+   * reader landing in that window sees an empty file; `rename` is atomic on
+   * POSIX and on NTFS, so a reader sees either the old index or the new one.
+   */
   private async writeIndex(repoId: string, entries: ReviewEntry[]): Promise<void> {
     await mkdir(join(this.rootDir, repoId), { recursive: true });
-    await writeFile(this.indexPath(repoId), JSON.stringify(entries, null, 2), 'utf8');
+    const target = this.indexPath(repoId);
+    const temporary = `${target}.${process.pid}.${++this.tempCounter}.tmp`;
+    await writeFile(temporary, JSON.stringify(entries, null, 2), 'utf8');
+    try {
+      await rename(temporary, target);
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => {});
+      throw error;
+    }
   }
 
   /** Drop the oldest finished entries past the cap. A running review is never evicted. */

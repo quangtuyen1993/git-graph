@@ -199,4 +199,148 @@ describe('ReviewStore', () => {
 
     writeIndexSpy.mockRestore();
   });
+  it('keeps unawaited appends in call order', async () => {
+    // Regression: appendBody used to mkdir+appendFile per call with no chaining,
+    // so two chunks issued in the same tick became two concurrent
+    // open/write/close cycles whose completion order the libuv threadpool
+    // decided. Measured: 101 of 300 runs produced "worldhello ".
+    await store.create(REPO, entry('one'));
+    const chunks = Array.from({ length: 24 }, (_, i) => `chunk-${i};`);
+
+    // Deliberately not awaited between calls.
+    await Promise.all(chunks.map(chunk => store.appendBody(REPO, 'one', chunk)));
+
+    expect(await store.readBody(REPO, 'one')).toBe(chunks.join(''));
+  });
+
+  it('writeBody replaces the streamed text without interleaving a pending append', async () => {
+    await store.create(REPO, entry('one'));
+
+    const append = store.appendBody(REPO, 'one', 'raw stdout');
+    const replace = store.writeBody(REPO, 'one', 'processed');
+    await Promise.all([append, replace]);
+
+    expect(await store.readBody(REPO, 'one')).toBe('processed');
+  });
+
+  it('creates the body file before the index entry', async () => {
+    // A crash between the two writes must leave an invisible orphan body, not
+    // an indexed row whose `open` throws.
+    const writeIndexSpy = vi.spyOn(store as never as { writeIndex: () => Promise<void> }, 'writeIndex')
+      .mockRejectedValue(new Error('crash between the two writes'));
+
+    await expect(store.create(REPO, entry('one'))).rejects.toThrow(/crash between/);
+    writeIndexSpy.mockRestore();
+
+    await expect(readFile(store.bodyPath(REPO, 'one'), 'utf8')).resolves.toBe('');
+    expect(await store.list(REPO)).toEqual([]);
+  });
+
+  it('never lets a read observe a write in progress', async () => {
+    // readIndex's recovery path *rewrites* the file with `unknown` skeletons, so
+    // one torn read would destroy every entry's metadata. Reads must take the
+    // same lock as writes: while a write's critical section is open, no read of
+    // the index may be in flight.
+    await store.create(REPO, entry('seed'));
+
+    let writing = false;
+    const observed: string[] = [];
+    const internals = store as never as {
+      writeIndex: (repoId: string, entries: ReviewEntry[]) => Promise<void>;
+      readIndexFile: (repoId: string) => Promise<string | null>;
+    };
+    const realWrite = internals.writeIndex;
+    const realRead = internals.readIndexFile;
+
+    const writeSpy = vi.spyOn(internals, 'writeIndex').mockImplementation(async (repoId, entries) => {
+      writing = true;
+      // Hold the write open: an unsynchronised reader slots straight in here.
+      await new Promise(resolve => setTimeout(resolve, 50));
+      await realWrite.call(store, repoId, entries);
+      writing = false;
+    });
+    const readSpy = vi.spyOn(internals, 'readIndexFile').mockImplementation(async (repoId) => {
+      if (writing) observed.push('read-during-write');
+      return realRead.call(store, repoId);
+    });
+
+    const write = store.create(REPO, entry('written', { status: 'done' }));
+    // Well inside the 50ms window the write is holding open.
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(writing).toBe(true);
+    const reads = Promise.all([store.list(REPO), store.get(REPO, 'seed')]);
+
+    await Promise.all([write, reads]);
+    writeSpy.mockRestore();
+    readSpy.mockRestore();
+
+    expect(observed).toEqual([]);
+    const list = await store.list(REPO);
+    expect(list.map(e => e.id).sort()).toEqual(['seed', 'written']);
+    expect(list.every(e => e.provider === 'claude')).toBe(true);
+  });
+
+  it('never exposes a truncated index to a reader outside the lock', async () => {
+    // A plain writeFile truncates before it writes; a reader landing in that
+    // window sees '' and the destructive rebuild takes over. Write-then-rename
+    // means an outside reader only ever sees a complete index.
+    for (let i = 0; i < 12; i++) {
+      await store.create(REPO, entry(`seed-${i}`, { status: 'done' }));
+    }
+
+    const indexFile = join(root, REPO, 'index.json');
+    let stop = false;
+    const reads: string[] = [];
+    const reader = (async () => {
+      while (!stop) {
+        const raw = await readFile(indexFile, 'utf8').catch(() => null);
+        if (raw !== null) reads.push(raw);
+      }
+    })();
+
+    const writes: Promise<unknown>[] = [];
+    for (let i = 0; i < 30; i++) {
+      writes.push(store.finish(REPO, 'seed-0', { status: 'done', error: `pass-${i}` }));
+    }
+    await Promise.all(writes);
+    stop = true;
+    await reader;
+
+    expect(reads.length).toBeGreaterThan(0);
+    const torn = reads.filter(raw => {
+      try {
+        return !Array.isArray(JSON.parse(raw));
+      } catch {
+        return true;
+      }
+    });
+    expect(torn).toEqual([]);
+  });
+
+  it('retries a transient empty read instead of destroying the index', async () => {
+    await store.create(REPO, entry('one'));
+    const real = (store as never as { readIndexFile: (repoId: string) => Promise<string | null> }).readIndexFile;
+    const rebuild = vi.spyOn(store as never as { rebuildIndex: () => Promise<unknown[]> }, 'rebuildIndex');
+    let calls = 0;
+    const readSpy = vi
+      .spyOn(store as never as { readIndexFile: (repoId: string) => Promise<string | null> }, 'readIndexFile')
+      .mockImplementation(async (repoId: string) => (++calls === 1 ? '' : real.call(store, repoId)));
+
+    const listed = await store.list(REPO);
+
+    expect(rebuild).not.toHaveBeenCalled();
+    expect(listed.map(e => e.id)).toEqual(['one']);
+    expect(listed[0].provider).toBe('claude');
+    readSpy.mockRestore();
+    rebuild.mockRestore();
+  });
+
+  it('leaves no temporary index files behind', async () => {
+    await store.create(REPO, entry('one'));
+    await store.finish(REPO, 'one', { status: 'done' });
+
+    const { readdir } = await import('fs/promises');
+    const files = await readdir(join(root, REPO));
+    expect(files.filter(name => name.endsWith('.tmp'))).toEqual([]);
+  });
 });
