@@ -169,17 +169,16 @@ export class ReviewStore {
 
   /**
    * Serialize index mutations per repo. Chains each critical section onto the tail
-   * for that repoId, ensuring read-modify-write cycles are atomic. A rejected
-   * critical section does not poison the chain for later callers.
+   * for that repoId, ensuring read-modify-write cycles are atomic.
+   *
+   * The stored promise is normalised with `.catch(() => {})` so a rejected critical
+   * section never poisons the chain for the next caller on this repoId, and so
+   * Node never logs an unhandled-rejection warning for a caller who doesn't await
+   * the promise returned here.
    */
   private async withIndexLock<T>(repoId: string, fn: () => Promise<T>): Promise<T> {
     const current = this.indexMutexes.get(repoId) ?? Promise.resolve();
-    // TWO GUARDS PROTECT THE CHAIN:
-    // (a) The error handler (() => fn() as second arg) ensures a rejected prior
-    //     critical section doesn't block this one: if current is rejected, fn() still runs.
-    // (b) The .catch(() => {}) on the stored promise prevents a rejection from being
-    //     seen by the next caller, so they get a resolved promise they can chain onto.
-    const result = current.then(() => fn(), () => fn());
+    const result = current.then(() => fn());
     this.indexMutexes.set(repoId, result.catch(() => {}));
     return result;
   }
