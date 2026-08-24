@@ -14,12 +14,6 @@ const compareFiles = [
   { path: 'src/a.ts', oldPath: null, status: 'modified', additions: 3, deletions: 1, binary: false },
   { path: 'src/b.ts', oldPath: null, status: 'added', additions: 9, deletions: 0, binary: false },
 ];
-const reviewResult = {
-  content: '## Summary\n\nLooks good.',
-  provider: 'claude',
-  model: 'sonnet',
-  timestamp: '2026-08-24T00:00:00.000Z',
-};
 
 function renderPanel(props: Record<string, unknown> = {}) {
   return render(AIReviewPanel, {
@@ -28,7 +22,6 @@ function renderPanel(props: Record<string, unknown> = {}) {
     compareFiles,
     initialSource: 'main',
     initialTarget: 'feature',
-    reviewResult,
     ...props,
   });
 }
@@ -36,67 +29,44 @@ function renderPanel(props: Record<string, unknown> = {}) {
 describe('AIReviewPanel', () => {
   afterEach(() => cleanup());
 
-  it('renders the review as markdown rather than raw text', () => {
+  it('holds no review result markup — a finished review lives only in the Code Review panel', () => {
     const { container } = renderPanel();
-    const heading = container.querySelector('.result-content h2');
-    expect(heading?.textContent).toBe('Summary');
-    expect(container.querySelector('.result-content')?.textContent).not.toContain('##');
+    expect(container.querySelector('.review-result')).toBeNull();
   });
 
-  it('collapses and expands the files and review sections independently', async () => {
+  it('collapses and expands the files section', async () => {
     const { container, getByRole } = renderPanel();
 
     const filesToggle = getByRole('button', { name: /files changed/i });
-    const reviewToggle = getByRole('button', { name: /^\s*▶?\s*review/i });
-
     expect(container.querySelector('.file-list')).not.toBeNull();
-    expect(container.querySelector('.result-content')).not.toBeNull();
 
     await fireEvent.click(filesToggle);
     expect(container.querySelector('.file-list')).toBeNull();
-    // Collapsing files must not affect the review section.
-    expect(container.querySelector('.result-content')).not.toBeNull();
     expect(filesToggle.getAttribute('aria-expanded')).toBe('false');
-
-    await fireEvent.click(reviewToggle);
-    expect(container.querySelector('.result-content')).toBeNull();
-    expect(reviewToggle.getAttribute('aria-expanded')).toBe('false');
 
     await fireEvent.click(filesToggle);
     expect(container.querySelector('.file-list')).not.toBeNull();
     expect(filesToggle.getAttribute('aria-expanded')).toBe('true');
   });
 
-  it('re-expands the review section when a newer review arrives', async () => {
-    const { container, getByRole, component } = renderPanel();
+  it('dispatches review with the selected branches, provider and model, then hints where to find the result', async () => {
+    const { getByRole, container, component } = renderPanel({ initialProvider: 'claude', initialModel: 'sonnet' });
+    const onReview = vi.fn();
+    component.$on('review', onReview);
 
-    await fireEvent.click(getByRole('button', { name: /^\s*▶?\s*review/i }));
-    expect(container.querySelector('.result-content')).toBeNull();
+    expect(container.querySelector('.review-started-hint')).toBeNull();
 
-    component.$set({
-      reviewResult: { ...reviewResult, content: '## Next\n\nOther.', timestamp: '2026-08-24T01:00:00.000Z' },
+    await fireEvent.click(getByRole('button', { name: /Review Changes/ }));
+
+    expect(onReview).toHaveBeenCalledTimes(1);
+    expect(onReview.mock.calls[0][0].detail).toEqual({
+      sourceBranch: 'main',
+      targetBranch: 'feature',
+      provider: 'claude',
+      model: 'sonnet',
     });
-    await Promise.resolve();
-
-    expect(container.querySelector('.result-content')?.textContent).toContain('Other.');
-  });
-
-  it('emits a markdown document with comparison context when opening in the editor', async () => {
-    const { getByTitle, component } = renderPanel();
-    const onOpenReview = vi.fn();
-    component.$on('openReview', onOpenReview);
-
-    await fireEvent.click(getByTitle('Open review in editor'));
-
-    expect(onOpenReview).toHaveBeenCalledTimes(1);
-    const { content, label } = onOpenReview.mock.calls[0][0].detail;
-    expect(label).toBe('review-main-to-feature');
-    expect(content).toContain('# Code review: main → feature');
-    expect(content).toContain('- Base: `main`');
-    expect(content).toContain('- Head: `feature`');
-    expect(content).toContain('- Reviewer: claude/sonnet');
-    expect(content).toContain('- Files changed: 2');
-    expect(content).toContain('Looks good.');
+    expect(container.querySelector('.review-started-hint')?.textContent)
+      .toContain('Started — see the Code Review panel.');
   });
 
   it('explains an empty comparison instead of showing a blank list', () => {

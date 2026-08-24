@@ -1251,14 +1251,6 @@
     }
   }
 
-  async function handleOpenReviewInEditor(event: CustomEvent<{ content: string; label: string }>) {
-    try {
-      await bridge.send('ui.openReviewDocument', event.detail);
-    } catch (e) {
-      aiReviewError = e instanceof Error ? e.message : String(e);
-    }
-  }
-
   function formatRelativeTime(dateStr: string): string {
     const now = Date.now();
     const date = new Date(dateStr).getTime();
@@ -1512,7 +1504,6 @@
             on:compare={(e) => compareBranches(e.detail.sourceBranch, e.detail.targetBranch)}
             on:review={handleAIReview}
             on:openDiff={handleCompareOpenDiff}
-            on:openReview={handleOpenReviewInEditor}
             on:settingsChange={(e) => {
               savedProvider = e.detail.provider;
               savedModel = e.detail.model;

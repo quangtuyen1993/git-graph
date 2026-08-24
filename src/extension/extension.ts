@@ -278,35 +278,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           await vscode.commands.executeCommand('vscode.openFolder', folderUri, { forceNewWindow: true });
           return { success: true };
         }
-        case 'ui.openReviewDocument': {
-          const content = p.content as string;
-          const label = (p.label as string) ?? 'review';
-          if (!content?.trim()) throw new Error('Nothing to open — run a review first');
-
-          // Write to a real file so the editor tab gets a meaningful name and the
-          // user can edit/save it. The path is derived from the label, so
-          // re-running the same comparison overwrites instead of accumulating.
-          const os = await import('os');
-          const fsp = await import('fs/promises');
-          const path = await import('path');
-
-          const slug = label
-            .replace(/[^\w.-]+/g, '-')
-            .replace(/^-+|-+$/g, '')
-            .slice(0, 80) || 'review';
-          const dir = path.join(os.tmpdir(), 'git-graph-pro-reviews');
-          await fsp.mkdir(dir, { recursive: true });
-          const file = path.join(dir, `${slug}.md`);
-          await fsp.writeFile(file, content, 'utf8');
-
-          const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
-          await vscode.languages.setTextDocumentLanguage(doc, 'markdown');
-          await vscode.window.showTextDocument(doc, {
-            viewColumn: vscode.ViewColumn.Active,
-            preview: false,
-          });
-          return { success: true, path: file };
-        }
         case 'ui.pickBranch': {
           const gitService = session.getGitService();
           if (!gitService) throw new Error('No git repository found');
