@@ -103,18 +103,28 @@ vi.mock('../../src/extension/services/ai-review.service', () => ({
   },
 }));
 
-// A stand-in that only tracks construction and lets tests assert on cancelAll,
-// so the hoisting behaviour (one runner for the whole extension, not one per
-// session) can be verified without exercising real review I/O.
+// A stand-in that tracks construction and captures the onChange callback, so
+// tests can assert on cancelAll() (hoisting: one runner for the whole
+// extension, not one per session) and on event delivery (the onChange
+// rewiring from a per-session `router` to the activate-scope `activeRouter`)
+// without exercising real review I/O.
 const reviewRunnerMocks = vi.hoisted(() => ({
-  instances: [] as Array<{ cancelAll: ReturnType<typeof vi.fn> }>,
+  instances: [] as Array<{
+    cancelAll: ReturnType<typeof vi.fn>;
+    onChange: (repoId: string, id: string) => void;
+  }>,
 }));
 
 vi.mock('../../src/extension/services/review-runner', () => ({
   ReviewRunner: class {
     cancelAll = vi.fn();
-    constructor() {
-      reviewRunnerMocks.instances.push(this as unknown as { cancelAll: ReturnType<typeof vi.fn> });
+    onChange: (repoId: string, id: string) => void;
+    constructor(_store: unknown, _service: unknown, onChange: (repoId: string, id: string) => void) {
+      this.onChange = onChange;
+      reviewRunnerMocks.instances.push(this as unknown as {
+        cancelAll: ReturnType<typeof vi.fn>;
+        onChange: (repoId: string, id: string) => void;
+      });
     }
   },
 }));
@@ -475,5 +485,56 @@ describe('extension view sessions', () => {
     deactivate();
 
     expect(reviewRunnerMocks.instances[0].cancelAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('delivers review.changed to the live webview when the runner reports a change', async () => {
+    const view = await activateAndResolveView();
+    const runner = reviewRunnerMocks.instances[0];
+
+    runner.onChange('repo-a', 'review-1');
+
+    expect(view.webview.postMessage).toHaveBeenCalledWith({
+      type: 'event',
+      event: 'review.changed',
+      data: { id: 'review-1' },
+    });
+  });
+
+  it('does not post review.changed once the webview has been disposed', async () => {
+    const view = await activateAndResolveView();
+    const runner = reviewRunnerMocks.instances[0];
+
+    view.disposeView();
+    view.webview.postMessage.mockClear();
+
+    runner.onChange('repo-a', 'review-2');
+
+    expect(view.webview.postMessage).not.toHaveBeenCalled();
+  });
+
+  it('routes review.changed to whichever session is currently live after a hide/re-show', async () => {
+    const view1 = await activateAndResolveView();
+    const provider = hostMocks.registerWebviewViewProvider.mock.calls
+      .find(([viewType]) => viewType === 'gitGraphPro.graph')?.[1] as {
+        resolveWebviewView(view: unknown): void;
+      };
+
+    // Resolving a second view disposes session 1 (clearing activeRouter back
+    // to undefined) and builds session 2 (reassigning activeRouter to it) —
+    // exactly the identity-guarded handoff in extension.ts's dispose().
+    const view2 = fakeView();
+    provider.resolveWebviewView(view2);
+    view1.webview.postMessage.mockClear();
+    view2.webview.postMessage.mockClear();
+
+    const runner = reviewRunnerMocks.instances[0];
+    runner.onChange('repo-a', 'review-3');
+
+    expect(view2.webview.postMessage).toHaveBeenCalledWith({
+      type: 'event',
+      event: 'review.changed',
+      data: { id: 'review-3' },
+    });
+    expect(view1.webview.postMessage).not.toHaveBeenCalled();
   });
 });
