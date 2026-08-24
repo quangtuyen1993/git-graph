@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as vscode from 'vscode';
 import type { WebviewHost } from '../types/webview-host.types';
 
@@ -56,6 +57,13 @@ export class GitGraphWebviewProvider implements vscode.WebviewViewProvider {
       vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview', 'assets', `${this.spec.asset}.css`)
     );
 
+    const globalStyleFsUri = vscode.Uri.joinPath(
+      this.extensionUri, 'dist', 'webview', 'assets', 'global.css'
+    );
+    const globalStyleLink = fs.existsSync(globalStyleFsUri.fsPath)
+      ? `<link rel="stylesheet" href="${webview.asWebviewUri(globalStyleFsUri)}">\n    `
+      : '';
+
     return /*html*/ `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -68,12 +76,12 @@ export class GitGraphWebviewProvider implements vscode.WebviewViewProvider {
       img-src ${webview.cspSource} data: https://www.gravatar.com;
       font-src ${webview.cspSource};
     ">
-    <link rel="stylesheet" href="${styleUri}">
+    ${globalStyleLink}<link rel="stylesheet" href="${styleUri}">
     <title>${this.spec.title}</title>
 </head>
 <body>
     <div id="app"></div>
-    <script nonce="${nonce}" src="${scriptUri}"></script>
+    <script type="module" nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;
   }

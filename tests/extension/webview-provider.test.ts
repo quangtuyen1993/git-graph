@@ -1,10 +1,17 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('vscode', () => ({
   Uri: {
-    joinPath: (...parts: Array<{ toString(): string } | string>) => ({
-      toString: () => parts.map(String).join('/'),
-    }),
+    joinPath: (...parts: Array<{ toString(): string } | string>) => {
+      const joined = parts.map(String).join('/');
+      return {
+        toString: () => joined,
+        fsPath: joined,
+      };
+    },
   },
 }));
 
@@ -61,6 +68,7 @@ describe('GitGraphWebviewProvider', () => {
 
     expect(view.webview.options).toMatchObject({ enableScripts: true });
     expect(view.webview.html).toContain('<div id="app">');
+    expect(view.webview.html).toContain('type="module"');
     expect(createSession).toHaveBeenCalledWith(view);
   });
 
@@ -98,5 +106,28 @@ describe('GitGraphWebviewProvider', () => {
     expect(view.webview.html).toContain('assets/review.css');
     expect(view.webview.html).toContain('<title>Code Review</title>');
     expect(view.webview.html).not.toContain('assets/main.js');
+    expect(view.webview.html).toContain('type="module"');
+  });
+
+  it('links the shared global stylesheet when it exists on disk', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wvp-'));
+    fs.mkdirSync(path.join(tempDir, 'dist', 'webview', 'assets'), { recursive: true });
+    fs.writeFileSync(path.join(tempDir, 'dist', 'webview', 'assets', 'global.css'), '/* shared */');
+
+    const provider = new GitGraphWebviewProvider({ toString: () => tempDir } as never, createSession);
+    const view = createFakeView();
+
+    provider.resolveWebviewView(view as never);
+
+    expect(view.webview.html).toContain('assets/global.css');
+  });
+
+  it('omits the shared global stylesheet link when it does not exist on disk', () => {
+    const provider = new GitGraphWebviewProvider({ toString: () => '/extension' } as never, createSession);
+    const view = createFakeView();
+
+    provider.resolveWebviewView(view as never);
+
+    expect(view.webview.html).not.toContain('assets/global.css');
   });
 });
