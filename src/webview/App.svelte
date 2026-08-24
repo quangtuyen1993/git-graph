@@ -1560,11 +1560,16 @@
         on:reset={() => handlePanelReset('right')}
       />
       <aside class="right-panel" style="width: {rightPanelWidth}px;">
-        <div class="right-panel-header">
-          <span class="right-panel-title">{rightPanelMode === 'review' ? 'COMPARE' : 'COMMIT'}</span>
-          <button class="close-btn" aria-label="Close panel" title="Close panel" on:click={closeRightPanel}><Icon name="close" /></button>
-        </div>
+        <!--
+          Only the review panel gets a separate title bar. The commit detail
+          owns its own header — its CHANGED FILES row is the panel title, so
+          there is no redundant "COMMIT" bar stacked above it.
+        -->
         {#if rightPanelMode === 'review'}
+          <div class="right-panel-header">
+            <span class="right-panel-title">COMPARE</span>
+            <button class="close-btn" aria-label="Close panel" title="Close panel" on:click={closeRightPanel}><Icon name="close" /></button>
+          </div>
           <AIReviewPanel
             providers={aiProviders}
             branches={branches.map(b => ({ name: b.name, current: b.current }))}
@@ -1591,6 +1596,7 @@
             commit={detailCommit}
             files={detailFiles}
             loading={detailLoading}
+            on:close={closeRightPanel}
             on:openFile={(e) => bridge.send('ui.openDiff', e.detail)}
           />
         {/if}
@@ -1782,7 +1788,7 @@
   .right-panel-header {
     display: flex;
     align-items: center;
-    height: 32px;
+    height: var(--panel-header-height, 32px);
     padding: 0 6px 0 12px;
     border-bottom: 1px solid var(--vscode-panel-border, #2b2b2b);
     flex-shrink: 0;
@@ -2072,7 +2078,7 @@
     display: none;
   }
 
-  .container.compact .right-panel-header {
-    height: 24px;
+  .container.compact {
+    --panel-header-height: 24px;
   }
 </style>

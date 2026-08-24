@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { cleanup, fireEvent, render } from '@testing-library/svelte';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import CommitDetail from '../../src/webview/components/detail/CommitDetail.svelte';
 
 const commit = {
@@ -183,5 +183,34 @@ describe('CommitDetail alignment', () => {
     expect(treeSource).toContain('calc(var(--detail-gutter, 16px) + var(--file-indent))');
     // The old rule added a bare 8px, which is what pushed rows out of line.
     expect(treeSource).not.toMatch(/padding:\s*\d+px 8px \d+px calc\(8px/);
+  });
+});
+
+describe('CommitDetail owns the panel header', () => {
+  afterEach(cleanup);
+
+  it('carries the close action in its own title row', async () => {
+    const { component, getByRole } = render(CommitDetail, { commit, files, loading: false });
+    const onClose = vi.fn();
+    component.$on('close', onClose);
+
+    await fireEvent.click(getByRole('button', { name: 'Close panel' }));
+
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('keeps the title row when no commit is selected, so the panel can still be closed', () => {
+    const { getByRole, container } = render(CommitDetail, { commit: null, files: null, loading: false });
+
+    expect(getByRole('button', { name: 'Close panel' })).toBeEnabled();
+    expect(container.querySelector('.files-title')).toHaveTextContent('CHANGED FILES');
+    expect(container.querySelector('.detail-empty')).toBeTruthy();
+  });
+
+  it('makes the title row the first element of the panel', () => {
+    const { container } = render(CommitDetail, { commit, files, loading: false });
+    const panel = container.querySelector('.detail-panel')!;
+
+    expect(panel.firstElementChild).toHaveClass('detail-files-header');
   });
 });

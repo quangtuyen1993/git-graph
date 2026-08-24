@@ -90,14 +90,9 @@
   }
 </script>
 
-{#if !commit}
-  <div class="detail-empty">
-    <p>Select a commit to view details</p>
-  </div>
-{:else}
-  <div class="detail-panel">
-    <!-- Changed files header -->
-    <div class="detail-files-header">
+<div class="detail-panel">
+  <!-- This row IS the panel title: there is no separate "COMMIT" bar above it -->
+  <div class="detail-files-header">
       <span class="files-title">CHANGED FILES</span>
       <span class="files-count-badge">{files?.length ?? 0}</span>
       <span class="files-total-stats">
@@ -124,8 +119,20 @@
           on:click={() => { viewMode = 'flat'; }}
         ><Icon name="list-flat" /></button>
       </span>
+      <button
+        type="button"
+        class="detail-close"
+        aria-label="Close panel"
+        title="Close panel"
+        on:click={() => dispatch('close')}
+      ><Icon name="close" /></button>
     </div>
 
+  {#if !commit}
+    <div class="detail-empty">
+      <p>Select a commit to view details</p>
+    </div>
+  {:else}
     <!-- Filter -->
     <div class="detail-filter">
       <input
@@ -195,8 +202,8 @@
         <div class="detail-message">{bodyText}</div>
       {/if}
     </div>
-  </div>
-{/if}
+  {/if}
+</div>
 
 <style>
   .detail-empty {
@@ -307,6 +314,32 @@
     color: var(--vscode-foreground, #ccc);
   }
 
+  .detail-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 5px;
+    background: none;
+    color: var(--vscode-icon-foreground, #cccccc);
+    cursor: pointer;
+    opacity: 0.7;
+    flex-shrink: 0;
+  }
+
+  .detail-close:hover {
+    opacity: 1;
+    background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+  }
+
+  .detail-close:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007acc);
+    outline-offset: -1px;
+  }
+
   .view-toggle {
     margin-left: auto;
     display: flex;
@@ -346,12 +379,16 @@
   }
 
   /* Files header — now the first row in the panel */
+  /* The panel's title bar: same metrics as the review panel's, so the two
+     modes line up when you switch between them. */
   .detail-files-header {
     flex-shrink: 0;
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 12px var(--detail-gutter) 8px;
+    height: var(--panel-header-height, 32px);
+    padding: 0 6px 0 var(--detail-gutter);
+    border-bottom: 1px solid var(--vscode-panel-border, #2b2b2b);
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
@@ -390,7 +427,7 @@
 
   /* Filter */
   .detail-filter {
-    margin: 0 0 8px;
+    margin: 8px 0;
     padding: 0 var(--detail-gutter);
   }
 
