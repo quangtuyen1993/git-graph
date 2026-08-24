@@ -75,8 +75,12 @@ document provider) giữ nguyên.
 ### Thành phần
 
 **`providers/webview-provider.ts`** — `implements vscode.WebviewViewProvider`.
-- `resolveWebviewView(view)`: set `options` (`enableScripts`, `localResourceRoots`,
-  `retainContextWhenHidden`), set `html`, tạo session.
+- `resolveWebviewView(view)`: set `options` (`enableScripts`, `localResourceRoots`),
+  set `html`, tạo session. `retainContextWhenHidden` KHÔNG thuộc `WebviewOptions`
+  (đó là thành viên của `WebviewPanelOptions`, dành cho `WebviewPanel`) nên không set
+  ở đây — với `WebviewView`, kênh có hiệu lực là đối số thứ ba của
+  `registerWebviewViewProvider` (cộng với khoá trang trí `webviewOptions` trong
+  `package.json`, xem R2).
 - Giữ `getHtmlContent()` và `getNonce()` nguyên vẹn.
 - **Xoá:** `openPanel()`, `rootPanel`, `openRepositoryPanel()`, `repositoryPanels`,
   `canonicalizePath`, `PanelRequest`, `CreatePanelSession`.
@@ -163,7 +167,7 @@ refactor riêng, ngoài phạm vi.
 
 Compact mode thu hồi phần chrome. Ngân sách dọc ở panel cao 250px: toolbar 32px +
 `.table-header` 24px = 56px chrome, còn ~194px ≈ 6.0 dòng. Sau compact: toolbar 24px,
-ẩn `.table-header` → ~226px ≈ 7.0 dòng, và bỏ hai đường viền chia cắt trong khung vốn thấp.
+ẩn `.table-header` → ~226px ≈ 7.0 dòng.
 
 ```ts
 // src/webview/lib/panel-layout.ts
@@ -174,9 +178,11 @@ export function calculateDensity(
 
 Một ngưỡng duy nhất tại 320px. Hai ngưỡng trở lên buộc phải test tổ hợp mà không đáng.
 `App.svelte` theo dõi `window.innerHeight` (hiện chỉ theo dõi `innerWidth`) và gắn
-`class:compact` lên root; phần còn lại là CSS thuần: toolbar 32→24px, ẩn `.status`,
-ẩn `.table-header`, bỏ padding thừa trong `CommitDetail`. Kéo panel cao lên hoặc
-maximize thì thoát compact tự động — không state nào phải nhớ.
+`class:compact` lên root; phần còn lại là CSS thuần: chỉ bốn selector đổi —
+`.toolbar` (32→24px), `.status`, `.table-header` và `.right-panel-header`. Không đụng
+đường viền chia cắt hay padding của `CommitDetail`; tiêu chí số dòng vẫn đạt vì
+`box-sizing: border-box` áp dụng toàn cục. Kéo panel cao lên hoặc maximize thì thoát
+compact tự động — không state nào phải nhớ.
 
 **Chiều ngang thoải mái hơn trước.** Bottom Panel rộng bằng cả workbench thay vì một
 editor column. `calculatePanelLayout` giữ nguyên không sửa: nó vốn viết để co lại khi

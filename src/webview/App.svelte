@@ -157,8 +157,9 @@
   let rightPanelOpen = false;
   let rightPanelMode: 'detail' | 'review' = 'detail';
   // The widths the user asked for. Only a drag, a reset or a restore writes
-  // these; the rendered widths below are derived, so a transient narrow
-  // viewport squeezes the panels without destroying the request.
+  // these; the rendered widths below are a pure projection of them, so
+  // toggling the sidebar or dragging the panel narrow squeezes the panels
+  // without destroying what the user dragged them to.
   let desiredLeftWidth = defaultPanelWidths.left;
   let desiredRightWidth = defaultPanelWidths.right;
   let viewportWidth = typeof window === 'undefined' ? 1400 : window.innerWidth;

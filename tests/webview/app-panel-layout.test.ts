@@ -62,7 +62,7 @@ describe('App panel sizing', () => {
     on.mockClear();
   });
 
-  it('restores a dragged sidebar width after a diff editor transiently narrows the webview', async () => {
+  it('restores a dragged sidebar width after a transient viewport narrowing', async () => {
     stubState();
     vi.stubGlobal('acquireVsCodeApi', () => ({ postMessage: vi.fn(), getState: () => null, setState: vi.fn() }));
     setViewportWidth(1400);
@@ -76,7 +76,7 @@ describe('App panel sizing', () => {
     const draggedWidth = leftPanelWidth(container);
     expect(draggedWidth).toBeGreaterThan(300);
 
-    // Opening a diff beside the webview shrinks its column, then closing it restores.
+    // Narrowing the viewport (e.g. dragging the panel short) shrinks the column, then widening it restores.
     setViewportWidth(600);
     await waitFor(() => expect(leftPanelWidth(container)).toBeLessThan(draggedWidth));
     setViewportWidth(1400);

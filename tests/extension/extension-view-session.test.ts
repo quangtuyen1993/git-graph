@@ -106,22 +106,15 @@ vi.mock('../../src/extension/services/ai-review.service', () => ({
 import { activate } from '../../src/extension/extension';
 import type { Request } from '../../src/extension/types/messages.types';
 
-interface FakePanel {
+interface FakeView {
   webview: {
     html: string;
     cspSource: string;
     asWebviewUri(uri: unknown): unknown;
     onDidReceiveMessage(callback: (message: Request) => void): { dispose(): void };
     postMessage: ReturnType<typeof vi.fn>;
+    options: unknown;
   };
-  reveal: ReturnType<typeof vi.fn>;
-  onDidDispose(callback: () => void): { dispose(): void };
-  receive(message: Request): void;
-  disposePanel(): void;
-}
-
-interface FakeView {
-  webview: FakePanel['webview'] & { options: unknown };
   visible: boolean;
   onDidDispose(callback: () => void): { dispose(): void };
   onDidChangeVisibility(callback: () => void): { dispose(): void };
@@ -201,10 +194,10 @@ function sentEvents(view: FakeView): string[] {
     .map((message) => message.event as string);
 }
 
-async function responseFor(panel: FakePanel | FakeView, id: string): Promise<Record<string, unknown>> {
+async function responseFor(view: FakeView, id: string): Promise<Record<string, unknown>> {
   let response: Record<string, unknown> | undefined;
   await vi.waitFor(() => {
-    response = panel.webview.postMessage.mock.calls
+    response = view.webview.postMessage.mock.calls
       .map(([message]) => message as Record<string, unknown>)
       .find(message => message.type === 'response' && message.id === id);
     expect(response).toBeDefined();

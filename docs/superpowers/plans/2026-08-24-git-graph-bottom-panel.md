@@ -1077,14 +1077,22 @@ Expected: PASS.
 
 - [ ] **Step 6: Kiểm thủ công (bắt buộc — không có test tự động cho phần này)**
 
-Bấm F5 trong VS Code để mở Extension Development Host, mở một repo có submodule, rồi xác nhận từng mục:
+Bấm F5 trong VS Code để mở Extension Development Host, mở một repo có submodule, rồi xác nhận từng mục. Mỗi mục phải đo được — nghĩa là một người bất kỳ có thể nói pass/fail mà không cần đoán:
 
-1. View "Git Graph" xuất hiện ở bottom Panel cạnh Terminal/Debug Console, có icon.
+1. View ở bottom Panel cạnh Terminal/Debug Console có tab đọc đúng chữ **"Git Graph"**. (Container view trong bottom Panel hiện ra dưới dạng tiêu đề chữ, không phải icon — icon chỉ là affordance của activity bar, nên đừng tìm icon.)
 2. Chuyển sang tab Terminal rồi quay lại: scroll position, commit đang chọn, kết quả AI review còn nguyên (chứng minh `retainContextWhenHidden` có hiệu lực).
-3. Chuột phải tab panel → Hide, rồi bật lại qua `Git Graph Pro: Open`: graph load bình thường; tạo một commit mới và xác nhận graph chỉ refresh **một lần** (không nhân đôi watcher).
+3. Chuột phải tab panel → Hide, rồi bật lại qua `Git Graph Pro: Open`. Mở `Developer: Open Webview Developer Tools`, tạo **đúng một** commit mới ở repo đang mở, và đếm số request `graph.build` xuất hiện — phải là 1. (Thay thế: đếm số lần `createFileSystemWatcher` được gọi trong log extension host — cũng phải là 1 lần rebind, không nhân đôi.) Không chấp nhận đánh giá "refresh không bị nhân đôi" bằng mắt thường — hai watcher bắn cách nhau ~0ms, mắt người không phân biệt được.
 4. Click submodule ở sidebar: graph đổi ngay trong view; dropdown chứa cả repo cha lẫn submodule; chọn lại repo cha thì quay về được.
 5. Mở diff từ một commit: diff hiện ở khu vực editor, không đè lên graph.
 6. Chạy AI review rồi bấm mở kết quả: file `.md` mở ở editor.
+7. Mở một workspace KHÔNG có git repo nào, và riêng một lần nữa với multi-root workspace. Activation giờ chuyển từ "user gõ lệnh" sang "VS Code khôi phục tab panel", nên extension có thể activate ở nơi chưa từng mở graph — kể cả workspace không có repo. Xác nhận empty state hợp lý (thông báo rõ ràng), không phải một mảng lỗi đỏ.
+8. Layout qua một chu kỳ hide/show: kéo panel thấp xuống cho tới khi vào compact mode, chuyển sang tab Terminal, quay lại tab Git Graph: compact mode vẫn đúng và các dòng graph vẫn lấp đầy panel (không co lại thành normal rồi phải tự chỉnh).
+9. Maximise panel bằng lệnh `workbench.action.toggleMaximizedPanel`: graph lấp đầy toàn bộ chiều cao, không có dải trống, không có thanh cuộn ngang.
+10. Một submodule sâu hai cấp: mở nó, quay về repo cha, rồi quay tiếp về repo gốc (root) — đây chính là ca mà danh sách "repo đã ghé qua" (visited repository list) được thiết kế để xử lý.
+11. Sau khi ghé một submodule, Hide view rồi mở lại. Kết quả **kỳ vọng**: quay về đúng repo của workspace, và submodule vừa ghé biến mất khỏi nhóm "Repositories" trong dropdown. Đây là hành vi được chấp nhận, không phải bug — session được dựng lại từ danh sách repo tại thời điểm activation mỗi lần view được resolve lại.
+12. Chạy `gitGraphPro.open` khi panel đã **đóng hẳn** (dùng lệnh `workbench.action.closePanel`) — đây là trạng thái khác với việc view chỉ đang bị ẩn (Hide). Xác nhận panel mở lại và graph load bình thường.
+13. Thử một theme sáng mà nền panel khác nền editor (ví dụ Quiet Light, Solarized Light) — webview vẫn tô `--vscode-editor-background`, nên ghi lại nếu thấy đường ráp (seam) rõ giữa panel và webview.
+14. Chuyển sang tab Terminal, tạo **vài** commit ở repo đang mở, quay lại tab Git Graph: graph cập nhật đúng **một lần** VÀ mọi commit mới đều có mặt (không thiếu, không cần refresh tay).
 
 Ghi lại mục nào fail; sửa trước khi commit.
 

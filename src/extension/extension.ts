@@ -6,8 +6,6 @@ import { GitService } from './services/git.service';
 import { buildReviewPayload } from './services/review-payload';
 import type { WebviewHost } from './types/webview-host.types';
 
-let webviewProvider: GitGraphWebviewProvider;
-
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const workspaceFolders = vscode.workspace.workspaceFolders;
   const repos: RepositoryInfo[] = [];
@@ -432,7 +430,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return dispose;
   }
 
-  webviewProvider = new GitGraphWebviewProvider(
+  const webviewProvider = new GitGraphWebviewProvider(
     context.extensionUri,
     (host) => createSession(host),
   );
@@ -452,5 +450,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 }
 
 export function deactivate(): void {
-  // Panel-owned resources are disposed by their panel disposal listeners.
+  // Nothing to do here: each session's disposer is registered on the view's
+  // onDidDispose and is also invoked by the provider when the view is
+  // resolved again, so teardown is driven by view disposal, not by deactivate.
 }

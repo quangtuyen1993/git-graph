@@ -41,9 +41,9 @@ export const defaultPanelWidths = { left: 260, right: 480 };
 /**
  * Derives the rendered panel widths from the widths the user asked for.
  *
- * This is a pure projection: the requested widths are never rewritten, so a
- * transient narrow viewport (a diff editor opening beside the webview) squeezes
- * the panels without destroying what the user dragged them to.
+ * This is a pure projection: the requested widths are never rewritten, so
+ * toggling the sidebar or dragging the panel narrow squeezes the rendered
+ * panels without destroying what the user dragged them to.
  */
 export function calculatePanelLayout({
   viewportWidth,
