@@ -1,9 +1,0 @@
-{
-  "circuit_breaker": {
-    "consecutive_failures": 1,
-    "disabled_until": null
-  },
-  "last_run": "2026-08-24T04:26:18.071Z",
-  "total_processed": 0,
-  "total_queued_for_approval": 0
-}
