@@ -162,8 +162,8 @@ node) phải khớp DOM row ở mọi giá trị — lệch 1px là đường n�
 refactor riêng, ngoài phạm vi.
 
 Compact mode thu hồi phần chrome. Ngân sách dọc ở panel cao 250px: toolbar 32px +
-header cột graph 32px = 64px chrome, còn ~186px ≈ 5.8 dòng. Sau compact: toolbar 24px,
-ẩn header cột → ~210px ≈ 6.5 dòng, và bỏ hai đường viền chia cắt trong khung vốn thấp.
+`.table-header` 24px = 56px chrome, còn ~194px ≈ 6.0 dòng. Sau compact: toolbar 24px,
+ẩn `.table-header` → ~226px ≈ 7.0 dòng, và bỏ hai đường viền chia cắt trong khung vốn thấp.
 
 ```ts
 // src/webview/lib/panel-layout.ts
@@ -175,7 +175,7 @@ export function calculateDensity(
 Một ngưỡng duy nhất tại 320px. Hai ngưỡng trở lên buộc phải test tổ hợp mà không đáng.
 `App.svelte` theo dõi `window.innerHeight` (hiện chỉ theo dõi `innerWidth`) và gắn
 `class:compact` lên root; phần còn lại là CSS thuần: toolbar 32→24px, ẩn `.status`,
-ẩn header cột graph, bỏ padding thừa trong `CommitDetail`. Kéo panel cao lên hoặc
+ẩn `.table-header`, bỏ padding thừa trong `CommitDetail`. Kéo panel cao lên hoặc
 maximize thì thoát compact tự động — không state nào phải nhớ.
 
 **Chiều ngang thoải mái hơn trước.** Bottom Panel rộng bằng cả workbench thay vì một
@@ -235,7 +235,7 @@ Checklist kiểm thủ công (F5):
 
 - **Deliverable:** `calculateDensity`, theo dõi `window.innerHeight`, CSS compact.
 - **Phụ thuộc:** Phase 2.
-- **Nghiệm thu:** panel ~250px hiển thị ≥6 dòng commit, không có thanh cuộn ngang;
+- **Nghiệm thu:** panel ~250px hiển thị ≥7 dòng commit, không có thanh cuộn ngang;
   kéo cao lên thì trở lại bình thường.
 - **Ship độc lập:** có.
 
