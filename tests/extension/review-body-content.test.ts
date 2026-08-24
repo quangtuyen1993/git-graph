@@ -26,10 +26,11 @@ let store: ReviewStore;
 function baseInput(provider: string): StartReviewInput {
   return {
     repoId: REPO,
-    sourceBranch: 'main',
-    sourceSha: 'a'.repeat(40),
-    targetBranch: 'feat/x',
-    targetSha: 'b'.repeat(40),
+    kind: 'branch',
+    baseRef: 'main',
+    baseSha: 'a'.repeat(40),
+    headRef: 'feat/x',
+    headSha: 'b'.repeat(40),
     provider,
     model: 'default',
     payloadText: 'payload',

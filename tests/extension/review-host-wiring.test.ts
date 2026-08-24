@@ -133,10 +133,11 @@ let subscriptions: Array<{ dispose(): unknown }>;
 function persistedEntry(over: Partial<ReviewEntry> = {}): ReviewEntry {
   return {
     id: ENTRY_ID,
-    sourceBranch: 'main',
-    sourceSha: 'a'.repeat(40),
-    targetBranch: 'feat/x',
-    targetSha: 'b'.repeat(40),
+    kind: 'branch',
+    baseRef: 'main',
+    baseSha: 'a'.repeat(40),
+    headRef: 'feat/x',
+    headSha: 'b'.repeat(40),
     provider: 'claude',
     model: 'sonnet',
     status: 'done',
@@ -233,8 +234,8 @@ describe('the review view without a graph webview', () => {
 
     expect(runnerMocks.start).toHaveBeenCalledWith(expect.objectContaining({
       repoId: REPO_ID,
-      sourceBranch: 'main',
-      targetBranch: 'feat/x',
+      baseRef: 'main',
+      headRef: 'feat/x',
       provider: 'claude',
       model: 'sonnet',
     }));

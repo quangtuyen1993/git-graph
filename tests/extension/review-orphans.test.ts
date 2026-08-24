@@ -10,10 +10,11 @@ let store: ReviewStore;
 function entry(id: string, status: ReviewEntry['status']): ReviewEntry {
   return {
     id,
-    sourceBranch: 'main',
-    sourceSha: 'a'.repeat(40),
-    targetBranch: 'feat/x',
-    targetSha: 'b'.repeat(40),
+    kind: 'branch',
+    baseRef: 'main',
+    baseSha: 'a'.repeat(40),
+    headRef: 'feat/x',
+    headSha: 'b'.repeat(40),
     provider: 'claude',
     model: 'sonnet',
     status,

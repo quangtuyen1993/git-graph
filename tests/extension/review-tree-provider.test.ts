@@ -19,10 +19,11 @@ import type { ReviewEntry } from '../../src/extension/services/review-store';
 function entry(over: Partial<ReviewEntry> = {}): ReviewEntry {
   return {
     id: 'aaaaaaa..bbbbbbb.claude.sonnet',
-    sourceBranch: 'main',
-    sourceSha: 'a'.repeat(40),
-    targetBranch: 'feat/graph',
-    targetSha: 'b'.repeat(40),
+    kind: 'branch',
+    baseRef: 'main',
+    baseSha: 'a'.repeat(40),
+    headRef: 'feat/graph',
+    headSha: 'b'.repeat(40),
     provider: 'claude',
     model: 'sonnet',
     status: 'done',
@@ -71,8 +72,8 @@ describe('formatDescription', () => {
     const now = new Date('2026-08-24T10:13:00Z').getTime();
     const recovered = entry({
       status: 'interrupted',
-      sourceSha: '',
-      targetSha: '',
+      baseSha: '',
+      headSha: '',
       startedAt: new Date(0).toISOString(),
       finishedAt: undefined,
     });
