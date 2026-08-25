@@ -157,7 +157,7 @@ describe('Commit search in the graph toolbar', () => {
     expect(document.activeElement).toBe(input);
   });
 
-  it('drops results and the highlight when a refresh brings a new layout', async () => {
+  it('re-resolves an active search against a new layout without ever using a stale row', async () => {
     const { container, getByLabelText, layout, search, send } = await searchFor('fix', {
       hashes: ['a'.repeat(40), 'b'.repeat(40)],
       rows: { ['a'.repeat(40)]: 12, ['b'.repeat(40)]: 40 },
@@ -166,34 +166,68 @@ describe('Commit search in the graph toolbar', () => {
     expect(search.textContent).toContain('1/2');
 
     // Row indexes belong to the layout that produced them; a new layoutVersion
-    // makes every held hash a stale lookup that `graph.getRow` would reject.
+    // makes every held hash a stale lookup that `graph.getRow` would reject. The
+    // query is re-run instead of dropped, so the box does not go dead holding a
+    // query that the user would have to edit before it fires again.
     layout.version = 2;
     const callsBeforeRefresh = send.mock.calls.length;
     await fireEvent.click(getByLabelText('Refresh'));
     await settle();
 
-    await waitFor(() => expect(container.querySelector('.search-match')).toBeNull());
-    expect(container.querySelector('.search-match-active')).toBeNull();
-    expect((container.querySelector('.commit-search') as HTMLElement).textContent).not.toContain('1/2');
-
-    const staleRowLookups = send.mock.calls
-      .slice(callsBeforeRefresh)
+    const callsAfterRefresh = send.mock.calls.slice(callsBeforeRefresh);
+    const staleRowLookups = callsAfterRefresh
       .filter(([method, params]) => method === 'graph.getRow'
         && (params as { layoutVersion: number }).layoutVersion === 1);
     expect(staleRowLookups).toEqual([]);
+
+    expect(callsAfterRefresh
+      .filter(([method]) => method === 'git.searchCommits')
+      .map(([, params]) => params)).toEqual([{ query: 'fix' }]);
+    expect(callsAfterRefresh.some(([method, params]) => method === 'graph.getRow'
+      && (params as { layoutVersion: number }).layoutVersion === 2)).toBe(true);
+    await waitFor(() => expect((container.querySelector('.commit-search') as HTMLElement).textContent)
+      .toContain('1/2'));
+    expect(container.querySelector('.search-match')).not.toBeNull();
+  });
+
+  it('keeps the matches when a refresh rebuilds the same layout', async () => {
+    // The watcher fires on `.git/index`, which the built-in Git extension writes
+    // during ordinary status work, so a refresh lands mid-search routinely. When
+    // the layout it returns is the one the rows came from, nothing is stale.
+    const { container, getByLabelText, search, send } = await searchFor('fix', {
+      hashes: ['a'.repeat(40), 'b'.repeat(40)],
+      rows: { ['a'.repeat(40)]: 12, ['b'.repeat(40)]: 40 },
+    });
+    expect(search.textContent).toContain('1/2');
+    const searchesBeforeRefresh = send.mock.calls.filter(([method]) => method === 'git.searchCommits');
+
+    await fireEvent.click(getByLabelText('Refresh'));
+    await settle();
+
+    expect((container.querySelector('.commit-search') as HTMLElement).textContent).toContain('1/2');
+    expect(container.querySelector('.search-match')).not.toBeNull();
+    // Nothing to re-derive, so the host is not asked again either.
+    expect(send.mock.calls.filter(([method]) => method === 'git.searchCommits'))
+      .toHaveLength(searchesBeforeRefresh.length);
   });
 
   it('does not leave a stale "No commits found" behind a layout change', async () => {
-    const { container, getByLabelText, layout } = await searchFor('nothing', { hashes: [], rows: {} });
+    const fixtures: SearchFixtures = { hashes: [], rows: {} };
+    const { container, getByLabelText, layout } = await searchFor('nothing', fixtures);
     expect((container.querySelector('.commit-search') as HTMLElement).textContent)
       .toContain('No commits found');
 
+    // The rebuilt graph contains the commit the query missed a moment ago, so
+    // the readout has to be re-derived rather than either kept or blanked.
+    fixtures.hashes = ['a'.repeat(40)];
+    fixtures.rows!['a'.repeat(40)] = 5;
     layout.version = 2;
     await fireEvent.click(getByLabelText('Refresh'));
     await settle();
 
     await waitFor(() => expect((container.querySelector('.commit-search') as HTMLElement).textContent)
       .not.toContain('No commits found'));
+    expect((container.querySelector('.commit-search') as HTMLElement).textContent).toContain('1/1');
   });
 
   it('debounces typing into a single search request', async () => {

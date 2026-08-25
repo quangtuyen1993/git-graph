@@ -242,6 +242,9 @@
   let searchActiveIndex = 0;
   let searchMessage = '';
   let searchComponent: CommitSearch | undefined;
+  // The query the results on screen came from. Kept so a rebuilt layout can
+  // re-derive the matches instead of leaving the box holding a dead query.
+  let searchQuery = '';
   const searchGate = new LatestRequestGate();
 
   $: searchMatchSet = new Set(searchHashes);
@@ -648,15 +651,24 @@
         && hasWorkingTreeChanges(workingTreeStatus);
       totalRows = build.totalRows;
       maxLane = build.maxLane;
+      // Match rows are indexes into the layout that produced them, so only a
+      // genuinely new layout invalidates them. A refresh that lands on the same
+      // layoutVersion — the file watcher fires on `.git/index`, which the
+      // built-in Git extension writes during ordinary status work — leaves the
+      // search alone: dropping it there killed the feature mid-query, with the
+      // response gated away and the query still sitting in the input.
+      const layoutChanged = build.layoutVersion !== layoutVersion;
+      // When the layout really did change the rows are gone, so the query is
+      // re-run below rather than silently discarded; that also keeps a stale
+      // "No commits found" from surviving the rebuild.
+      const queryToReRun = layoutChanged ? searchQuery : '';
       layoutVersion = build.layoutVersion;
-      // Match rows are indexes into the layout that produced them, so a new
-      // layout invalidates them wholesale. Unconditional: gating on
-      // `searchHashes.length` would leave a stale "No commits found" on screen.
-      clearCommitSearch();
+      if (layoutChanged) clearCommitSearch();
       graphWindow = nextWindow;
       currentStartRow = nextWindow.startRow;
       loading = false;
       status = formatFilterStatus(build.totalRows, branchFilters, nextBranches.length);
+      if (queryToReRun !== '') await runCommitSearch(queryToReRun);
     } catch (refreshError) {
       if (!graphRefreshGate.isLatest(refreshToken)) return;
       // A newer build is already on its way; dropping this result is correct.
@@ -1152,10 +1164,18 @@
   }
 
   async function handleCommitSearch(event: CustomEvent<{ query: string }>) {
-    const { query } = event.detail;
+    await runCommitSearch(event.detail.query);
+  }
+
+  /**
+   * Runs one search and reveals the first match. Called by the search box and
+   * again by `refreshGraph` when a rebuilt layout invalidated the held rows.
+   */
+  async function runCommitSearch(query: string) {
     if (classifyQuery(query) === 'empty') { clearCommitSearch(); return; }
 
     const token = searchGate.issue();
+    searchQuery = query;
     searching = true;
     searchMessage = '';
     try {
@@ -1208,6 +1228,7 @@
     searchHashes = [];
     searchActiveIndex = 0;
     searchMessage = '';
+    searchQuery = '';
     searching = false;
   }
 
