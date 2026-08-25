@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createRefreshScheduler, isSupersededError } from '../../src/webview/lib/graph-refresh';
+import {
+  createRefreshScheduler,
+  isBranchFilterUnresolvedError,
+  isSupersededError,
+} from '../../src/webview/lib/graph-refresh';
 
 describe('isSupersededError', () => {
   it('recognises the error kind carried across the bridge', () => {
@@ -14,6 +18,21 @@ describe('isSupersededError', () => {
   it('tolerates non-errors', () => {
     expect(isSupersededError(undefined)).toBe(false);
     expect(isSupersededError('boom')).toBe(false);
+  });
+});
+
+describe('isBranchFilterUnresolvedError', () => {
+  it('recognises the dead-filter kind carried across the bridge', () => {
+    const error = Object.assign(new Error('None of the requested branches could be resolved: gone'), {
+      kind: 'BRANCH_FILTER_UNRESOLVED',
+    });
+    expect(isBranchFilterUnresolvedError(error)).toBe(true);
+  });
+
+  it('does not confuse it with other failures', () => {
+    expect(isBranchFilterUnresolvedError(new Error('None of the requested branches could be resolved'))).toBe(false);
+    expect(isBranchFilterUnresolvedError(Object.assign(new Error('x'), { kind: 'GRAPH_BUILD_SUPERSEDED' }))).toBe(false);
+    expect(isBranchFilterUnresolvedError(null)).toBe(false);
   });
 });
 

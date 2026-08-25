@@ -119,19 +119,19 @@ describe('App sidebar primary actions', () => {
   });
 
   it('filters from the header and treats an empty selection as all branches', async () => {
-    const { getByRole } = await renderApp();
-    const filter = getByRole('combobox', { name: 'Filter graph by branch' });
+    const { getByLabelText, getByRole } = await renderApp();
 
     expect(send).toHaveBeenCalledWith('graph.build', { all: true });
 
-    await fireEvent.change(filter, { target: { value: 'main' } });
+    await fireEvent.click(getByLabelText('Filter graph by branch'));
+    await fireEvent.click(getByRole('checkbox', { name: 'main' }));
     await waitFor(() => expect(send).toHaveBeenCalledWith(
       'graph.build',
-      { branch: 'main', all: false },
+      { branches: ['main'], all: false },
     ));
 
     const buildCountAfterFiltering = send.mock.calls.filter(([method]) => method === 'graph.build').length;
-    await fireEvent.change(filter, { target: { value: '' } });
+    await fireEvent.click(getByRole('checkbox', { name: 'main' }));
 
     await waitFor(() => {
       const buildCalls = send.mock.calls.filter(([method]) => method === 'graph.build');
@@ -198,15 +198,13 @@ describe('App sidebar primary actions', () => {
       { name: 'repo', path: '/repo', active: true },
       { name: 'repo-two', path: '/repo-two', active: false },
     ];
-    const { getByRole } = await renderApp({ repos });
+    const { getByLabelText, getByRole } = await renderApp({ repos });
 
-    await fireEvent.change(
-      getByRole('combobox', { name: 'Filter graph by branch' }),
-      { target: { value: 'main' } },
-    );
+    await fireEvent.click(getByLabelText('Filter graph by branch'));
+    await fireEvent.click(getByRole('checkbox', { name: 'main' }));
     await waitFor(() => expect(send).toHaveBeenCalledWith(
       'graph.build',
-      { branch: 'main', all: false },
+      { branches: ['main'], all: false },
     ));
 
     const buildCount = send.mock.calls.filter(([method]) => method === 'graph.build').length;
@@ -220,7 +218,7 @@ describe('App sidebar primary actions', () => {
       expect(send).toHaveBeenCalledWith('repo.switch', { path: '/repo-two' });
       expect(buildCalls.length).toBeGreaterThan(buildCount);
       expect(buildCalls.at(-1)).toEqual(['graph.build', { all: true }]);
-      expect(getByRole('combobox', { name: 'Filter graph by branch' })).toHaveValue('');
+      expect(getByLabelText('Filter graph by branch').textContent).toContain('All branches');
     });
   });
 });

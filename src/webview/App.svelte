@@ -1,7 +1,7 @@
 <script lang="ts">
   import { bridge } from './lib/message-bridge';
   import { onDestroy, onMount, tick } from 'svelte';
-  import { createRefreshScheduler, isSupersededError } from './lib/graph-refresh';
+  import { createRefreshScheduler, isBranchFilterUnresolvedError, isSupersededError } from './lib/graph-refresh';
   import { calculateVisibleRange, getTotalHeight, ROW_HEIGHT, BUFFER_ROWS } from './lib/virtual-scroll';
   import GraphCanvas from './components/graph/GraphCanvas.svelte';
   import ContextMenu from './components/actions/ContextMenu.svelte';
@@ -18,7 +18,8 @@
   import { calculateDensity, calculatePanelLayout, defaultPanelWidths, type PanelSide } from './lib/panel-layout';
   import CommitDetail from './components/detail/CommitDetail.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
-  import { localNameFor, resolvePullTarget } from './lib/branch-menu';
+  import { formatFilterStatus, localNameFor, resolvePullTarget } from './lib/branch-menu';
+  import BranchFilterDropdown from './components/toolbar/BranchFilterDropdown.svelte';
   import ResizeHandle from './components/layout/ResizeHandle.svelte';
   import CommitSearch from './components/toolbar/CommitSearch.svelte';
   import { classifyQuery, nextMatchIndex } from './lib/commit-search';
@@ -171,7 +172,7 @@
   let maxLane = 0;
   let layoutVersion: number | null = null;
   let graphWindow: GraphWindow | null = null;
-  let selectedBranchFilter: string | null = null;
+  let selectedBranchFilters: string[] = [];
   let selectedSidebarBranch: string | null = null;
   let focusedBranchHash: string | null = null;
   let branchHighlightTimer: ReturnType<typeof setTimeout> | undefined;
@@ -521,7 +522,7 @@
       workspaceSubmodules = repoResult.submodules ?? [];
       await loadFavourites(repoResult.repos.find((repo) => repo.active)?.path);
       await loadSidebarState(repoResult.repos.find((repo) => repo.active)?.path);
-      selectedBranchFilter = null;
+      selectedBranchFilters = [];
       clearBranchHighlight();
       selectedHash = null;
       selectedHashes = new Set();
@@ -559,7 +560,7 @@
 
   async function refreshGraph() {
     const refreshToken = graphRefreshGate.issue();
-    const branchFilter = selectedBranchFilter;
+    const branchFilters = selectedBranchFilters;
     graphWindowRequestGate.issue();
     loading = false;
 
@@ -571,8 +572,8 @@
         bridge.send('git.worktreeList') as Promise<typeof worktrees>,
         bridge.send('git.submoduleList') as Promise<SubmoduleEntry[]>,
         bridge.send('git.status').catch(() => null) as Promise<WorkingTreeStatus | null>,
-        bridge.send('graph.build', branchFilter
-          ? { branch: branchFilter, all: false }
+        bridge.send('graph.build', branchFilters.length > 0
+          ? { branches: branchFilters, all: false }
           : { all: true }) as Promise<{
           totalRows: number;
           maxLane: number;
@@ -612,13 +613,21 @@
       graphWindow = nextWindow;
       currentStartRow = nextWindow.startRow;
       loading = false;
-      status = branchFilter
-        ? `${build.totalRows} commits on ${branchFilter}`
-        : `${nextBranches.length} branches, ${build.totalRows} commits`;
+      status = formatFilterStatus(build.totalRows, branchFilters, nextBranches.length);
     } catch (refreshError) {
       if (!graphRefreshGate.isLatest(refreshToken)) return;
       // A newer build is already on its way; dropping this result is correct.
       if (isSupersededError(refreshError)) return;
+      // Every filtered ref is gone (the filtered branch was deleted). The
+      // scheduler's onError only logs, which would leave a stale graph and no
+      // explanation, so recover here: drop the filter, say why, rebuild.
+      if (isBranchFilterUnresolvedError(refreshError) && branchFilters.length > 0) {
+        selectedBranchFilters = [];
+        error = 'The branch filter no longer matches any branch — showing all branches.';
+        setTimeout(() => { error = ''; }, 5000);
+        await refreshGraph();
+        return;
+      }
       throw refreshError;
     }
   }
@@ -1021,8 +1030,14 @@
     }
   }
 
-  async function handleGraphBranchFilter(branchName: string) {
-    selectedBranchFilter = branchName || null;
+  /**
+   * One entry point for both pickers: the multi-select dropdown and the
+   * single-branch focus flow. Resets the selection-dependent view state
+   * (detail panel, scroll position) because the row indexes it points at
+   * belong to the layout being replaced.
+   */
+  async function handleGraphBranchFilters(selected: string[]) {
+    selectedBranchFilters = selected;
     clearBranchHighlight();
     selectedHash = null;
     selectedHashes = new Set();
@@ -1039,6 +1054,10 @@
       error = e instanceof Error ? e.message : String(e);
       setTimeout(() => { error = ''; }, 5000);
     }
+  }
+
+  async function handleGraphBranchFilter(branchName: string) {
+    await handleGraphBranchFilters(branchName ? [branchName] : []);
   }
 
   /**
@@ -1764,17 +1783,11 @@
 
     <div class="toolbar-group">
       <span class="toolbar-glyph"><Icon name="git-branch" /></span>
-      <select
-        class="toolbar-select graph-branch-filter"
-        aria-label="Filter graph by branch"
-        value={selectedBranchFilter ?? ''}
-        on:change={(event) => handleGraphBranchFilter(event.currentTarget.value)}
-      >
-        <option value="">All branches</option>
-        {#each branches as branch (branch.name)}
-          <option value={branch.name}>{branch.name}</option>
-        {/each}
-      </select>
+      <BranchFilterDropdown
+        branches={branches.map((branch) => ({ name: branch.name }))}
+        selected={selectedBranchFilters}
+        on:change={(event) => handleGraphBranchFilters(event.detail.selected)}
+      />
     </div>
 
     <span class="status">{status}</span>
@@ -2138,10 +2151,6 @@
     outline: none;
     cursor: pointer;
     text-overflow: ellipsis;
-  }
-
-  .graph-branch-filter {
-    min-width: 110px;
   }
 
   .repo-name {

@@ -10,6 +10,17 @@ export function isSupersededError(error: unknown): boolean {
     && (error as { kind?: unknown }).kind === 'GRAPH_BUILD_SUPERSEDED';
 }
 
+/**
+ * The branch filter resolved to nothing — every requested ref is gone, e.g. the
+ * filtered branch was deleted. A dead filter is recoverable (fall back to all
+ * branches) so it is matched on the code the extension attaches, not on text.
+ */
+export function isBranchFilterUnresolvedError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && (error as { kind?: unknown }).kind === 'BRANCH_FILTER_UNRESOLVED';
+}
+
 export interface RefreshScheduler {
   schedule(): void;
   cancel(): void;
