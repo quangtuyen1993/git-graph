@@ -92,7 +92,50 @@
   let stashes: { index: number; message: string; date: string; branch: string; hash: string }[] = [];
   let worktrees: { path: string; head: string; branch: string | null; bare: boolean; isMain: boolean }[] = [];
   let submodules: SubmoduleEntry[] = [];
+  /**
+   * The banner text. Two kinds of message share it: transient notices, written
+   * only through `showTransientMessage`, and the fatal startup failure, written
+   * through `showFatalError` and never timed out.
+   */
   let error = '';
+
+  const TRANSIENT_MESSAGE_MS = 5000;
+  /** Handle of the timeout that owns the message currently on screen, if any. */
+  let transientMessageTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function cancelTransientMessage(): void {
+    if (transientMessageTimer !== undefined) clearTimeout(transientMessageTimer);
+    transientMessageTimer = undefined;
+  }
+
+  /**
+   * The only writer for the auto-clearing banner. Every notice used to arm its
+   * own uncancelled timer, so an earlier timer wiped a later message — and the
+   * fatal banner with it. Two guards prevent that: a new message cancels the
+   * pending timer, and a timer only clears the message it armed for, which it
+   * confirms by finding its own handle still current.
+   */
+  function showTransientMessage(message: string): void {
+    cancelTransientMessage();
+    error = message;
+    const handle = setTimeout(() => {
+      if (transientMessageTimer !== handle) return;
+      transientMessageTimer = undefined;
+      error = '';
+    }, TRANSIENT_MESSAGE_MS);
+    transientMessageTimer = handle;
+  }
+
+  /** Startup failed: the banner stays until the view is reloaded. */
+  function showFatalError(message: string): void {
+    cancelTransientMessage();
+    error = message;
+    status = 'Error';
+  }
+
+  function messageOf(cause: unknown): string {
+    return cause instanceof Error ? cause.message : String(cause);
+  }
 
   // Multi-repo state
   interface RepoEntry {
@@ -348,8 +391,8 @@
       await refreshGraph();
       await restorePanelState();
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-      status = 'Error';
+      // Fatal: the view never came up. No timer — this banner must stay.
+      showFatalError(messageOf(e));
     }
   });
 
@@ -365,6 +408,7 @@
       window.removeEventListener('resize', trackViewport);
       if (panelStateSaveTimer) clearTimeout(panelStateSaveTimer);
       if (columnStateSaveTimer) clearTimeout(columnStateSaveTimer);
+      cancelTransientMessage();
       refreshScheduler.cancel();
       invalidatedUnsubscribe?.();
     };
@@ -531,8 +575,7 @@
       detailFiles = null;
       await refreshGraph();
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-      setTimeout(() => { error = ''; }, 5000);
+      showTransientMessage(messageOf(e));
     }
   }
 
@@ -623,8 +666,7 @@
       // explanation, so recover here: drop the filter, say why, rebuild.
       if (isBranchFilterUnresolvedError(refreshError) && branchFilters.length > 0) {
         selectedBranchFilters = [];
-        error = 'The branch filter no longer matches any branch — showing all branches.';
-        setTimeout(() => { error = ''; }, 5000);
+        showTransientMessage('The branch filter no longer matches any branch — showing all branches.');
         await refreshGraph();
         return;
       }
@@ -749,8 +791,7 @@
         detailFiles = result.files;
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-      setTimeout(() => { error = ''; }, 5000);
+      showTransientMessage(messageOf(e));
     } finally {
       detailLoading = false;
     }
@@ -1025,8 +1066,7 @@
       clearBranchHighlight();
       await runDirectMutation('Checking out…', () => bridge.send('git.checkout', { ref }) as Promise<void>);
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-      setTimeout(() => { error = ''; }, 5000);
+      showTransientMessage(messageOf(e));
     }
   }
 
@@ -1051,8 +1091,7 @@
     try {
       await refreshGraph();
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-      setTimeout(() => { error = ''; }, 5000);
+      showTransientMessage(messageOf(e));
     }
   }
 
@@ -1098,8 +1137,7 @@
     } catch (e) {
       if (requestedLayoutVersion !== layoutVersion) return;
       clearBranchHighlight();
-      error = e instanceof Error ? e.message : String(e);
-      setTimeout(() => { error = ''; }, 5000);
+      showTransientMessage(messageOf(e));
     }
   }
 
@@ -1184,8 +1222,7 @@
     try {
       await runDirectMutation('Applying stash…', () => bridge.send('git.stashApply', { index: event.detail.index }) as Promise<void>);
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-      setTimeout(() => { error = ''; }, 5000);
+      showTransientMessage(messageOf(e));
     }
   }
 
@@ -1193,8 +1230,7 @@
     try {
       await bridge.send('ui.openFolder', { path: event.detail.path });
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-      setTimeout(() => { error = ''; }, 5000);
+      showTransientMessage(messageOf(e));
     }
   }
 
@@ -1276,8 +1312,7 @@
         await refreshGraph();
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-      setTimeout(() => { error = ''; }, 5000);
+      showTransientMessage(messageOf(e));
     }
   }
 
@@ -1337,12 +1372,6 @@
 
   /** One diff editor per changed file, so a wide diff stays reviewable. */
   const DIFF_WORKING_TREE_FILE_LIMIT = 10;
-
-  /** Same transient banner the catch handlers use — the only notice channel here. */
-  function showTransientMessage(message: string) {
-    error = message;
-    setTimeout(() => { error = ''; }, 5000);
-  }
 
   async function performContextMenuAction(
     event: CustomEvent<{ action: string }>,
