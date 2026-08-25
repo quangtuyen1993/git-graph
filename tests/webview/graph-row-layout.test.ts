@@ -72,6 +72,30 @@ describe('commit row message layout', () => {
     expect(chips).toEqual(['develop', 'v1.0.0', 'origin/develop']);
   });
 
+  it('keeps the highest-priority chip first so end-edge clipping drops remotes', async () => {
+    const { container } = await renderAppWithRow({
+      subject: 'chore: bump deps',
+      refs: ['origin/feature/long-remote-name', 'tag: v2.0.0', 'origin/main', 'HEAD -> main', 'release/1.2'],
+    });
+
+    const chipGroup = container.querySelector('.commit-row .ref-chips')!;
+    const chips = Array.from(chipGroup.children);
+
+    // .ref-chips packs from the start edge, so overflow is clipped at the END.
+    // The chip that must survive is therefore the first child, and
+    // sortRefsForRow puts HEAD there. jsdom does no layout, so this pins the
+    // ordering contract only; the clipping edge itself is verified manually.
+    expect(chips[0].classList.contains('ref-head')).toBe(true);
+    expect(chips[0].textContent?.trim()).toBe('main');
+
+    expect(chips.map((el) => el.textContent?.trim())).toEqual([
+      'main', 'release/1.2', 'v2.0.0', 'origin/feature/long-remote-name', 'origin/main',
+    ]);
+
+    // The lowest-priority chips sit last, where the clip starts.
+    expect(chips[chips.length - 1].classList.contains('ref-remote')).toBe(true);
+  });
+
   it('gives both the subject and every chip a title for the truncated case', async () => {
     const { container } = await renderAppWithRow({
       subject: 'a'.repeat(200),

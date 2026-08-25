@@ -2265,7 +2265,14 @@
     display: flex;
     gap: 6px;
     overflow: hidden;
-    justify-content: flex-end;
+    /* Pack from the start so the overflow lands on the END edge: `overflow:
+       hidden` clips whatever sits past the container's end, and `flex-end`
+       packing pushes the negative free space out through the START edge
+       instead, which would clip the HEAD/branch chips that sortRefsForRow
+       deliberately puts first. The group is still flush right without
+       `flex-end` because .commit-subject is `flex: 1 1 auto` and eats all the
+       free space in .col-message, leaving the chips against its right edge. */
+    justify-content: flex-start;
   }
 
   .loading {
