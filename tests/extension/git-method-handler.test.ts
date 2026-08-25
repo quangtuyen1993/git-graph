@@ -111,9 +111,19 @@ describe('handleGitMethod', () => {
     expect(result).toEqual(hashes);
   });
 
-  it('routes git.diffWorkingTree to the service', async () => {
-    const service = { ...fakeGitService, diffWorkingTree: async () => ({ files: [], raw: 'RAW' }) };
+  it('routes git.diffWorkingTree to the service, forwarding only the ref string', async () => {
+    const received: unknown[] = [];
+    const service = {
+      ...fakeGitService,
+      diffWorkingTree: async (ref: string) => {
+        received.push(ref);
+        return { files: [], raw: 'RAW' };
+      },
+    };
     const result = await handleGitMethod(service as unknown as GitService, 'git.diffWorkingTree', { ref: 'develop' });
+    expect(received).toHaveLength(1);
+    // Guards the `p.ref` extraction: passing `p` or `undefined` must fail here.
+    expect(received[0]).toBe('develop');
     expect(result).toEqual({ files: [], raw: 'RAW' });
   });
 });
