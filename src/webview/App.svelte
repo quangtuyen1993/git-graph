@@ -5,6 +5,7 @@
   import GraphCanvas from './components/graph/GraphCanvas.svelte';
   import ContextMenu from './components/actions/ContextMenu.svelte';
   import { isSidebarPersistedState, type SidebarPersistedState } from './lib/sidebar-state';
+  import { refDisplayName, refType, sortRefsForRow } from './lib/ref-chips';
   import type { MenuItem } from './types/menu.types';
   import { getColorRgb } from './lib/graph-colors';
   import Avatar from './components/common/Avatar.svelte';
@@ -1455,16 +1456,6 @@
     const years = Math.floor(months / 12);
     return `${years}y ago`;
   }
-
-  function getRefType(ref: string): 'head' | 'tag' | 'branch' {
-    if (ref.includes('HEAD')) return 'head';
-    if (ref.startsWith('tag:')) return 'tag';
-    return 'branch';
-  }
-
-  function getRefDisplayName(ref: string): string {
-    return ref.replace(/^tag:\s*/, '').replace(/^HEAD -> /, '');
-  }
 </script>
 
 <div class="container" class:compact={density === 'compact'}>
@@ -1685,10 +1676,15 @@
               >
                 <div class="col-graph"></div>
                 <div class="col-message">
-                  {#each node.refs as ref}
-                    <span class="ref-badge ref-{getRefType(ref)}">{getRefDisplayName(ref)}</span>
-                  {/each}
-                  <span class="commit-subject">{node.subject}</span>
+                  <span class="commit-subject" title={node.subject}>{node.subject}</span>
+                  {#if node.refs.length > 0}
+                    <span class="ref-chips">
+                      {#each sortRefsForRow(node.refs) as ref (ref)}
+                        <span class="ref-badge ref-{refType(ref)}" title={refDisplayName(ref)}
+                        >{refDisplayName(ref)}</span>
+                      {/each}
+                    </span>
+                  {/if}
                 </div>
                 <div class="col-date">{formatRelativeTime(node.authorDate)}</div>
                 <div class="col-sha">{node.abbreviatedHash}</div>
@@ -2132,12 +2128,10 @@
     min-width: 40px;
     padding-left: 8px;
     overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
     font-size: 13px;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
 
   .commit-row .col-date {
@@ -2185,6 +2179,9 @@
     color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d);
     font-weight: 600;
     font-size: 13px;
+    /* The message column no longer sets nowrap for its children, so the
+       refless working-changes label states it directly. */
+    white-space: nowrap;
   }
 
   /* Ref badges */
@@ -2195,7 +2192,10 @@
     font-size: 11px;
     font-weight: 600;
     white-space: nowrap;
-    flex-shrink: 0;
+    flex-shrink: 1;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .ref-branch {
@@ -2216,10 +2216,29 @@
     border: 1px solid rgba(106, 153, 85, 0.5);
   }
 
+  /* Remotes read as secondary: same shape as a local branch, muted text. */
+  .ref-remote {
+    background: rgba(0, 122, 204, 0.2);
+    color: var(--vscode-descriptionForeground, #767676);
+    border: 1px solid rgba(0, 122, 204, 0.4);
+  }
+
   .commit-subject {
+    flex: 1 1 auto;
+    min-width: 0;            /* a flex item never ellipsises without this */
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .ref-chips {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 50%;          /* chips never starve the subject */
+    display: flex;
+    gap: 6px;
+    overflow: hidden;
+    justify-content: flex-end;
   }
 
   .loading {
