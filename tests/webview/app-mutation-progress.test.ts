@@ -63,6 +63,44 @@ describe('App mutation progress', () => {
     return container.querySelector<HTMLElement>('[aria-live="polite"]');
   }
 
+  const AWAITING_CONFIRMATION_LABEL = 'Awaiting confirmation…';
+
+  /**
+   * Drives the reword flow far enough that the banner reads `label` and stays
+   * there: the confirmation prompt and the Git RPC are both deferred, so the
+   * mutation is genuinely pending when the assertions run.
+   */
+  async function startPendingMutation(label: string) {
+    const app = await renderRewordApp();
+
+    await waitFor(() => expect(progress(app.container)).toHaveTextContent('Preparing…'));
+    app.input.resolve('new message');
+    await waitFor(() => expect(progress(app.container)).toHaveTextContent(AWAITING_CONFIRMATION_LABEL));
+
+    if (label !== AWAITING_CONFIRMATION_LABEL) {
+      app.confirm.resolve(true);
+      await waitFor(() => expect(app.container.querySelector('.mutation-progress')).toHaveTextContent(label));
+    }
+
+    return app;
+  }
+
+  it('shows a spinner while a mutation runs', async () => {
+    const { container } = await startPendingMutation('Rewording commit…');
+    const banner = container.querySelector('.mutation-progress')!;
+    expect(banner.textContent).toContain('Rewording commit…');
+    expect(banner.querySelector('[role="status"]')).not.toBeNull();
+  });
+
+  it('hides the spinner while waiting on the user', async () => {
+    // Nothing is running during a confirmation prompt; a spinner there reads
+    // as a hang.
+    const { container } = await startPendingMutation(AWAITING_CONFIRMATION_LABEL);
+    const banner = container.querySelector('.mutation-progress')!;
+    expect(banner.textContent).toContain('Awaiting confirmation…');
+    expect(banner.querySelector('[role="status"]')).toBeNull();
+  });
+
   it('announces preparation and confirmation without announcing a cancelled reword as running', async () => {
     const app = await renderRewordApp();
 

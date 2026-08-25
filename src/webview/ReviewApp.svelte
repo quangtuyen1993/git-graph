@@ -5,6 +5,7 @@
   import FileTreeList from './components/detail/FileTreeList.svelte';
   import { buildPathTree } from './lib/path-tree';
   import Combobox from './components/Combobox.svelte';
+  import LoadingSpinner from './components/common/LoadingSpinner.svelte';
 
   type Mode = 'commit' | 'range' | 'branch';
   type ReviewStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
@@ -571,7 +572,10 @@
     </section>
 
     <section class="pane reviews-pane" aria-label="Reviews">
-      <h3>Reviews</h3>
+      <h3 class="reviews-title">
+        Reviews
+        {#if hasRunning}<LoadingSpinner label="Review running…" />{/if}
+      </h3>
       {#if reviews.length === 0}
         <p class="hint">No reviews yet.</p>
       {/if}
@@ -579,7 +583,14 @@
         {#each reviews as entry (entry.id)}
           <li class="review-row" class:latest={entry.id === latestStartedId}>
             <button class="open" title="Open review" on:click={() => rowAction('review.open', entry)}>
-              <span class="status status-{entry.status}">{statusIcon(entry.status)}</span>
+              {#if entry.status === 'running'}
+                <!-- Replaces the static ⟳: same slot, same colour, now actually moving.
+                     The pane heading spinner is the summary; this one is per-entry, and
+                     its label is the first text alternative this status has ever had. -->
+                <span class="status status-running"><LoadingSpinner label="Review running…" /></span>
+              {:else}
+                <span class="status status-{entry.status}">{statusIcon(entry.status)}</span>
+              {/if}
               <span class="label">{entryLabel(entry)}</span>
               <span class="time">{timeLabel(entry)}</span>
             </button>
@@ -706,6 +717,11 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
     opacity: 0.8;
+  }
+  .reviews-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
   }
   .pane ul { list-style: none; margin: 0; padding: 0; }
   .hint { opacity: 0.7; }

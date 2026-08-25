@@ -13,6 +13,7 @@
   import { hasWorkingTreeChanges, type WorkingTreeStatus } from './lib/git-status';
   import { LatestRequestGate, LatestWindowRequestCoordinator } from './lib/latest-request';
   import { MutationGate } from './lib/mutation-gate';
+  import LoadingSpinner from './components/common/LoadingSpinner.svelte';
   import { calculateDensity, calculatePanelLayout, defaultPanelWidths, type PanelSide } from './lib/panel-layout';
   import CommitDetail from './components/detail/CommitDetail.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
@@ -266,6 +267,9 @@
   let selectedForCompare: string | null = null;
   const mutationGate = new MutationGate();
   let mutationProgress: string | null = null;
+  // The one state where the banner is up but nothing is running: the spinner is
+  // suppressed here so motion never implies work that is actually blocked on us.
+  const AWAITING_CONFIRMATION_LABEL = 'Awaiting confirmation…';
 
   // Column widths. GRAPH follows the lane count until the user drags it, at
   // which point their width wins — a graph that resized itself under the
@@ -1081,8 +1085,8 @@
               mutationProgress = label;
             },
             awaitConfirmation: () => {
-              mutationGate.updateLabel('Awaiting confirmation…');
-              mutationProgress = 'Awaiting confirmation…';
+              mutationGate.updateLabel(AWAITING_CONFIRMATION_LABEL);
+              mutationProgress = AWAITING_CONFIRMATION_LABEL;
             },
           };
 
@@ -1460,7 +1464,19 @@
 
 <div class="container" class:compact={density === 'compact'}>
   {#if mutationProgress}
-    <div class="mutation-progress" aria-live="polite">{mutationProgress}</div>
+    <div class="mutation-progress" aria-live="polite">
+      {#if mutationProgress !== AWAITING_CONFIRMATION_LABEL}
+        <!-- The banner is already the live region for this state, and the visible
+             caption below is its announcement. LoadingSpinner carries its own
+             role="status" plus visually-hidden label, so left exposed it would nest
+             a live region inside a live region and say the label twice. Hidden from
+             assistive tech, the spinner is purely the visual "still working" cue. -->
+        <span class="mutation-spinner" aria-hidden="true">
+          <LoadingSpinner label={mutationProgress} />
+        </span>
+      {/if}
+      <span>{mutationProgress}</span>
+    </div>
   {/if}
   <header class="toolbar">
     <button
@@ -1747,6 +1763,17 @@
     overflow: hidden;
     background: var(--vscode-editor-background, #1e1e1e);
     color: var(--vscode-foreground, #cccccc);
+  }
+
+  .mutation-progress {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .mutation-spinner {
+    display: inline-flex;
+    align-items: center;
   }
 
   /* Toolbar */
