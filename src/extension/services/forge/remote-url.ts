@@ -14,8 +14,11 @@ function splitOwnerAndName(rawPath: string): { owner: string; name: string } | u
   if (firstSlash <= 0) return undefined;
 
   const owner = path.slice(0, firstSlash);
-  // Bitbucket project paths can nest, so everything after the workspace is the
-  // repository's name — splitting on the last slash would drop those segments.
+  // Splitting on the first slash rather than the last is deliberate: some
+  // forges (e.g. GitLab subgroups, Azure DevOps projects) nest additional
+  // path segments between the owner and the repository, and everything after
+  // the first segment is the repository's name — splitting on the last slash
+  // would drop those segments.
   const name = path.slice(firstSlash + 1);
   return name ? { owner, name } : undefined;
 }

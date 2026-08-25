@@ -16,7 +16,10 @@ describe('parseRemoteUrl', () => {
 
   // Every repository in the workspace runs through this on load, so a bad
   // remote must yield "no provider", never an exception.
-  it.each(['', '   ', 'not a url', '/local/path/repo.git', 'file:///srv/repo.git', 'git@host-with-no-path'])(
+  it.each([
+    '', '   ', 'not a url', '/local/path/repo.git', 'file:///srv/repo.git', 'git@host-with-no-path',
+    'git@bitbucket.org:acme/', 'https://bitbucket.org/acme',
+  ])(
     'returns undefined for %j', (url) => {
       expect(parseRemoteUrl(url)).toBeUndefined();
     });
