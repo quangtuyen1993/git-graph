@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import App from '../../src/webview/App.svelte';
 
 const { send, on } = vi.hoisted(() => ({
   send: vi.fn(),
@@ -50,6 +51,32 @@ function windowResult(subject: string, totalRows: number, startRow = 0) {
     totalRows,
     maxLane: 0,
   };
+}
+
+// The happy-path fixtures every test starts from. Tests that care about one
+// method override just that one and delegate the rest here.
+function defaultSend(method: string): Promise<unknown> {
+  switch (method) {
+    case 'ping.hello':
+      return Promise.resolve({ ok: true });
+    case 'repo.list':
+      return Promise.resolve({ repos: [{ name: 'repo', path: '/repo', active: true }] });
+    case 'git.branches':
+      return Promise.resolve([branch('initial-branch')]);
+    case 'git.tags':
+    case 'git.stashList':
+    case 'git.worktreeList':
+    case 'git.submoduleList':
+      return Promise.resolve([]);
+    case 'git.status':
+      return Promise.resolve({ staged: [], unstaged: [], untracked: [], conflicted: [] });
+    case 'graph.build':
+      return Promise.resolve({ totalRows: 1, maxLane: 0, layoutVersion: 1 });
+    case 'graph.getWindow':
+      return Promise.resolve(windowResult('initial window', 1));
+    default:
+      return Promise.resolve(undefined);
+  }
 }
 
 describe('App graph refresh ordering', () => {
@@ -184,5 +211,73 @@ describe('App graph refresh ordering', () => {
     expect(container.textContent).not.toContain('stale refresh window');
     expect(container.textContent).not.toContain('stale-branch');
     expect(container.textContent).not.toContain('stale-sdk');
+  });
+
+  it('does not surface a superseded build as a startup error', async () => {
+    // invalidate() bumps the generation before the event is sent, so the very
+    // first build can lose the race. That must not paint an error banner.
+    send.mockImplementation((method: string) => {
+      if (method === 'graph.build') {
+        return Promise.reject(Object.assign(new Error('Graph build superseded'), {
+          kind: 'GRAPH_BUILD_SUPERSEDED',
+        }));
+      }
+      return defaultSend(method);
+    });
+
+    const { container } = render(App);
+    await waitFor(() => expect(send).toHaveBeenCalledWith('graph.build', expect.anything()));
+
+    expect(container.querySelector('.error')).toBeNull();
+    expect(container.textContent).not.toContain('Error');
+  });
+
+  it('subscribes to graph.invalidated before the first refresh', async () => {
+    // An invalidation during startup must not be dropped, or the graph stays
+    // stale until the next unrelated event.
+    const order: string[] = [];
+    on.mockImplementation((event: string) => { order.push(`on:${event}`); return () => {}; });
+    send.mockImplementation((method: string) => {
+      order.push(`send:${method}`);
+      return defaultSend(method);
+    });
+
+    render(App);
+    await waitFor(() => expect(order).toContain('send:graph.build'));
+
+    // Without this the assertion below is vacuous: indexOf returns -1 for an
+    // unregistered listener, which is trivially less than the build index.
+    expect(order).toContain('on:graph.invalidated');
+    expect(order.indexOf('on:graph.invalidated')).toBeLessThan(order.indexOf('send:graph.build'));
+  });
+
+  it('collapses a burst of invalidations into a single refresh', async () => {
+    vi.useFakeTimers();
+    try {
+      let invalidate!: () => void;
+      on.mockImplementation((event: string, handler: () => void) => {
+        if (event === 'graph.invalidated') invalidate = handler;
+        return () => {};
+      });
+      send.mockImplementation((method: string) => defaultSend(method));
+
+      render(App);
+      await vi.waitFor(() => expect(invalidate).toBeTypeOf('function'));
+      // The listener is now registered synchronously, so wait for startup's own
+      // build to land before counting; otherwise it lands inside the window
+      // below and is misread as a second refresh.
+      await vi.waitFor(() => expect(
+        send.mock.calls.some(([m]) => m === 'graph.build'),
+      ).toBe(true));
+      const before = send.mock.calls.filter(([m]) => m === 'graph.build').length;
+
+      invalidate(); invalidate(); invalidate();
+      await vi.advanceTimersByTimeAsync(200);
+
+      const after = send.mock.calls.filter(([m]) => m === 'graph.build').length;
+      expect(after - before).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

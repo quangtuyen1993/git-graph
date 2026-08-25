@@ -1,6 +1,7 @@
 <script lang="ts">
   import { bridge } from './lib/message-bridge';
   import { onDestroy, onMount, tick } from 'svelte';
+  import { createRefreshScheduler, isSupersededError } from './lib/graph-refresh';
   import { calculateVisibleRange, getTotalHeight, ROW_HEIGHT, BUFFER_ROWS } from './lib/virtual-scroll';
   import GraphCanvas from './components/graph/GraphCanvas.svelte';
   import ContextMenu from './components/actions/ContextMenu.svelte';
@@ -300,7 +301,23 @@
   $: openableSubmodules = workspaceSubmodules.filter((submodule) => submodule.state !== 'uninitialized');
   $: repoOptionCount = repos.length + openableSubmodules.length;
 
+  let invalidatedUnsubscribe: (() => void) | undefined;
+
+  const refreshScheduler = createRefreshScheduler({
+    run: () => refreshGraph(),
+    delayMs: 200,
+    onError: (refreshError) => {
+      if (isSupersededError(refreshError)) return;
+      console.warn('[git-graph] graph refresh failed:', refreshError);
+    },
+  });
+
   onMount(async () => {
+    // Subscribe first: an invalidation that lands mid-startup would otherwise
+    // be dropped and leave the graph stale.
+    const stopInvalidated = bridge.on('graph.invalidated', () => refreshScheduler.schedule());
+    invalidatedUnsubscribe = stopInvalidated;
+
     try {
       await bridge.send('ping.hello');
       // Load repos list
@@ -317,10 +334,6 @@
       error = e instanceof Error ? e.message : String(e);
       status = 'Error';
     }
-
-    bridge.on('graph.invalidated', () => {
-      refreshGraph();
-    });
   });
 
   onMount(() => {
@@ -335,6 +348,8 @@
       window.removeEventListener('resize', trackViewport);
       if (panelStateSaveTimer) clearTimeout(panelStateSaveTimer);
       if (columnStateSaveTimer) clearTimeout(columnStateSaveTimer);
+      refreshScheduler.cancel();
+      invalidatedUnsubscribe?.();
     };
   });
 
@@ -582,6 +597,8 @@
         : `${nextBranches.length} branches, ${build.totalRows} commits`;
     } catch (refreshError) {
       if (!graphRefreshGate.isLatest(refreshToken)) return;
+      // A newer build is already on its way; dropping this result is correct.
+      if (isSupersededError(refreshError)) return;
       throw refreshError;
     }
   }
