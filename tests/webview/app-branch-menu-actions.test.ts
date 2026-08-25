@@ -30,6 +30,12 @@ async function settle() {
   }
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => { resolve = res; });
+  return { promise, resolve };
+}
+
 interface MenuOptions {
   /** Extra branches in the repo besides `main` and the target. */
   extraBranches?: TargetBranch[];
@@ -256,6 +262,35 @@ describe('App branch context-menu actions', () => {
       Array.from({ length: 10 }, (_, index) => `src/file-${index}.ts`),
     );
     await waitFor(() => expect(bannerText(container)).toContain('12 files differ'));
+  });
+
+  it('shows progress while the working-tree diff runs, and refreshes nothing after it', async () => {
+    // The slowest new action: two git diffs then up to ten editor opens. It is
+    // read-only, so the banner must appear without a graph rebuild following it.
+    const diff = deferred<{ files: { path: string; oldPath: null; status: string }[] }>();
+    const { container, getByRole } = await openBranchContextMenu(
+      { name: 'develop', current: false, remote: null, upstream: 'origin/develop' },
+      { responses: { 'git.diffWorkingTree': diff.promise } },
+    );
+    send.mockClear();
+
+    await fireEvent.click(getByRole('menuitem', { name: 'Show Diff with Working Tree' }));
+    await waitFor(() => expect(send).toHaveBeenCalledWith('git.diffWorkingTree', { ref: 'develop' }));
+
+    const banner = await waitFor(() => {
+      const found = container.querySelector('.mutation-progress');
+      expect(found).not.toBeNull();
+      expect(found!.textContent).toContain('Comparing with the working tree…');
+      return found!;
+    });
+    expect(banner.querySelector('[role="status"]')).not.toBeNull();
+
+    diff.resolve({ files: [{ path: 'src/a.ts', oldPath: null, status: 'modified' }] });
+    await settle();
+
+    await waitFor(() => expect(container.querySelector('.mutation-progress')).toBeNull());
+    expect(send).toHaveBeenCalledWith('ui.compareDiff', expect.objectContaining({ path: 'src/a.ts' }));
+    expect(send).not.toHaveBeenCalledWith('graph.build', expect.anything());
   });
 
   it('reuses an existing local branch instead of creating it again', async () => {

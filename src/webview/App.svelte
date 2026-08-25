@@ -1259,7 +1259,14 @@
     await openSubmodule(event.detail.path);
   }
 
-  const mutationLabels: Record<string, string> = {
+  /**
+   * Actions that get the labelled progress banner. Every one is a mutation
+   * except `diffWorkingTree`, which earns a place by being slow — two `git
+   * diff` invocations and up to ten editor opens. Being here does not make an
+   * action refresh the graph: that is decided by what
+   * `performContextMenuAction` returns, which excludes read-only actions.
+   */
+  const progressLabels: Record<string, string> = {
     checkout: 'Checking out…',
     createBranch: 'Creating branch…',
     createTag: 'Creating tag…',
@@ -1281,6 +1288,7 @@
     deleteRemoteBranch: 'Deleting remote branch…',
     newBranchFrom: 'Creating branch…',
     checkoutAndRebase: 'Checking out and rebasing…',
+    diffWorkingTree: 'Comparing with the working tree…',
     pullIntoCurrentRebase: 'Pulling…',
     pullIntoCurrentMerge: 'Pulling…',
     createBranchFromTag: 'Creating branch…',
@@ -1301,7 +1309,7 @@
   }
 
   async function handleContextMenuAction(event: CustomEvent<{ action: string }>) {
-    const label = mutationLabels[event.detail.action];
+    const label = progressLabels[event.detail.action];
     let shouldRefresh = false;
 
     try {
@@ -1580,6 +1588,9 @@
               break;
             }
 
+            // Read-only, but slow enough to need the banner: `progress.start()`
+            // moves it off "Preparing…" for the diff and the editor opens.
+            progress?.start();
             const diff = await bridge.send('git.diffWorkingTree', { ref: branchName }) as
               { files?: { path: string; oldPath?: string | null; status?: string }[] } | null;
             const changed = diff?.files ?? [];
