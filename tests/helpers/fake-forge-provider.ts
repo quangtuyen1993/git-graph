@@ -1,5 +1,5 @@
 import type {
-  CreatePullRequestInput, ForgeCapabilities, ForgeComment, ForgeProvider, ForgeRepoRef,
+  CreatePullRequestInput, ForgeCapabilities, ForgeComment, ForgeError, ForgeProvider, ForgeRepoRef,
   ForgeSession, MergeStrategy, ParsedRemote, PullRequestDetail, PullRequestListState,
   PullRequestSummary,
 } from '../../src/extension/services/forge/forge.types';
@@ -9,6 +9,8 @@ export interface FakeForgeOptions {
   name?: string;
   host?: string;
   session?: ForgeSession | undefined;
+  /** When set, `getSession({ createIfNone: true })` never establishes a session — simulates rejected credentials. */
+  signInFails?: boolean;
   pullRequests?: PullRequestDetail[];
   diff?: string;
   comments?: ForgeComment[];
@@ -44,6 +46,7 @@ export class FakeForgeProvider implements ForgeProvider {
 
   private session: ForgeSession | undefined;
   private readonly host: string;
+  private readonly signInFails: boolean;
   private readonly pullRequests: PullRequestDetail[];
   private readonly diff: string;
   private readonly comments: ForgeComment[];
@@ -53,6 +56,7 @@ export class FakeForgeProvider implements ForgeProvider {
     this.name = options.name ?? 'Fake';
     this.host = options.host ?? 'fake.test';
     this.session = options.session ?? { providerId: this.id, accountLabel: 'An Tran' };
+    this.signInFails = options.signInFails ?? false;
     this.pullRequests = options.pullRequests ?? [fakePullRequest()];
     this.diff = options.diff ?? 'diff --git a/a.ts b/a.ts\n';
     this.comments = options.comments ?? [];
@@ -69,8 +73,18 @@ export class FakeForgeProvider implements ForgeProvider {
 
   public canHandle(remote: ParsedRemote): boolean { return remote.host === this.host; }
 
-  public async getSession(): Promise<ForgeSession | undefined> { return this.session; }
-  public async signOut(): Promise<void> { this.session = undefined; }
+  public async getSession(opts?: { createIfNone?: boolean }): Promise<ForgeSession | undefined> {
+    this.record('getSession', opts);
+    if (!this.session && opts?.createIfNone && !this.signInFails) {
+      this.session = { providerId: this.id, accountLabel: 'An Tran' };
+    }
+    return this.session;
+  }
+
+  public async signOut(): Promise<void> {
+    this.record('signOut');
+    this.session = undefined;
+  }
 
   public async listPullRequests(repo: ForgeRepoRef, opts: { state: PullRequestListState }): Promise<PullRequestSummary[]> {
     this.record('listPullRequests', repo, opts);
@@ -100,11 +114,21 @@ export class FakeForgeProvider implements ForgeProvider {
     return fakePullRequest({ title: input.title, sourceBranch: input.sourceBranch, targetBranch: input.targetBranch });
   }
 
-  public async setReviewStatus(repo: ForgeRepoRef, id: string, status: 'approved' | 'changes_requested'): Promise<void> {
-    this.record('setReviewStatus', repo, id, status);
+  public async setReviewStatus(
+    repo: ForgeRepoRef,
+    id: string,
+    status: 'approved' | 'changes_requested',
+    opts?: { body?: string },
+  ): Promise<void> {
+    this.record('setReviewStatus', repo, id, status, opts);
   }
 
   public async merge(repo: ForgeRepoRef, id: string, opts: { strategy: MergeStrategy; closeSourceBranch?: boolean }): Promise<void> {
     this.record('merge', repo, id, opts);
+  }
+
+  public describeError(error: ForgeError): string {
+    this.record('describeError', error);
+    return `${this.name}: ${error.kind} (${error.hostMessage})`;
   }
 }

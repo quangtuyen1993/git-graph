@@ -2227,30 +2227,33 @@ re-enter the same under-scoped token until they conclude the extension is broken
 // append to tests/extension/forge-method-handler.test.ts
 import { forgeErrorMessage } from '../../src/extension/controllers/forge-method-handler';
 import { ForgeError } from '../../src/extension/services/forge/forge.types';
-import { BITBUCKET_TOKEN_SCOPES } from '../../src/extension/services/forge/bitbucket/bitbucket-auth';
 
 describe('forgeErrorMessage', () => {
   it('tells an expired token from a missing scope', () => {
-    expect(forgeErrorMessage(new ForgeError(401, 'Unauthorized')))
+    expect(forgeErrorMessage(new ForgeError('unauthorized', 401, 'Unauthorized')))
       .toMatch(/expired or (has been )?revoked/i);
 
-    const forbidden = forgeErrorMessage(new ForgeError(403, 'Forbidden'));
-    expect(forbidden).toMatch(/scope/i);
-    for (const scope of BITBUCKET_TOKEN_SCOPES) expect(forbidden).toContain(scope);
+    // 'forbidden' never composes scope advice itself — it delegates to the
+    // provider that produced the error, so the shared layer never names a
+    // provider or a scope list.
+    const provider = new FakeForgeProvider({ host: 'bitbucket.org' });
+    const forbiddenError = new ForgeError('forbidden', 403, 'Forbidden');
+    const forbidden = forgeErrorMessage(forbiddenError, provider);
+    expect(forbidden).toBe(provider.describeError(forbiddenError));
     expect(forbidden).not.toMatch(/sign in again/i);
   });
 
-  it('explains a 404 as access rather than absence', () => {
-    expect(forgeErrorMessage(new ForgeError(404, 'Not found')))
+  it('explains a not-found as access rather than absence', () => {
+    expect(forgeErrorMessage(new ForgeError('not-found', 404, 'Not found')))
       .toMatch(/private repository or insufficient token scope/i);
   });
 
-  it('reports the retry delay on a 429', () => {
-    expect(forgeErrorMessage(new ForgeError(429, 'Rate limit', 37))).toContain('37');
+  it('reports the retry delay on a rate limit', () => {
+    expect(forgeErrorMessage(new ForgeError('rate-limited', 429, 'Rate limit', 37))).toContain('37');
   });
 
-  it('passes the host message through for anything else', () => {
-    expect(forgeErrorMessage(new ForgeError(500, 'Bitbucket is having a moment')))
+  it('passes the host message through for anything else, with no provider given', () => {
+    expect(forgeErrorMessage(new ForgeError('other', 500, 'Bitbucket is having a moment')))
       .toBe('Bitbucket is having a moment');
   });
 
@@ -2261,12 +2264,13 @@ describe('forgeErrorMessage', () => {
 });
 
 describe('forge namespace error translation', () => {
-  it('translates a provider ForgeError before it reaches the webview', async () => {
+  it('translates a provider ForgeError before it reaches the webview, using the provider that threw it', async () => {
     const provider = new FakeForgeProvider({ host: 'bitbucket.org' });
-    provider.listPullRequests = () => Promise.reject(new ForgeError(403, 'Forbidden'));
+    const error = new ForgeError('forbidden', 403, 'Forbidden');
+    provider.listPullRequests = () => Promise.reject(error);
     const { handle } = build({ provider });
 
-    await expect(handle('forge.pr.list', {})).rejects.toThrow(/scope/i);
+    await expect(handle('forge.pr.list', {})).rejects.toThrow(provider.describeError(error));
   });
 });
 ```
@@ -2281,44 +2285,57 @@ Expected: FAIL — `forgeErrorMessage` is not exported.
 Add to `src/extension/controllers/forge-method-handler.ts`:
 
 ```ts
-import { BITBUCKET_TOKEN_SCOPES } from '../services/forge/bitbucket/bitbucket-auth';
 import { ForgeError } from '../services/forge/forge.types';
+import type { ForgeProvider } from '../services/forge/forge.types';
 
 /**
  * Turns a host failure into something that tells the reader what to do.
  *
- * 401 and 403 are deliberately separate. A 403 means the token is valid but was
- * created without a scope, so "sign in again" sends the reader in a loop with
- * the same token; naming the scopes is the only thing that ends it.
+ * Switches on `error.kind`, never on `error.status`: status codes do not mean
+ * the same thing across hosts (GitHub signals rate limiting with 403, not
+ * 429; Bitbucket's "duplicate pull request" is 400, GitHub's is 422), so a
+ * shared `switch (status)` would misclassify on a second provider. The
+ * 'forbidden' case is the one that needs provider-specific remediation
+ * (which token scope is missing) — that text comes from
+ * `provider.describeError`, never composed here, so this function never
+ * names a provider or a scope list.
  */
-export function forgeErrorMessage(error: unknown): string {
+export function forgeErrorMessage(error: unknown, provider?: ForgeProvider): string {
   if (!(error instanceof ForgeError)) {
     return error instanceof Error ? error.message : String(error);
   }
 
-  switch (error.status) {
-    case 401:
-      return 'Bitbucket API token expired or revoked — sign in again.';
-    case 403:
-      return `Bitbucket refused the request. The API token is missing a scope. Required: ${BITBUCKET_TOKEN_SCOPES.join(', ')}.`;
-    case 404:
+  switch (error.kind) {
+    case 'unauthorized':
+      return 'Your session has expired or been revoked — sign in again.';
+    case 'forbidden':
+      return provider?.describeError(error) ?? error.hostMessage;
+    case 'not-found':
       return 'Cannot access this repository — private repository or insufficient token scope.';
-    case 429:
-      return `Bitbucket rate limit reached. Retrying in ${error.retryAfterSeconds ?? 60}s.`;
+    case 'rate-limited':
+      return `Rate limit reached. Retrying in ${error.retryAfterSeconds ?? 60}s.`;
+    case 'duplicate':
+    case 'other':
     default:
       return error.hostMessage;
   }
 }
 ```
 
-Wrap the switch in `handle` so nothing reaches the webview untranslated:
+Wrap the switch in `handle` so nothing reaches the webview untranslated. The
+provider that threw is re-resolved here (rather than threaded through every
+case) so `forgeErrorMessage` never has to guess which provider produced the
+error:
 
 ```ts
   async function handle(method: string, params: unknown): Promise<unknown> {
     try {
       return await dispatch(method, params);
     } catch (error) {
-      if (error instanceof ForgeError) throw new Error(forgeErrorMessage(error));
+      if (error instanceof ForgeError) {
+        const resolved = await resolve();
+        throw new Error(forgeErrorMessage(error, resolved?.provider));
+      }
       throw error;
     }
   }
