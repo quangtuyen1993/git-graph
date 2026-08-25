@@ -22,9 +22,26 @@ describe('sortRefsForRow', () => {
 describe('refType', () => {
   it('classifies each ref shape', () => {
     expect(refType('HEAD -> develop')).toBe('head');
+    expect(refType('HEAD')).toBe('head');
     expect(refType('tag: v1.0.0')).toBe('tag');
     expect(refType('origin/develop')).toBe('remote');
     expect(refType('develop')).toBe('branch');
+  });
+
+  it("reads git's own origin/HEAD decoration as a remote, not as HEAD", () => {
+    // `origin/HEAD -> origin/main` is a remote's default branch pointer. Called
+    // HEAD it took the leftmost, truncation-protected chip slot from the branch
+    // actually checked out, and rendered in the HEAD style.
+    expect(refType('origin/HEAD -> origin/main')).toBe('remote');
+    expect(refType('upstream/HEAD')).toBe('remote');
+    expect(refType('feature/HEAD-refactor')).toBe('branch');
+  });
+});
+
+describe('sortRefsForRow with a remote HEAD pointer present', () => {
+  it('still leads with the real HEAD', () => {
+    expect(sortRefsForRow(['origin/HEAD -> origin/main', 'main', 'HEAD -> main']))
+      .toEqual(['HEAD -> main', 'main', 'origin/HEAD -> origin/main']);
   });
 });
 
