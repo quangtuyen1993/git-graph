@@ -241,12 +241,18 @@ export class GitService {
    * Compares `ref` against the working tree. Unlike `diff()` there is no
    * second revision and no three-dot range — `git diff <ref>` already means
    * "ref versus what is on disk right now".
+   *
+   * The raw diff text is opt-in. Its only caller reads `files` and nothing
+   * else, and on a wide branch delta the raw text is megabytes serialised
+   * across `postMessage` to be dropped. `DiffResult.raw` stays a string so
+   * every other consumer of the shape is unaffected; it is empty unless asked
+   * for, which also saves a whole `git diff` invocation.
    */
-  public async diffWorkingTree(ref: string): Promise<DiffResult> {
+  public async diffWorkingTree(ref: string, options?: { includeRaw?: boolean }): Promise<DiffResult> {
     const [numstatOutput, nameStatusOutput, rawOutput] = await Promise.all([
       this.cli.exec(['diff', '--numstat', '-z', '-M', '-C', ref]),
       this.cli.exec(['diff', '--name-status', '-z', '-M', '-C', ref]),
-      this.cli.exec(['diff', '-M', '-C', ref]),
+      options?.includeRaw ? this.cli.exec(['diff', '-M', '-C', ref]) : Promise.resolve(''),
     ]);
 
     return {
