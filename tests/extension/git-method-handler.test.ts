@@ -19,6 +19,7 @@ const fakeGitService = {
   }],
   show: async () => ({ commit: {}, files: [] }),
   diff: async () => ({ files: [], raw: '' }),
+  diffWorkingTree: async () => ({ files: [], raw: '' }),
   checkout: async () => undefined,
   createBranch: async () => undefined,
   deleteBranch: async () => undefined,
@@ -98,5 +99,11 @@ describe('handleGitMethod', () => {
     const service = { ...fakeGitService, searchCommits: async () => hashes };
     const result = await handleGitMethod(service as unknown as GitService, 'git.searchCommits', { query: 'fix' });
     expect(result).toEqual(hashes);
+  });
+
+  it('routes git.diffWorkingTree to the service', async () => {
+    const service = { ...fakeGitService, diffWorkingTree: async () => ({ files: [], raw: 'RAW' }) };
+    const result = await handleGitMethod(service as unknown as GitService, 'git.diffWorkingTree', { ref: 'develop' });
+    expect(result).toEqual({ files: [], raw: 'RAW' });
   });
 });

@@ -204,6 +204,24 @@ export class GitService {
   }
 
   /**
+   * Compares `ref` against the working tree. Unlike `diff()` there is no
+   * second revision and no three-dot range — `git diff <ref>` already means
+   * "ref versus what is on disk right now".
+   */
+  public async diffWorkingTree(ref: string): Promise<DiffResult> {
+    const [numstatOutput, nameStatusOutput, rawOutput] = await Promise.all([
+      this.cli.exec(['diff', '--numstat', '-z', '-M', '-C', ref]),
+      this.cli.exec(['diff', '--name-status', '-z', '-M', '-C', ref]),
+      this.cli.exec(['diff', '-M', '-C', ref]),
+    ]);
+
+    return {
+      files: parseFileChanges(numstatOutput, nameStatusOutput),
+      raw: rawOutput,
+    };
+  }
+
+  /**
    * Get raw diff text between two refs (three-dot, like PR/MR diff).
    * Shows changes introduced by ref2 since it diverged from ref1.
    */

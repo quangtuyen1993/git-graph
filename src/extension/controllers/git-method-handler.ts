@@ -32,6 +32,8 @@ export async function handleGitMethod(
       return gitService.show(p.hash as string);
     case 'git.diff':
       return gitService.diff(p.ref1 as string, p.ref2 as string);
+    case 'git.diffWorkingTree':
+      return gitService.diffWorkingTree(p.ref as string);
     case 'git.checkout':
       await gitService.checkout(p.ref as string);
       return { success: true };
