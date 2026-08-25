@@ -1083,10 +1083,9 @@
   }
 
   /**
-   * One entry point for both pickers: the multi-select dropdown and the
-   * single-branch focus flow. Resets the selection-dependent view state
-   * (detail panel, scroll position) because the row indexes it points at
-   * belong to the layout being replaced.
+   * The graph filter's one entry point, driven by the multi-select dropdown.
+   * Resets the selection-dependent view state (detail panel, scroll position)
+   * because the row indexes it points at belong to the layout being replaced.
    */
   async function handleGraphBranchFilters(selected: string[]) {
     selectedBranchFilters = selected;
@@ -1105,10 +1104,6 @@
     } catch (e) {
       showTransientMessage(messageOf(e));
     }
-  }
-
-  async function handleGraphBranchFilter(branchName: string) {
-    await handleGraphBranchFilters(branchName ? [branchName] : []);
   }
 
   /**

@@ -228,7 +228,9 @@ describe('App graph refresh ordering', () => {
     const { container } = render(App);
     await waitFor(() => expect(send).toHaveBeenCalledWith('graph.build', expect.anything()));
 
-    expect(container.querySelector('.error')).toBeNull();
+    // `.error-banner` is the banner's real class; `.error` matched nothing, so
+    // this half of the guard used to assert nothing at all.
+    expect(container.querySelector('.error-banner')).toBeNull();
     expect(container.textContent).not.toContain('Error');
   });
 

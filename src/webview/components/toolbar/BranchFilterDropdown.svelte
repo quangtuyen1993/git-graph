@@ -30,6 +30,17 @@
     dispatch('change', { selected: next });
   }
 
+  /**
+   * Adds every branch the text filter is currently showing. It unions rather
+   * than replaces: replacing silently dropped selections that the filter had
+   * hidden, so "Select All" could end up selecting fewer branches than before.
+   */
+  function selectAllVisible(): void {
+    dispatch('change', {
+      selected: [...new Set([...selected, ...visible.map((b) => b.name)])],
+    });
+  }
+
   function onKeydown(event: KeyboardEvent): void {
     if (event.key === 'Escape' && open) { event.preventDefault(); open = false; }
   }
@@ -69,7 +80,7 @@
       <div class="branch-filter-actions">
         <button
           type="button"
-          on:click={() => dispatch('change', { selected: visible.map((b) => b.name) })}
+          on:click={selectAllVisible}
         >Select All</button>
         <button type="button" on:click={() => dispatch('change', { selected: [] })}>Clear All</button>
       </div>

@@ -112,6 +112,27 @@ describe('branch filter dropdown', () => {
       .toContain('commits on 2 branches'));
   });
 
+  it('adds the visible branches to the selection instead of replacing it', async () => {
+    // The text filter hides selections it does not match. Replacing the whole
+    // selection with what is visible would discard them without saying so.
+    const { getByLabelText, getByPlaceholderText, getByRole } = await renderApp({
+      branches: ['main', 'develop', 'feature/x'],
+    });
+
+    await fireEvent.click(getByLabelText('Filter graph by branch'));
+    await fireEvent.click(getByRole('checkbox', { name: 'develop' }));
+    await waitFor(() => expect(send).toHaveBeenCalledWith('graph.build', {
+      branches: ['develop'], all: false,
+    }));
+
+    await fireEvent.input(getByPlaceholderText('Filter branches'), { target: { value: 'feat' } });
+    await fireEvent.click(getByRole('button', { name: 'Select All' }));
+
+    await waitFor(() => expect(send).toHaveBeenLastCalledWith('graph.build', {
+      branches: ['develop', 'feature/x'], all: false,
+    }));
+  });
+
   it('clears back to all branches', async () => {
     const { getByRole } = await selectBranches(['develop']);
     await fireEvent.click(getByRole('button', { name: 'Clear All' }));
