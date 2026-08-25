@@ -20,4 +20,16 @@ describe('LoadingSpinner', () => {
     const { getByRole } = render(LoadingSpinner, { props: { size: 'md' } });
     expect(getByRole('status').className).toContain('spinner-md');
   });
+
+  // A live region announces content changes, so the region needs real text in its
+  // subtree — an aria-label alone is announced inconsistently across screen readers.
+  it('puts the label in the live region as text, not just an attribute', () => {
+    const { getByRole } = render(LoadingSpinner, { props: { label: 'Pushing to origin…' } });
+    expect(getByRole('status').textContent).toContain('Pushing to origin…');
+  });
+
+  it('puts the default label in the live region as text', () => {
+    const { getByRole } = render(LoadingSpinner);
+    expect(getByRole('status').textContent).toContain('Working…');
+  });
 });
