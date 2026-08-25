@@ -11,6 +11,8 @@ export async function handleGitMethod(
   switch (method) {
     case 'git.log':
       return gitService.log(p as GitLogOptions);
+    case 'git.searchCommits':
+      return gitService.searchCommits(p.query as string);
     case 'git.branches':
       return gitService.branches();
     case 'git.tags':

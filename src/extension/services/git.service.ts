@@ -217,6 +217,32 @@ export class GitService {
     return (await this.cli.exec(['rev-parse', ref])).trim();
   }
 
+  /**
+   * Finds commits by abbreviated/full hash or by message text.
+   *
+   * `rev-parse --verify <q>^{commit}` is the only reliable existence check —
+   * plain `rev-parse` echoes syntactically valid object names back even when
+   * the object is absent. A hash-shaped query that does not resolve falls
+   * through to the message grep, because `deadbeef` is also a real word.
+   */
+  public async searchCommits(query: string): Promise<string[]> {
+    const trimmed = query.trim();
+    if (trimmed === '') return [];
+
+    if (/^[0-9a-f]{7,40}$/i.test(trimmed)) {
+      const resolved = await this.cli
+        .exec(['rev-parse', '--verify', `${trimmed}^{commit}`])
+        .then((output) => output.trim())
+        .catch(() => '');
+      if (resolved !== '') return [resolved];
+    }
+
+    const output = await this.cli.exec([
+      'log', `--grep=${trimmed}`, '-i', '--max-count=50', '--format=%H', '--all',
+    ]);
+    return output.split('\n').map((line) => line.trim()).filter(Boolean);
+  }
+
   // --- Write Operations ---
 
   public async checkout(ref: string): Promise<void> {

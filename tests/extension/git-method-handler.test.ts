@@ -6,6 +6,7 @@ import { GitService } from '../../src/extension/services/git.service';
 
 const fakeGitService = {
   log: async () => [],
+  searchCommits: async () => [],
   branches: async () => [],
   tags: async () => [],
   status: async () => ({ branch: '', ahead: 0, behind: 0, staged: [], unstaged: [], untracked: [] }),
@@ -90,5 +91,12 @@ describe('handleGitMethod', () => {
     }
 
     expect(unknownMethods).toEqual([]);
+  });
+
+  it('routes git.searchCommits to the service', async () => {
+    const hashes = ['a'.repeat(40)];
+    const service = { ...fakeGitService, searchCommits: async () => hashes };
+    const result = await handleGitMethod(service as unknown as GitService, 'git.searchCommits', { query: 'fix' });
+    expect(result).toEqual(hashes);
   });
 });
