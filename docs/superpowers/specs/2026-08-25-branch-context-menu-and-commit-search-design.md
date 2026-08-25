@@ -205,28 +205,28 @@ public async searchCommits(query: string): Promise<string[]> {
 
 Registered as `git.searchCommits` in `git-method-handler.ts`.
 
-### `graph.rowForHash` — the missing piece
+### Locating a commit — reuse `graph.getRow`
 
-The webview cannot locate a commit on its own: the layout is extension-side and the webview
-holds a single window. Existing graph methods are `build`, `getWindow`, `getRow`, `getLayout` —
-none maps a hash to a row. Add:
+The webview cannot locate a commit on its own (layout is extension-side, the webview holds one
+window), but the lookup already exists — no new method is needed:
 
 ```typescript
-// graph-method-handler.ts
-case 'graph.rowForHash': {
-  const { hash, layoutVersion } = params;
-  // null when the layout is stale or the commit is outside the current filter
-  return this.graphService.rowForHash(hash, layoutVersion);
-}
+// graph.service.ts:190 — existing
+public getRow(hash: string, layoutVersion?: number): number | null
+
+// graph-method-handler.ts:43 — existing, returns { row }
+case 'graph.getRow': { ... return { row: this.graphService.getRow(p.hash, p.layoutVersion) }; }
 ```
 
-`GraphService` keeps a `Map<hash, row>` built alongside the layout, so lookup is O(1) and
-requires no extra git calls.
+Search flow: `git.searchCommits` → hashes → `graph.getRow { hash, layoutVersion }` for the
+active match → row index → scroll to `row * ROW_HEIGHT` → the existing window machinery loads
+that region.
 
-Search flow: `git.searchCommits` → hashes → `graph.rowForHash` for the active match →
-row index → scroll offset `row * ROW_HEIGHT` → existing window machinery loads that region.
-A `null` row means the commit exists but is filtered out; surface that as
-`Commit is outside the current branch filter` rather than a silent no-op.
+- `row === null` → the commit exists but is outside the current filter. Surface
+  `Commit is outside the current branch filter`, do not fail silently.
+- A stale `layoutVersion` makes `getRow` **throw** (`Graph layout version mismatch`). Search
+  clears its state on every layout change, so this is a guard, not a normal path — catch it and
+  clear results.
 
 ### Highlight
 
@@ -265,30 +265,39 @@ Push, pull, fetch, and AI review give no feedback while running, so the UI looks
 
 | Surface | Location |
 |---------|----------|
-| Push / Pull / Fetch / Checkout / Rebase / Merge | Graph toolbar, left of the status text |
+| Push / Pull / Fetch / Checkout / Rebase / Merge | The existing `.mutation-progress` banner |
 | AI review | Review panel header, `ReviewApp.svelte` |
 | Commit search | Inside the search input |
 
-### State
+### State — reuse the existing MutationGate
+
+Progress state already exists and is already rendered as a text banner; it only lacks a spinner:
 
 ```typescript
-let pendingOperations = new Set<string>();
-$: isBusy = pendingOperations.size > 0;
-
-async function withLoading<T>(op: string, fn: () => Promise<T>): Promise<T> {
-  pendingOperations.add(op);
-  pendingOperations = pendingOperations; // Svelte 4 needs the reassignment
-  try {
-    return await fn();
-  } finally {
-    pendingOperations.delete(op);
-    pendingOperations = pendingOperations;
-  }
-}
+// App.svelte:266-267 — existing
+const mutationGate = new MutationGate();
+let mutationProgress: string | null = null;
 ```
 
-The spinner stays while any operation is pending and clears on both success and failure.
-Label comes from the most recently started operation.
+```svelte
+<!-- App.svelte:1471-1473 — existing -->
+{#if mutationProgress}
+  <div class="mutation-progress" aria-live="polite">{mutationProgress}</div>
+{/if}
+```
+
+Every context-menu mutation already flows through `runMutation` → `mutationGate.run(label)` →
+`mutationProgress = label`, including a dedicated `Awaiting confirmation…` state. So the work is:
+
+1. Render `LoadingSpinner` inside the existing banner, left of the label.
+2. Hide the spinner when the label is `Awaiting confirmation…` — nothing is running, we are
+   waiting on the user, and a spinner there reads as a hang.
+3. Give push/pull/fetch mutations explicit labels (`Pushing to origin…`, `Pulling origin/dev…`)
+   instead of the generic `Preparing…`.
+4. Add a spinner to the review panel header driven by the review job state in `ReviewApp.svelte`.
+
+Do **not** introduce a parallel `pendingOperations` set — `MutationGate` already serialises
+mutations and throws on overlap, and a second mechanism would drift from it.
 
 ---
 
@@ -429,7 +438,8 @@ if (options.branch) {
 
 - Trigger label: `All branches` / the branch name / `<k> branches`
 - Popover with a filter input, `Select All` / `Clear All`, and one checkbox per branch
-  showing its lane colour
+  (no colour swatch — the branch list carries no lane colour; lane colours only exist on graph
+  nodes)
 - Applies immediately on toggle; closes on outside click or `Escape`
 - Keyboard: arrows move, `Space` toggles, `Enter` closes
 
