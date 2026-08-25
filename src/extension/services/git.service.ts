@@ -57,6 +57,22 @@ export class BranchNotFullyMergedError extends Error {
   }
 }
 
+/**
+ * Every ref in the requested branch filter failed `rev-parse --verify`, so the
+ * filter resolved to nothing. Typed rather than a stderr match so the webview
+ * can tell a dead filter apart from a branch that genuinely has no commits.
+ */
+export const BRANCH_FILTER_UNRESOLVED = 'BRANCH_FILTER_UNRESOLVED';
+
+export class BranchFilterUnresolvedError extends Error {
+  public readonly code = BRANCH_FILTER_UNRESOLVED;
+
+  constructor(public readonly branches: string[]) {
+    super(`None of the requested branches could be resolved: ${branches.join(', ')}`);
+    this.name = 'BranchFilterUnresolvedError';
+  }
+}
+
 export class GitService {
   private cli: GitCLI;
 
@@ -110,6 +126,14 @@ export class GitService {
         .then((output) => output.trim())
         .catch(() => '')));
       revisions = [...new Set(resolved.filter(Boolean))];
+      if (revisions.length === 0) {
+        // A partially stale list still yields a real, if smaller, graph. When
+        // *nothing* resolves the filter is entirely dead and an empty graph is
+        // indistinguishable from "these branches have no commits", so fail
+        // loudly instead — this is what the single-branch path did before it
+        // gained skip-on-failure.
+        throw new BranchFilterUnresolvedError(requestedBranches);
+      }
     } else if (options.all) {
       const refs = await this.cli.exec(['for-each-ref', '--format=%(objectname)']);
       const head = await this.cli.exec(['rev-parse', '--verify', 'HEAD']).catch(() => '');
