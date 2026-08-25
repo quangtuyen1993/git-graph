@@ -1154,33 +1154,18 @@
               ? graphWindow.nodes.filter(n => selectedHashes.has(n.hash)).map(n => n.hash)
               : [...selectedHashes];
 
-            const oldestHash = hashes[hashes.length - 1];
-            const defaultMsg = graphWindow?.nodes.find(n => n.hash === oldestHash)?.subject ?? '';
+            // Squash with no prompts: the combined message is a starting point,
+            // not a decision — the oldest commit's subject leads and every
+            // subject is kept in the body so nothing is lost before reword.
+            const subjects = hashes.map(
+              h => graphWindow?.nodes.find(n => n.hash === h)?.subject ?? h.substring(0, 7)
+            );
+            const chronological = [...subjects].reverse();
+            const message = [chronological[0], '', ...chronological.map(sub => `* ${sub}`)].join('\n');
 
-            const message = await bridge.send('ui.inputBox', {
-              prompt: `Squash ${hashes.length} commits into one. Enter commit message:`,
-              placeholder: defaultMsg,
-              value: defaultMsg
-            }) as string | null;
-
-            if (message) {
-              const published = (await Promise.all(
-                hashes.map(async (selectedHash) => {
-                  const result = await bridge.send('git.isPublished', { hash: selectedHash }) as { published: boolean };
-                  return result.published;
-                })
-              )).some(Boolean);
-              if (published) {
-                progress?.awaitConfirmation();
-                const confirmed = await bridge.send('ui.confirm', {
-                  message: 'Squashing published commits changes descendant hashes and may require a force-push. Continue?'
-                }) as boolean;
-                if (!confirmed) break;
-              }
-              await runMutation('git.squash', { hashes, message });
-              selectedHashes = new Set();
-              selectedHash = null;
-            }
+            await runMutation('git.squash', { hashes, message });
+            selectedHashes = new Set();
+            selectedHash = null;
             break;
           }
           case 'copyShas': {
