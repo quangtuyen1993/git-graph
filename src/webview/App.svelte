@@ -16,6 +16,16 @@
   import CommitDetail from './components/detail/CommitDetail.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
   import ResizeHandle from './components/layout/ResizeHandle.svelte';
+  import {
+    autoGraphColumnWidth,
+    clampColumnWidth,
+    columnBounds,
+    columnResizeDirection,
+    defaultColumnWidths,
+    readStoredColumnWidths,
+    type ColumnKey,
+    type ColumnWidths,
+  } from './lib/column-layout';
 
   interface Branch {
     name: string;
@@ -256,8 +266,22 @@
   const mutationGate = new MutationGate();
   let mutationProgress: string | null = null;
 
-  // Computed graph column width
-  $: graphColWidth = (maxLane + 1) * 16 + 24;
+  // Column widths. GRAPH follows the lane count until the user drags it, at
+  // which point their width wins — a graph that resized itself under the
+  // pointer on every scroll would be worse than one that stays put.
+  let columnWidths: ColumnWidths = { ...defaultColumnWidths };
+  let resizingColumn: ColumnKey | null = null;
+  $: graphColWidth = columnWidths.graph ?? autoGraphColumnWidth(maxLane);
+
+  // MESSAGE has no divider of its own: it absorbs whatever the sized columns
+  // leave, so every divider here moves with the pointer.
+  const columnHeaders: { key: string; label: string; resize: ColumnKey | null; edge: 'left' | 'right' }[] = [
+    { key: 'graph', label: 'GRAPH', resize: 'graph', edge: 'right' },
+    { key: 'message', label: 'MESSAGE', resize: null, edge: 'left' },
+    { key: 'date', label: 'DATE', resize: 'date', edge: 'left' },
+    { key: 'sha', label: 'SHA', resize: 'sha', edge: 'left' },
+    { key: 'author', label: 'AUTHOR', resize: 'author', edge: 'left' },
+  ];
 
   /**
    * Submodules across every workspace repository, for the picker. Distinct from
@@ -305,6 +329,7 @@
     return () => {
       window.removeEventListener('resize', trackViewport);
       if (panelStateSaveTimer) clearTimeout(panelStateSaveTimer);
+      if (columnStateSaveTimer) clearTimeout(columnStateSaveTimer);
     };
   });
 
@@ -320,13 +345,86 @@
     }, 200);
   }
 
+  let columnStateSaveTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function saveColumnWidths() {
+    if (columnStateSaveTimer) clearTimeout(columnStateSaveTimer);
+    columnStateSaveTimer = setTimeout(() => {
+      columnStateSaveTimer = undefined;
+      bridge.send('ui.setState', { key: 'layout.columnWidths', value: columnWidths });
+    }, 200);
+  }
+
+  function columnWidth(key: ColumnKey): number {
+    return key === 'graph' ? graphColWidth : (columnWidths[key] ?? defaultColumnWidths[key] ?? 0);
+  }
+
+  function setColumnWidth(key: ColumnKey, width: number) {
+    columnWidths = { ...columnWidths, [key]: clampColumnWidth(key, width) };
+    saveColumnWidths();
+  }
+
+  /**
+   * Double-click puts a column back to its starting width. For GRAPH that is
+   * the lane count again, not a number, so the override is dropped entirely.
+   */
+  function resetColumnWidth(key: ColumnKey) {
+    columnWidths = { ...columnWidths, [key]: defaultColumnWidths[key] };
+    saveColumnWidths();
+  }
+
+  function startColumnResize(key: ColumnKey, event: MouseEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const startX = event.clientX;
+    const startWidth = columnWidth(key);
+    const direction = columnResizeDirection[key];
+    resizingColumn = key;
+
+    const onMove = (moveEvent: MouseEvent) => {
+      setColumnWidth(key, startWidth + direction * (moveEvent.clientX - startX));
+    };
+    const onUp = () => {
+      resizingColumn = null;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }
+
+  function handleColumnResizeKey(key: ColumnKey, event: KeyboardEvent) {
+    const step = 10 * columnResizeDirection[key];
+    let next: number | null = null;
+
+    switch (event.key) {
+      case 'ArrowRight': next = columnWidth(key) + step; break;
+      case 'ArrowLeft': next = columnWidth(key) - step; break;
+      case 'Home': next = columnBounds[key].min; break;
+      case 'End': next = columnBounds[key].max; break;
+    }
+
+    if (next !== null) {
+      event.preventDefault();
+      setColumnWidth(key, next);
+    }
+  }
+
   async function restorePanelState() {
-    const [storedLeft, storedRight, storedOpen, storedViewMode] = await Promise.all([
+    const [storedLeft, storedRight, storedOpen, storedViewMode, storedColumns] = await Promise.all([
       bridge.send('ui.getState', { key: 'layout.leftWidth' }),
       bridge.send('ui.getState', { key: 'layout.rightWidth' }),
       bridge.send('ui.getState', { key: 'layout.leftSidebarOpen' }),
       bridge.send('ui.getState', { key: 'detail.viewMode' }),
+      bridge.send('ui.getState', { key: 'layout.columnWidths' }),
     ]);
+    if (storedColumns) columnWidths = readStoredColumnWidths(storedColumns);
     if (typeof storedLeft === 'number') desiredLeftWidth = storedLeft;
     if (typeof storedRight === 'number') desiredRightWidth = storedRight;
     if (typeof storedOpen === 'boolean') leftSidebarOpen = storedOpen;
@@ -1488,13 +1586,50 @@
     {/if}
 
     <!-- Center: Graph -->
-    <div class="center-panel">
-      <div class="table-header" style="--graph-col-width: {graphColWidth}px">
-        <div class="col-graph">&#160;</div>
-        <div class="col-message">MESSAGE</div>
-        <div class="col-date">DATE</div>
-        <div class="col-sha">SHA</div>
-        <div class="col-author">AUTHOR</div>
+    <div
+      class="center-panel"
+      style="--graph-col-width: {graphColWidth}px; --date-col-width: {columnWidths.date}px; --sha-col-width: {columnWidths.sha}px; --author-col-width: {columnWidths.author}px"
+    >
+      <div class="table-header">
+        {#each columnHeaders as column (column.key)}
+          <div class="col-{column.key}">
+            {#if column.resize && column.edge === 'left'}
+              <!-- svelte-ignore a11y-no-noninteractive-tabindex a11y-no-noninteractive-element-interactions -->
+              <div
+                class="col-resizer left"
+                class:dragging={resizingColumn === column.resize}
+                on:mousedown={(e) => startColumnResize(column.resize, e)}
+                on:dblclick|preventDefault={() => resetColumnWidth(column.resize)}
+                on:keydown={(e) => handleColumnResizeKey(column.resize, e)}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label={`Resize ${column.label} column`}
+                aria-valuenow={columnWidth(column.resize)}
+                aria-valuemin={columnBounds[column.resize].min}
+                aria-valuemax={columnBounds[column.resize].max}
+                tabindex="0"
+              ></div>
+            {/if}
+            <span class="col-title">{column.label}</span>
+            {#if column.resize && column.edge === 'right'}
+              <!-- svelte-ignore a11y-no-noninteractive-tabindex a11y-no-noninteractive-element-interactions -->
+              <div
+                class="col-resizer right"
+                class:dragging={resizingColumn === column.resize}
+                on:mousedown={(e) => startColumnResize(column.resize, e)}
+                on:dblclick|preventDefault={() => resetColumnWidth(column.resize)}
+                on:keydown={(e) => handleColumnResizeKey(column.resize, e)}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label={`Resize ${column.label} column`}
+                aria-valuenow={columnWidth(column.resize)}
+                aria-valuemin={columnBounds[column.resize].min}
+                aria-valuemax={columnBounds[column.resize].max}
+                tabindex="0"
+              ></div>
+            {/if}
+          </div>
+        {/each}
       </div>
 
       <section class="scroll-area" bind:this={scrollContainer} on:scroll={handleScroll}>
@@ -1516,7 +1651,7 @@
           {#if hasWorkingChanges}
             <div
               class="commit-row working-changes"
-              style="top: 0; --graph-col-width: {graphColWidth}px"
+              style="top: 0"
               class:selected={selectedHash === 'WORKING'}
               on:click={() => handleRowClick('WORKING')}
               on:keydown={(e) => { if (e.key === 'Enter') handleRowClick('WORKING'); }}
@@ -1538,7 +1673,7 @@
             {#each graphWindow.nodes as node (node.hash)}
               <div
                 class="commit-row"
-                style="top: {(node.row - graphWindow.startRow + currentStartRow) * ROW_HEIGHT + (hasWorkingChanges ? ROW_HEIGHT : 0)}px; --graph-col-width: {graphColWidth}px; --lane-rgb: {getColorRgb(node.color)}"
+                style="top: {(node.row - graphWindow.startRow + currentStartRow) * ROW_HEIGHT + (hasWorkingChanges ? ROW_HEIGHT : 0)}px; --lane-rgb: {getColorRgb(node.color)}"
                 class:selected={selectedHash === node.hash || selectedHashes.has(node.hash)}
                 class:branch-focused={focusedBranchHash === node.hash}
                 class:compare-selected={selectedForCompare === node.hash}
@@ -1794,34 +1929,100 @@
     user-select: none;
   }
 
+  .table-header > div {
+    position: relative;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+  }
+
+  .table-header .col-title {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
   .table-header .col-graph {
     width: var(--graph-col-width);
     min-width: var(--graph-col-width);
     flex-shrink: 0;
+    padding-left: 8px;
   }
 
   .table-header .col-message {
     flex: 1;
+    min-width: 40px;
     padding-left: 8px;
   }
 
   .table-header .col-date {
-    width: 80px;
-    min-width: 80px;
+    width: var(--date-col-width);
+    min-width: var(--date-col-width);
+    flex-shrink: 0;
     padding-left: 8px;
   }
 
   .table-header .col-sha {
-    width: 70px;
-    min-width: 70px;
+    width: var(--sha-col-width);
+    min-width: var(--sha-col-width);
+    flex-shrink: 0;
     padding-left: 8px;
   }
 
   .table-header .col-author {
-    width: 140px;
-    min-width: 140px;
+    width: var(--author-col-width);
+    min-width: var(--author-col-width);
+    flex-shrink: 0;
     padding-left: 8px;
     padding-right: 8px;
+  }
+
+  /*
+   * The divider is drawn inside the header cell and taken out of the flow, so
+   * adding it costs no width — the header stays aligned with the rows below,
+   * which have no dividers of their own.
+   */
+  .col-resizer {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 9px;
+    cursor: col-resize;
+    z-index: 5;
+    overflow: visible;
+  }
+
+  .col-resizer.left {
+    left: -4px;
+  }
+
+  .col-resizer.right {
+    right: -4px;
+  }
+
+  .col-resizer::after {
+    content: '';
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    left: 4px;
+    width: 1px;
+    background: var(--vscode-panel-border, #2b2b2b);
+    transition: background 0.15s ease, top 0.15s ease, bottom 0.15s ease;
+  }
+
+  .col-resizer:hover::after,
+  .col-resizer.dragging::after,
+  .col-resizer:focus-visible::after {
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--vscode-focusBorder, #007acc);
+  }
+
+  .col-resizer:focus-visible {
+    outline: none;
   }
 
   /* Scroll area */
@@ -1842,6 +2043,9 @@
     left: 0;
     z-index: 1;
     pointer-events: none;
+    /* Dragging the graph column narrower crops the lanes instead of letting
+       them paint over the message column. */
+    overflow: hidden;
   }
 
   /* Commit rows.
@@ -1925,6 +2129,7 @@
 
   .commit-row .col-message {
     flex: 1;
+    min-width: 40px;
     padding-left: 8px;
     overflow: hidden;
     white-space: nowrap;
@@ -1936,8 +2141,9 @@
   }
 
   .commit-row .col-date {
-    width: 80px;
-    min-width: 80px;
+    width: var(--date-col-width);
+    min-width: var(--date-col-width);
+    flex-shrink: 0;
     padding-left: 8px;
     font-size: 11px;
     color: var(--vscode-descriptionForeground, #767676);
@@ -1945,8 +2151,9 @@
   }
 
   .commit-row .col-sha {
-    width: 70px;
-    min-width: 70px;
+    width: var(--sha-col-width);
+    min-width: var(--sha-col-width);
+    flex-shrink: 0;
     padding-left: 8px;
     font-size: 11px;
     font-family: var(--vscode-editor-font-family, monospace);
@@ -1955,8 +2162,9 @@
   }
 
   .commit-row .col-author {
-    width: 140px;
-    min-width: 140px;
+    width: var(--author-col-width);
+    min-width: var(--author-col-width);
+    flex-shrink: 0;
     padding-left: 8px;
     padding-right: 8px;
     display: flex;
