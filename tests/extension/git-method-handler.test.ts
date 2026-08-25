@@ -94,10 +94,20 @@ describe('handleGitMethod', () => {
     expect(unknownMethods).toEqual([]);
   });
 
-  it('routes git.searchCommits to the service', async () => {
+  it('routes git.searchCommits to the service, forwarding only the query string', async () => {
     const hashes = ['a'.repeat(40)];
-    const service = { ...fakeGitService, searchCommits: async () => hashes };
+    const received: unknown[] = [];
+    const service = {
+      ...fakeGitService,
+      searchCommits: async (query: string) => {
+        received.push(query);
+        return hashes;
+      },
+    };
     const result = await handleGitMethod(service as unknown as GitService, 'git.searchCommits', { query: 'fix' });
+    expect(received).toHaveLength(1);
+    // Guards the `p.query` extraction: passing `p` or `undefined` must fail here.
+    expect(received[0]).toBe('fix');
     expect(result).toEqual(hashes);
   });
 
