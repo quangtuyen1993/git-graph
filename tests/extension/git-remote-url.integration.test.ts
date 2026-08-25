@@ -30,4 +30,10 @@ describe('GitService.getRemoteUrl', () => {
   it('returns undefined for a remote that does not exist', async () => {
     expect(await git.getRemoteUrl('nope')).toBeUndefined();
   });
+
+  it('returns the fetch URL, not the last push mirror, for a multi-URL remote', async () => {
+    await repo.execGit(['remote', 'add', 'origin', 'git@bitbucket.org:acme/mpos.git']);
+    await repo.execGit(['remote', 'set-url', '--add', 'origin', 'git@bitbucket.org:acme/mirror.git']);
+    expect(await git.getRemoteUrl()).toBe('git@bitbucket.org:acme/mpos.git');
+  });
 });
