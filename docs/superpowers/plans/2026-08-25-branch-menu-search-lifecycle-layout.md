@@ -2104,6 +2104,7 @@ In `handleBranchSelect`, replace those lines with `await scrollToGraphRow(result
 its surrounding highlight bookkeeping (`clearBranchHighlight`, `selectedSidebarBranch`,
 `focusedBranchHash`, `scheduleBranchHighlightClear`) untouched.
 
+```typescript
   function handleSearchNavigate(event: CustomEvent<{ direction: 1 | -1 }>) {
     if (searchHashes.length === 0) return;
     searchActiveIndex = nextMatchIndex(searchHashes.length, searchActiveIndex, event.detail.direction);
