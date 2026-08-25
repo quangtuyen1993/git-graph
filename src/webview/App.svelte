@@ -20,6 +20,8 @@
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
   import { localNameFor, resolvePullTarget } from './lib/branch-menu';
   import ResizeHandle from './components/layout/ResizeHandle.svelte';
+  import CommitSearch from './components/toolbar/CommitSearch.svelte';
+  import { classifyQuery, nextMatchIndex } from './lib/commit-search';
   import {
     autoGraphColumnWidth,
     clampColumnWidth,
@@ -187,6 +189,19 @@
   const graphWindowRequestGate = new LatestRequestGate();
   const graphWindowRequestCoordinator = new LatestWindowRequestCoordinator<GraphWindow>(graphWindowRequestGate);
   const graphRefreshGate = new LatestRequestGate();
+
+  // Commit search state. The result list is a set of hashes plus a cursor into
+  // it, so navigating between matches never re-runs the search.
+  let searchExpanded = false;
+  let searching = false;
+  let searchHashes: string[] = [];
+  let searchActiveIndex = 0;
+  let searchMessage = '';
+  let searchComponent: CommitSearch | undefined;
+  const searchGate = new LatestRequestGate();
+
+  $: searchMatchSet = new Set(searchHashes);
+  $: activeSearchHash = searchHashes[searchActiveIndex] ?? null;
 
   function clearBranchHighlight() {
     if (branchHighlightTimer !== undefined) {
@@ -590,6 +605,9 @@
       totalRows = build.totalRows;
       maxLane = build.maxLane;
       layoutVersion = build.layoutVersion;
+      // Match rows are indexes into the layout that produced them, so a new
+      // layout invalidates them wholesale.
+      if (searchHashes.length > 0) clearCommitSearch();
       graphWindow = nextWindow;
       currentStartRow = nextWindow.startRow;
       loading = false;
@@ -1022,6 +1040,23 @@
     }
   }
 
+  /**
+   * Centres a graph row in the viewport. Shared by the sidebar branch jump and
+   * commit search so both land a row in the same place.
+   */
+  async function scrollToGraphRow(row: number) {
+    if (!scrollContainer) return;
+    const workingRowOffset = hasWorkingChanges ? 1 : 0;
+    const targetTop = (row + workingRowOffset) * ROW_HEIGHT;
+    const nextScrollTop = Math.max(0, targetTop - Math.floor(viewportHeight / 2));
+    scrollTop = nextScrollTop;
+    scrollContainer.scrollTop = nextScrollTop;
+    await updateGraphWindow(
+      calculateVisibleRange({ scrollTop, viewportHeight, totalRows }),
+      graphWindow,
+    );
+  }
+
   async function handleBranchSelect(event: CustomEvent<{ name: string }>) {
     const branch = branches.find(candidate => candidate.name === event.detail.name);
     const requestedLayoutVersion = layoutVersion;
@@ -1037,15 +1072,7 @@
       clearBranchHighlight();
       selectedSidebarBranch = branch.name;
       focusedBranchHash = branch.hash;
-      const workingRowOffset = hasWorkingChanges ? 1 : 0;
-      const targetTop = (result.row + workingRowOffset) * ROW_HEIGHT;
-      const nextScrollTop = Math.max(0, targetTop - Math.floor(viewportHeight / 2));
-      scrollTop = nextScrollTop;
-      scrollContainer.scrollTop = nextScrollTop;
-      await updateGraphWindow(
-        calculateVisibleRange({ scrollTop, viewportHeight, totalRows }),
-        graphWindow,
-      );
+      await scrollToGraphRow(result.row);
       await tick();
       scheduleBranchHighlightClear();
     } catch (e) {
@@ -1053,6 +1080,83 @@
       clearBranchHighlight();
       error = e instanceof Error ? e.message : String(e);
       setTimeout(() => { error = ''; }, 5000);
+    }
+  }
+
+  async function toggleCommitSearch() {
+    searchExpanded = !searchExpanded;
+    if (!searchExpanded) {
+      clearCommitSearch();
+      return;
+    }
+    await tick();
+    searchComponent?.focusInput();
+  }
+
+  async function handleCommitSearch(event: CustomEvent<{ query: string }>) {
+    const { query } = event.detail;
+    if (classifyQuery(query) === 'empty') { clearCommitSearch(); return; }
+
+    const token = searchGate.issue();
+    searching = true;
+    searchMessage = '';
+    try {
+      const hashes = await bridge.send('git.searchCommits', { query }) as string[];
+      if (!searchGate.isLatest(token)) return;
+      searchHashes = hashes;
+      searchActiveIndex = 0;
+      if (hashes.length === 0) { searchMessage = 'No commits found'; return; }
+      await revealSearchMatch();
+    } catch (searchError) {
+      if (!searchGate.isLatest(token)) return;
+      searchHashes = [];
+      searchMessage = searchError instanceof Error ? searchError.message : String(searchError);
+    } finally {
+      if (searchGate.isLatest(token)) searching = false;
+    }
+  }
+
+  async function revealSearchMatch() {
+    // Read the cursor directly rather than through `activeSearchHash`: callers
+    // move it in the same tick, and the reactive alias only catches up on flush.
+    const hash = searchHashes[searchActiveIndex] ?? null;
+    const requestedLayoutVersion = layoutVersion;
+    if (hash === null || requestedLayoutVersion === null || !scrollContainer) return;
+    try {
+      const result = await bridge.send('graph.getRow', {
+        hash, layoutVersion: requestedLayoutVersion,
+      }) as { row: number | null };
+      if (requestedLayoutVersion !== layoutVersion) return;
+      if (result.row === null) {
+        searchMessage = 'Commit is outside the current branch filter';
+        return;
+      }
+      searchMessage = '';
+      await scrollToGraphRow(result.row);
+    } catch {
+      // A layout change invalidated the lookup; the next search starts clean.
+      clearCommitSearch();
+    }
+  }
+
+  function handleSearchNavigate(event: CustomEvent<{ direction: 1 | -1 }>) {
+    if (searchHashes.length === 0) return;
+    searchActiveIndex = nextMatchIndex(searchHashes.length, searchActiveIndex, event.detail.direction);
+    void revealSearchMatch();
+  }
+
+  function clearCommitSearch() {
+    searchGate.issue();
+    searchHashes = [];
+    searchActiveIndex = 0;
+    searchMessage = '';
+    searching = false;
+  }
+
+  function handleWindowKeydown(event: KeyboardEvent) {
+    if ((event.ctrlKey || event.metaKey) && event.key === 'f') {
+      event.preventDefault();
+      void toggleCommitSearch();
     }
   }
 
@@ -1558,6 +1662,8 @@
   }
 </script>
 
+<svelte:window on:keydown={handleWindowKeydown} />
+
 <div class="container" class:compact={density === 'compact'}>
   {#if mutationProgress}
     <div class="mutation-progress" aria-live="polite">
@@ -1628,6 +1734,26 @@
     </div>
 
     <span class="status">{status}</span>
+
+    <button
+      class="toolbar-icon-btn"
+      class:active={searchExpanded}
+      aria-label="Search commits"
+      aria-pressed={searchExpanded}
+      title="Search commits (Ctrl+F)"
+      on:click={toggleCommitSearch}
+    ><Icon name="search" /></button>
+    <CommitSearch
+      bind:this={searchComponent}
+      expanded={searchExpanded}
+      {searching}
+      total={searchHashes.length}
+      activeIndex={searchActiveIndex}
+      message={searchMessage}
+      on:search={handleCommitSearch}
+      on:navigate={handleSearchNavigate}
+      on:clear={() => { clearCommitSearch(); searchExpanded = false; }}
+    />
 
     <button
       class="toolbar-icon-btn"
@@ -1779,6 +1905,8 @@
                 style="top: {(node.row - graphWindow.startRow + currentStartRow) * ROW_HEIGHT + (hasWorkingChanges ? ROW_HEIGHT : 0)}px; --lane-rgb: {getColorRgb(node.color)}"
                 class:selected={selectedHash === node.hash || selectedHashes.has(node.hash)}
                 class:branch-focused={focusedBranchHash === node.hash}
+                class:search-match={searchMatchSet.has(node.hash)}
+                class:search-match-active={activeSearchHash === node.hash}
                 class:compare-selected={selectedForCompare === node.hash}
                 on:click={(e) => handleRowClick(node.hash, e)}
                 on:keydown={(e) => { if (e.key === 'Enter') handleRowClick(node.hash); }}
@@ -2209,6 +2337,15 @@
   .commit-row.compare-selected {
     outline: 1px dashed var(--vscode-focusBorder);
     outline-offset: -1px;
+  }
+
+  /* Editor find-widget colours, so a match reads the same here as in a file. */
+  .commit-row.search-match {
+    background: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.33));
+  }
+
+  .commit-row.search-match-active {
+    background: var(--vscode-editor-findMatchBackground, rgba(234, 92, 0, 0.56));
   }
 
   .commit-row.branch-focused {
