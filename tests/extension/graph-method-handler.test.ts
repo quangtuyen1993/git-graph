@@ -124,4 +124,23 @@ describe('GraphMethodHandler', () => {
       layoutVersion: oldBuild.layoutVersion,
     })).rejects.toThrow('Graph layout version mismatch');
   });
+
+  it('tags a superseded build with a stable error code', async () => {
+    // invalidate() bumps the generation before the event goes out, so the
+    // in-flight build is expected to lose. The webview must recognise that
+    // from a code, not from the message text.
+    const pendingLog = deferred<Commit[]>();
+    const source = graphSource('/repo', () => pendingLog.promise);
+    const handler = new GraphMethodHandler(new GraphService(), () => source);
+
+    const inFlight = handler.handle('graph.build', { all: true });
+    await Promise.resolve();
+    handler.invalidate();
+    pendingLog.resolve([commit('old')]);
+
+    await expect(inFlight).rejects.toMatchObject({
+      message: 'Graph build superseded',
+      code: 'GRAPH_BUILD_SUPERSEDED',
+    });
+  });
 });

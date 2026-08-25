@@ -108,7 +108,12 @@ export class GraphMethodHandler {
       || current !== gitService
       || current?.getRepoPath() !== repoPath
     ) {
-      throw new Error('Graph build superseded');
+      // Superseded is routine, not a fault: invalidate() bumps the generation
+      // before the event goes out, so any in-flight build is expected to lose.
+      // The code lets the webview drop it instead of surfacing an error.
+      const error = new Error('Graph build superseded') as Error & { code: string };
+      error.code = 'GRAPH_BUILD_SUPERSEDED';
+      throw error;
     }
   }
 }
