@@ -417,6 +417,21 @@ export class GitService {
     await this.cli.exec(args, { timeout: 60000 });
   }
 
+  /**
+   * The configured URL of a remote, or undefined when it is not configured.
+   * `git config --get` exits 1 for a missing key, which GitCLI surfaces as a
+   * rejection; a repository with no remote is an ordinary state here, not a
+   * failure, so it is folded into undefined.
+   */
+  public async getRemoteUrl(remote = 'origin'): Promise<string | undefined> {
+    try {
+      const url = await this.cli.exec(['config', '--get', `remote.${remote}.url`]);
+      return url.trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   public async reset(mode: 'soft' | 'mixed' | 'hard', ref: string): Promise<void> {
     await this.cli.exec(['reset', `--${mode}`, ref]);
   }
