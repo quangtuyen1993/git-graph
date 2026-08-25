@@ -30,16 +30,28 @@ async function settle() {
   }
 }
 
+interface MenuOptions {
+  /** Extra branches in the repo besides `main` and the target. */
+  extraBranches?: TargetBranch[];
+  /** Per-method bridge responses overriding the defaults below. */
+  responses?: Record<string, unknown>;
+}
+
 /**
  * Render the app with `main` checked out plus the given branch, then right-click
  * that branch's row. A remote branch lives in a collapsed group, so it is
  * reached the way a user reaches it: search, then open the remote.
  */
-async function openBranchContextMenu(target: TargetBranch) {
-  const branches = [currentBranch, { ...target, hash: 'b'.repeat(40), ahead: 0, behind: 0 }];
+async function openBranchContextMenu(target: TargetBranch, options: MenuOptions = {}) {
+  const branches = [
+    currentBranch,
+    { ...target, hash: 'b'.repeat(40), ahead: 0, behind: 0 },
+    ...(options.extraBranches ?? []).map((branch) => ({ ...branch, hash: 'c'.repeat(40), ahead: 0, behind: 0 })),
+  ];
 
   vi.stubGlobal('acquireVsCodeApi', () => ({ postMessage: vi.fn(), getState: () => null, setState: vi.fn() }));
   send.mockImplementation(async (method: string) => {
+    if (options.responses && method in options.responses) return options.responses[method];
     switch (method) {
       case 'ping.hello': return { ok: true };
       case 'repo.list': return { repos: [{ name: 'repo', path: '/repo', active: true }], submodules: [] };
@@ -80,12 +92,37 @@ async function menuLabelsFor(target: TargetBranch): Promise<string[]> {
   return [...container.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent?.trim() ?? '');
 }
 
-async function runBranchAction(target: TargetBranch, label: string) {
-  const { getByRole } = await openBranchContextMenu(target);
+async function runBranchAction(target: TargetBranch, label: string, options: MenuOptions = {}) {
+  const { getByRole, container } = await openBranchContextMenu(target, options);
   send.mockClear();
   await fireEvent.click(getByRole('menuitem', { name: label }));
   await settle();
-  return { send };
+  return { send, container };
+}
+
+/** Every `ui.compareDiff` payload sent, in call order. */
+function compareDiffCalls() {
+  return send.mock.calls
+    .filter(([method]) => method === 'ui.compareDiff')
+    .map(([, params]) => params);
+}
+
+function bannerText(container: HTMLElement): string {
+  return container.querySelector('.error-banner')?.textContent?.trim() ?? '';
+}
+
+function workingTreeDiff(fileCount: number) {
+  return {
+    files: Array.from({ length: fileCount }, (_, index) => ({
+      path: `src/file-${index}.ts`,
+      oldPath: null,
+      status: 'modified',
+      additions: 1,
+      deletions: 0,
+      binary: false,
+    })),
+    raw: 'diff --git ...',
+  };
 }
 
 describe('App branch context-menu actions', () => {
@@ -167,5 +204,86 @@ describe('App branch context-menu actions', () => {
     expect(send).toHaveBeenCalledWith('git.pull', {
       remote: 'origin', branch: 'develop', options: { rebase: false },
     });
+  });
+
+  it('says so instead of opening editors when nothing differs', async () => {
+    const { container } = await runBranchAction(
+      { name: 'develop', current: false, remote: null, upstream: 'origin/develop' },
+      'Show Diff with Working Tree',
+      { responses: { 'git.diffWorkingTree': { files: [], raw: '' } } },
+    );
+
+    expect(compareDiffCalls()).toHaveLength(0);
+    await waitFor(() => expect(bannerText(container)).toContain("No differences between 'develop'"));
+  });
+
+  it('opens one diff per changed file, clicked branch versus the working tree', async () => {
+    // targetBranch is the checked-out branch, which compare-diff resolves to the
+    // file on disk — that is what makes this a working-tree comparison.
+    const { container } = await runBranchAction(
+      { name: 'develop', current: false, remote: null, upstream: 'origin/develop' },
+      'Show Diff with Working Tree',
+      {
+        responses: {
+          'git.diffWorkingTree': {
+            files: [
+              { path: 'src/a.ts', oldPath: null, status: 'modified' },
+              { path: 'src/b.ts', oldPath: 'src/old-b.ts', status: 'renamed' },
+            ],
+            raw: 'diff --git ...',
+          },
+        },
+      },
+    );
+
+    expect(compareDiffCalls()).toEqual([
+      { path: 'src/a.ts', oldPath: null, status: 'modified', sourceBranch: 'develop', targetBranch: 'main' },
+      { path: 'src/b.ts', oldPath: 'src/old-b.ts', status: 'renamed', sourceBranch: 'develop', targetBranch: 'main' },
+    ]);
+    expect(bannerText(container)).toBe('');
+  });
+
+  it('caps the diff at ten files and names how many differ', async () => {
+    const { container } = await runBranchAction(
+      { name: 'develop', current: false, remote: null, upstream: 'origin/develop' },
+      'Show Diff with Working Tree',
+      { responses: { 'git.diffWorkingTree': workingTreeDiff(12) } },
+    );
+
+    const calls = compareDiffCalls();
+    expect(calls).toHaveLength(10);
+    expect(calls.map((params) => params.path)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `src/file-${index}.ts`),
+    );
+    await waitFor(() => expect(bannerText(container)).toContain('12 files differ'));
+  });
+
+  it('reuses an existing local branch instead of creating it again', async () => {
+    const { send } = await runBranchAction(
+      { name: 'origin/bugfix/RMS2025-1027', current: false, remote: 'origin', upstream: null },
+      "Checkout and Rebase onto 'main'",
+      {
+        extraBranches: [{
+          name: 'bugfix/RMS2025-1027', current: false, remote: null, upstream: 'origin/bugfix/RMS2025-1027',
+        }],
+      },
+    );
+
+    expect(send).not.toHaveBeenCalledWith('git.createBranch', expect.anything());
+    expect(send).toHaveBeenCalledWith('git.checkout', { ref: 'bugfix/RMS2025-1027' });
+    expect(send).toHaveBeenCalledWith('git.rebase', { onto: 'main' });
+  });
+
+  it('sends no mutation when the checkout-and-rebase confirmation is declined', async () => {
+    const { send } = await runBranchAction(
+      { name: 'origin/bugfix/RMS2025-1027', current: false, remote: 'origin', upstream: null },
+      "Checkout and Rebase onto 'main'",
+      { responses: { 'ui.confirm': false } },
+    );
+
+    expect(send).toHaveBeenCalledWith('ui.confirm', expect.anything());
+    expect(send).not.toHaveBeenCalledWith('git.createBranch', expect.anything());
+    expect(send).not.toHaveBeenCalledWith('git.checkout', expect.anything());
+    expect(send).not.toHaveBeenCalledWith('git.rebase', expect.anything());
   });
 });

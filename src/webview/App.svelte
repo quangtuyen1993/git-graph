@@ -1315,6 +1315,15 @@
     }
   }
 
+  /** One diff editor per changed file, so a wide diff stays reviewable. */
+  const DIFF_WORKING_TREE_FILE_LIMIT = 10;
+
+  /** Same transient banner the catch handlers use — the only notice channel here. */
+  function showTransientMessage(message: string) {
+    error = message;
+    setTimeout(() => { error = ''; }, 5000);
+  }
+
   async function performContextMenuAction(
     event: CustomEvent<{ action: string }>,
     progress?: ContextMutationProgress,
@@ -1490,9 +1499,43 @@
             await runMutation('git.rebase', { onto: previousCurrent });
             break;
           }
-          case 'diffWorkingTree':
-            await bridge.send('git.diffWorkingTree', { ref: branchName });
+          case 'diffWorkingTree': {
+            // ui.compareDiff resolves the head side to the file on disk when
+            // targetBranch is the checked-out branch, so <clicked> → <current>
+            // is a genuine branch-vs-working-tree diff. Without a checked-out
+            // branch there is no working tree side to resolve against.
+            const currentBr = branches.find((b) => b.current);
+            if (!currentBr) {
+              showTransientMessage('Comparing with the working tree needs a checked-out branch.');
+              break;
+            }
+
+            const diff = await bridge.send('git.diffWorkingTree', { ref: branchName }) as
+              { files?: { path: string; oldPath?: string | null; status?: string }[] } | null;
+            const changed = diff?.files ?? [];
+            if (changed.length === 0) {
+              showTransientMessage(`No differences between '${branchName}' and the working tree.`);
+              break;
+            }
+
+            // Capped so a wide-ranging diff cannot open dozens of editors at once.
+            const shown = changed.slice(0, DIFF_WORKING_TREE_FILE_LIMIT);
+            for (const file of shown) {
+              await bridge.send('ui.compareDiff', {
+                path: file.path,
+                oldPath: file.oldPath ?? null,
+                status: file.status,
+                sourceBranch: branchName,
+                targetBranch: currentBr.name,
+              });
+            }
+            if (changed.length > shown.length) {
+              showTransientMessage(
+                `${changed.length} files differ from '${branchName}'; showing the first ${shown.length}.`,
+              );
+            }
             break;
+          }
           case 'pullIntoCurrentRebase':
           case 'pullIntoCurrentMerge': {
             const target = branches.find((b) => b.name === branchName);
@@ -1637,7 +1680,7 @@
         }
       }
 
-      return action !== 'copySha' && action !== 'copyShas' && action !== 'reviewCommit' && action !== 'selectForCompare' && action !== 'compareWithSelected' && action !== 'reviewWithSelected';
+      return action !== 'copySha' && action !== 'copyShas' && action !== 'reviewCommit' && action !== 'selectForCompare' && action !== 'compareWithSelected' && action !== 'reviewWithSelected' && action !== 'diffWorkingTree';
     } finally {
       contextMenuTarget = null;
     }
