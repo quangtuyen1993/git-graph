@@ -45,7 +45,7 @@ async function contextMenuOnCommit(rendered: ReturnType<typeof render>, subject:
 }
 
 describe('review entry points from the graph', () => {
-  it('branch context "Compare with..." sends review.setTarget with base=clicked, head=current', async () => {
+  it('branch context "Compare with \'main\'" sends review.setTarget with base=clicked, head=current', async () => {
     stubApp();
     const rendered = render(App);
     await waitFor(() => expect(rendered.getByRole('button', { name: 'feature' })).toBeInTheDocument());
@@ -53,8 +53,8 @@ describe('review entry points from the graph', () => {
     // Shift+F10 opens the context menu via keyboard — the suite's established
     // pattern for branch rows (see tests/webview/app-sidebar-actions.test.ts).
     await fireEvent.keyDown(rendered.getByRole('button', { name: 'feature' }), { key: 'F10', shiftKey: true });
-    await waitFor(() => expect(rendered.getByRole('menuitem', { name: 'Compare with...' })).toBeInTheDocument());
-    await fireEvent.click(rendered.getByRole('menuitem', { name: 'Compare with...' }));
+    await waitFor(() => expect(rendered.getByRole('menuitem', { name: "Compare with 'main'" })).toBeInTheDocument());
+    await fireEvent.click(rendered.getByRole('menuitem', { name: "Compare with 'main'" }));
 
     await waitFor(() => expect(send).toHaveBeenCalledWith('review.setTarget', {
       kind: 'branch', baseRef: 'feature', headRef: 'main',

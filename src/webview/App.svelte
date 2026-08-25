@@ -18,6 +18,7 @@
   import { calculateDensity, calculatePanelLayout, defaultPanelWidths, type PanelSide } from './lib/panel-layout';
   import CommitDetail from './components/detail/CommitDetail.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
+  import { localNameFor, resolvePullTarget } from './lib/branch-menu';
   import ResizeHandle from './components/layout/ResizeHandle.svelte';
   import {
     autoGraphColumnWidth,
@@ -821,11 +822,30 @@
     contextMenuX = mouseEvent.clientX;
     contextMenuY = mouseEvent.clientY;
 
+    const currentBranchName = branches.find((b) => b.current)?.name ?? 'HEAD';
+    const pullTarget = resolvePullTarget(branch);
+    const pullItems = pullTarget
+      ? [
+          { label: '', action: '', divider: true },
+          { label: `Pull into '${currentBranchName}' Using Rebase`, action: 'pullIntoCurrentRebase' },
+          { label: `Pull into '${currentBranchName}' Using Merge`, action: 'pullIntoCurrentMerge' },
+        ]
+      : [];
+
     if (branch.remote) {
       // Remote branch menu
       contextMenuItems = [
         { label: 'Checkout', action: 'checkout' },
-        { label: 'Merge into current branch', action: 'merge' },
+        { label: `New Branch from '${branch.name}'...`, action: 'newBranchFrom' },
+        { label: '', action: '', divider: true },
+        { label: `Checkout and Rebase onto '${currentBranchName}'`, action: 'checkoutAndRebase' },
+        { label: '', action: '', divider: true },
+        { label: `Compare with '${currentBranchName}'`, action: 'compareBranch' },
+        { label: 'Show Diff with Working Tree', action: 'diffWorkingTree' },
+        { label: '', action: '', divider: true },
+        { label: `Rebase '${currentBranchName}' onto '${branch.name}'`, action: 'rebase' },
+        { label: `Merge '${branch.name}' into '${currentBranchName}'`, action: 'merge' },
+        ...pullItems,
         { label: '', action: '', divider: true },
         { label: 'Delete remote branch', action: 'deleteRemoteBranch', danger: true },
       ];
@@ -852,14 +872,25 @@
         { label: 'Rename branch...', action: 'renameBranch' },
         { label: '', action: '', divider: true },
         { label: 'Compare with...', action: 'compareBranch' },
+        { label: 'Show Diff with Working Tree', action: 'diffWorkingTree' },
       ];
     } else {
       // Local branch menu
       const hasUpstream = !!branch.upstream;
       contextMenuItems = [
         { label: 'Checkout', action: 'checkout' },
-        { label: 'Merge into current branch', action: 'merge' },
-        { label: 'Rebase current onto this', action: 'rebase' },
+        { label: `New Branch from '${branch.name}'...`, action: 'newBranchFrom' },
+        ...(pullTarget
+          ? [{ label: '', action: '', divider: true },
+             { label: `Checkout and Rebase onto '${currentBranchName}'`, action: 'checkoutAndRebase' }]
+          : []),
+        { label: '', action: '', divider: true },
+        { label: `Compare with '${currentBranchName}'`, action: 'compareBranch' },
+        { label: 'Show Diff with Working Tree', action: 'diffWorkingTree' },
+        { label: '', action: '', divider: true },
+        { label: `Rebase '${currentBranchName}' onto '${branch.name}'`, action: 'rebase' },
+        { label: `Merge '${branch.name}' into '${currentBranchName}'`, action: 'merge' },
+        ...pullItems,
         { label: '', action: '', divider: true },
         hasUpstream
           ? { label: 'Push', action: '', children: [
@@ -878,8 +909,6 @@
         { label: '', action: '', divider: true },
         { label: 'Rename branch...', action: 'renameBranch' },
         { label: 'Delete branch...', action: 'deleteBranch', danger: true },
-        { label: '', action: '', divider: true },
-        { label: 'Compare with...', action: 'compareBranch' },
       ];
     }
     contextMenuVisible = true;
@@ -1069,6 +1098,10 @@
     renameBranch: 'Renaming branch…',
     deleteBranch: 'Deleting branch…',
     deleteRemoteBranch: 'Deleting remote branch…',
+    newBranchFrom: 'Creating branch…',
+    checkoutAndRebase: 'Checking out and rebasing…',
+    pullIntoCurrentRebase: 'Pulling…',
+    pullIntoCurrentMerge: 'Pulling…',
     createBranchFromTag: 'Creating branch…',
     pushTag: 'Pushing tag…',
     deleteTag: 'Deleting tag…',
@@ -1322,6 +1355,52 @@
           case 'rebase':
             await runMutation('git.rebase', { onto: branchName });
             break;
+          case 'newBranchFrom': {
+            const name = await bridge.send('ui.inputBox', {
+              prompt: `New branch from '${branchName}':`,
+              placeholder: 'feature/...',
+            }) as string | null;
+            if (name) await runMutation('git.createBranch', { name, startPoint: branchName });
+            break;
+          }
+          case 'checkoutAndRebase': {
+            const target = branches.find((b) => b.name === branchName);
+            if (!target) break;
+            const previousCurrent = branches.find((b) => b.current)?.name;
+            if (!previousCurrent) break;
+
+            const local = localNameFor(target);
+            progress?.awaitConfirmation();
+            const confirmed = await bridge.send('ui.confirm', {
+              message: `Checkout '${local}' and rebase onto '${previousCurrent}'?`,
+            }) as boolean;
+            if (!confirmed) break;
+
+            // A remote ref must become a local tracking branch first, or the
+            // checkout detaches HEAD and the rebase has no branch to move.
+            const localExists = branches.some((b) => !b.remote && b.name === local);
+            if (!localExists) {
+              await runMutation('git.createBranch', { name: local, startPoint: branchName });
+            }
+            await runMutation('git.checkout', { ref: local });
+            await runMutation('git.rebase', { onto: previousCurrent });
+            break;
+          }
+          case 'diffWorkingTree':
+            await bridge.send('git.diffWorkingTree', { ref: branchName });
+            break;
+          case 'pullIntoCurrentRebase':
+          case 'pullIntoCurrentMerge': {
+            const target = branches.find((b) => b.name === branchName);
+            const pull = target ? resolvePullTarget(target) : null;
+            if (!pull) break;
+            await runMutation('git.pull', {
+              remote: pull.remote,
+              branch: pull.ref,
+              options: { rebase: action === 'pullIntoCurrentRebase' },
+            });
+            break;
+          }
           case 'push':
             await runMutation('git.push', { remote: 'origin', branch: branchName });
             break;
