@@ -60,7 +60,10 @@ export interface FileStatusEntry {
 export interface GitLogOptions {
   maxCount?: number;
   skip?: number;
-  branch?: string;          // filter to specific branch
+  /** Single-branch filter. Kept for existing callers. */
+  branch?: string;
+  /** Multi-branch filter. Takes precedence over `branch` when non-empty. */
+  branches?: string[];
   author?: string;          // filter by author
   grep?: string;            // search commit messages
   after?: string;           // date string

@@ -45,5 +45,6 @@ export interface GraphOptions {
   maxCount?: number;
   skip?: number;
   branch?: string;
+  branches?: string[];
   all?: boolean;
 }

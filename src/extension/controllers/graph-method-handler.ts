@@ -67,6 +67,7 @@ export class GraphMethodHandler {
     const repoPath = gitService.getRepoPath();
     const logOptions = {
       branch: options.branch,
+      branches: options.branches,
       all: options.all ?? true,
     };
     const commits = await loadAllCommits(gitService, logOptions);

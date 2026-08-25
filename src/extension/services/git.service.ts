@@ -98,9 +98,18 @@ export class GitService {
   ): Promise<Omit<GitLogOptions, 'maxCount' | 'skip'>> {
     let revisions: string[];
 
-    if (options.branch) {
-      const revision = await this.cli.exec(['rev-parse', '--verify', options.branch]);
-      revisions = [revision.trim()];
+    const requestedBranches = options.branches?.length
+      ? options.branches
+      : (options.branch ? [options.branch] : []);
+
+    if (requestedBranches.length > 0) {
+      const resolved = await Promise.all(requestedBranches.map((branch) => this.cli
+        // A branch can vanish between the branch list and the build; a stale
+        // entry must not fail the whole graph.
+        .exec(['rev-parse', '--verify', branch])
+        .then((output) => output.trim())
+        .catch(() => '')));
+      revisions = [...new Set(resolved.filter(Boolean))];
     } else if (options.all) {
       const refs = await this.cli.exec(['for-each-ref', '--format=%(objectname)']);
       const head = await this.cli.exec(['rev-parse', '--verify', 'HEAD']).catch(() => '');
@@ -113,6 +122,7 @@ export class GitService {
     return {
       ...options,
       branch: undefined,
+      branches: undefined,
       all: false,
       revisions,
     };
