@@ -392,7 +392,12 @@ export class GitService {
 
   public async pull(remote?: string, branch?: string, options?: { rebase?: boolean; ffOnly?: boolean }): Promise<void> {
     const args = ['pull'];
-    if (options?.rebase) args.push('--rebase');
+    // `rebase: false` has to say so out loud: with nothing on the command line
+    // git falls back to the user's `pull.rebase`, which would turn the "Using
+    // Merge" menu item into a rebase. An absent key still means "no opinion",
+    // which is what the plain Pull item wants.
+    if (options?.rebase === true) args.push('--rebase');
+    else if (options?.rebase === false) args.push('--no-rebase');
     if (options?.ffOnly) args.push('--ff-only');
     if (remote) args.push(remote);
     if (branch) args.push(branch);
