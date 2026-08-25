@@ -1190,6 +1190,7 @@ Expected: FAIL — cannot resolve `bitbucket-api`.
 ```ts
 // src/extension/services/forge/bitbucket/bitbucket-api.ts
 import { ForgeError } from '../forge.types';
+import type { ForgeErrorKind } from '../forge.types';
 import type { BitbucketCredentials } from './bitbucket-auth';
 
 export const BITBUCKET_API_BASE = 'https://api.bitbucket.org/2.0';
@@ -1264,7 +1265,7 @@ export class BitbucketApi {
     const credentials = await this.deps.getCredentials();
     // 401 is the same state the UI shows for an expired token, so a missing
     // credential reuses it rather than inventing a second signed-out path.
-    if (!credentials) throw new ForgeError(401, 'Not signed in to Bitbucket');
+    if (!credentials) throw new ForgeError('unauthorized', 401, 'Not signed in to Bitbucket');
 
     const url = path.startsWith('http') ? path : `${BITBUCKET_API_BASE}${path}`;
     const authorization = `Basic ${Buffer.from(`${credentials.email}:${credentials.token}`).toString('base64')}`;
@@ -1305,7 +1306,25 @@ export class BitbucketApi {
       this.pausedUntil = Date.now() + retryAfterSeconds * 1000;
     }
 
-    return new ForgeError(response.status, hostMessage, retryAfterSeconds);
+    return new ForgeError(this.classify(response.status), response.status, hostMessage, retryAfterSeconds);
+  }
+
+  /**
+   * Bitbucket's status codes mapped to the shared vocabulary. This mapping is
+   * the one thing only a provider can do: another host signals rate limiting
+   * with a status this one uses for permission failures, and reports a
+   * duplicate with a different code again. Everything above the provider
+   * switches on the resulting kind and never on the number.
+   */
+  private classify(status: number): ForgeErrorKind {
+    switch (status) {
+      case 401: return 'unauthorized';
+      case 403: return 'forbidden';
+      case 404: return 'not-found';
+      case 429: return 'rate-limited';
+      case 400: return 'duplicate';
+      default:  return 'other';
+    }
   }
 
   private acquire(): Promise<void> {
@@ -1764,7 +1783,7 @@ import {
 } from '../forge.types';
 import type { BitbucketApi } from './bitbucket-api';
 import type { BitbucketAuthProvider } from './bitbucket-auth';
-import { BITBUCKET_AUTH_ID, BITBUCKET_AUTH_LABEL } from './bitbucket-auth';
+import { BITBUCKET_AUTH_ID, BITBUCKET_AUTH_LABEL, BITBUCKET_TOKEN_SCOPES } from './bitbucket-auth';
 import { mapComments, mapPullRequestDetail, mapPullRequestSummary } from './bitbucket-mapper';
 
 const PAGE_LENGTH = 50;
@@ -1829,15 +1848,32 @@ export class BitbucketCloudProvider implements ForgeProvider {
   }
 
   public createPullRequest(_repo: ForgeRepoRef, _input: CreatePullRequestInput): Promise<PullRequestDetail> {
-    return Promise.reject(new ForgeError(501, 'Creating pull requests arrives in phase 5'));
+    return Promise.reject(new ForgeError('other', 501, 'Creating pull requests arrives in phase 5'));
   }
 
-  public setReviewStatus(_repo: ForgeRepoRef, _id: string, _status: 'approved' | 'changes_requested'): Promise<void> {
-    return Promise.reject(new ForgeError(501, 'Approving pull requests arrives in phase 6'));
+  public setReviewStatus(
+    _repo: ForgeRepoRef,
+    _id: string,
+    _status: 'approved' | 'changes_requested',
+    _opts?: { body?: string },
+  ): Promise<void> {
+    return Promise.reject(new ForgeError('other', 501, 'Approving pull requests arrives in phase 6'));
   }
 
   public merge(_repo: ForgeRepoRef, _id: string, _opts: { strategy: MergeStrategy; closeSourceBranch?: boolean }): Promise<void> {
-    return Promise.reject(new ForgeError(501, 'Merging pull requests arrives in phase 6'));
+    return Promise.reject(new ForgeError('other', 501, 'Merging pull requests arrives in phase 6'));
+  }
+
+  /**
+   * The provider-specific half of an error message. Naming the exact scopes a
+   * token is missing is something only this provider knows; the shared layer
+   * renders whatever comes back and never composes advice of its own.
+   */
+  public describeError(error: ForgeError): string {
+    if (error.kind === 'forbidden') {
+      return `Bitbucket refused the request. The API token is missing a scope. Required: ${BITBUCKET_TOKEN_SCOPES.join(', ')}.`;
+    }
+    return error.hostMessage;
   }
 
   private base(repo: ForgeRepoRef): string {
@@ -2291,14 +2327,14 @@ import type { ForgeProvider } from '../services/forge/forge.types';
 /**
  * Turns a host failure into something that tells the reader what to do.
  *
- * Switches on `error.kind`, never on `error.status`: status codes do not mean
- * the same thing across hosts (GitHub signals rate limiting with 403, not
- * 429; Bitbucket's "duplicate pull request" is 400, GitHub's is 422), so a
- * shared `switch (status)` would misclassify on a second provider. The
- * 'forbidden' case is the one that needs provider-specific remediation
- * (which token scope is missing) — that text comes from
- * `provider.describeError`, never composed here, so this function never
- * names a provider or a scope list.
+ * This switches on `error.kind`, never on the HTTP status, because the status
+ * does not mean the same thing across hosts: one signals rate limiting with a
+ * status another uses for permission failures, and they report a duplicate
+ * with different codes again. Classification is the provider's job.
+ *
+ * The remediation half of a 'forbidden' message — which credential, which
+ * scopes — is likewise the provider's, and arrives via `describeError`. Never
+ * compose it here: this file must not name a hosting service.
  */
 export function forgeErrorMessage(error: unknown, provider?: ForgeProvider): string {
   if (!(error instanceof ForgeError)) {
