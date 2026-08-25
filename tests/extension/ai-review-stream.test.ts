@@ -21,7 +21,10 @@ import { AIReviewService, ReviewCancelledError } from '../../src/extension/servi
 const FAKE_PID = 999999;
 
 function fakeProcess() {
-  const proc = new EventEmitter() as EventEmitter & Record<string, unknown>;
+  const proc = new EventEmitter() as EventEmitter & Record<string, unknown> & {
+    stdout: EventEmitter;
+    stderr: EventEmitter;
+  };
   proc.stdout = new EventEmitter();
   proc.stderr = new EventEmitter();
   proc.stdin = { write: vi.fn(), end: vi.fn() };

@@ -3,7 +3,7 @@ import { openCompareDiff } from '../../src/extension/services/compare-diff';
 
 function harness(over: Record<string, unknown> = {}) {
   const contents = new Map<string, string>();
-  const executeDiff = vi.fn(async () => {});
+  const executeDiff = vi.fn(async (_left: unknown, _right: unknown, _title: string) => {});
   const deps = {
     git: {
       showFile: vi.fn(async (ref: string) => `content@${ref}`),

@@ -160,12 +160,15 @@ describe('ReviewStore', () => {
     await store.create(REPO, entry('one'));
 
     // Store the original writeIndex implementation
-    const originalWriteIndex = (store as any).writeIndex;
+    const internals = store as never as {
+      writeIndex: (repoId: string, entries: ReviewEntry[]) => Promise<void>;
+    };
+    const originalWriteIndex = internals.writeIndex;
 
     // Spy on writeIndex to track calls and selectively reject
-    const writeIndexSpy = vi.spyOn(store as any, 'writeIndex');
+    const writeIndexSpy = vi.spyOn(internals, 'writeIndex');
     let callCount = 0;
-    writeIndexSpy.mockImplementation(async (repoId: string, entries: any) => {
+    writeIndexSpy.mockImplementation(async (repoId, entries) => {
       callCount++;
       if (callCount === 1) {
         // Still write the file, then reject to simulate a write that fails mid-operation
