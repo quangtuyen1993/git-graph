@@ -63,12 +63,19 @@
       bind:value={query}
       type="text"
       placeholder="Search commit message or hash..."
-      aria-label="Search commits"
+      aria-label="Search commits by message or hash"
       on:input={onInput}
       on:keydown={onKeydown}
     />
-    {#if counter}<span class="search-counter">{counter}</span>{/if}
-    {#if message}<span class="search-message">{message}</span>{/if}
+    <!--
+      One live region around both readouts: the counter and the message are
+      alternatives, so announcing them together turns "nothing" → "No commits
+      found" or "nothing" → "1/2" into a single polite update.
+    -->
+    <span class="search-status" aria-live="polite">
+      {#if counter}<span class="search-counter">{counter}</span>{/if}
+      {#if message}<span class="search-message">{message}</span>{/if}
+    </span>
     <button type="button" aria-label="Previous match" disabled={total < 2}
             on:click={() => dispatch('navigate', { direction: -1 })}
     ><Icon name="arrow-small-up" /></button>
@@ -114,6 +121,13 @@
     font-family: inherit;
     font-size: 12px;
     outline: none;
+  }
+
+  .search-status {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
   }
 
   .search-counter,

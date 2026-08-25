@@ -8,6 +8,7 @@ import App from '../../src/webview/App.svelte';
 import { ROW_HEIGHT } from '../../src/webview/lib/virtual-scroll';
 
 const PLACEHOLDER = 'Search commit message or hash...';
+const INPUT_LABEL = 'Search commits by message or hash';
 const DEBOUNCE_MS = 300;
 
 /*
@@ -34,6 +35,15 @@ const TOTAL_ROWS = 100;
 interface SearchFixtures {
   hashes?: string[];
   rows?: Record<string, number | null>;
+}
+
+/**
+ * The layout version the host reports from `graph.build`. Mutable so a test can
+ * make the next refresh land a *new* layout, which is what invalidates every
+ * row index the search is holding.
+ */
+interface LayoutHandle {
+  version: number;
 }
 
 /** Drains pending microtasks — timer-free, so it also works under fake timers. */
@@ -64,6 +74,7 @@ function nodesFor(rows: Record<string, number | null>) {
 async function renderApp(fixtures: SearchFixtures = {}) {
   const rows = fixtures.rows ?? {};
   const nodes = nodesFor(rows);
+  const layout: LayoutHandle = { version: 1 };
 
   send.mockImplementation(async (method: string, params?: unknown) => {
     switch (method) {
@@ -75,7 +86,7 @@ async function renderApp(fixtures: SearchFixtures = {}) {
       case 'git.worktreeList': return [];
       case 'git.submoduleList': return [];
       case 'git.status': return { staged: [], unstaged: [], untracked: [], conflicted: [] };
-      case 'graph.build': return { totalRows: TOTAL_ROWS, maxLane: 0, layoutVersion: 1 };
+      case 'graph.build': return { totalRows: TOTAL_ROWS, maxLane: 0, layoutVersion: layout.version };
       case 'graph.getWindow': return {
         nodes,
         edges: [],
@@ -98,7 +109,7 @@ async function renderApp(fixtures: SearchFixtures = {}) {
 
   const rendered = render(App);
   await settle();
-  return { ...rendered, send };
+  return { ...rendered, send, layout };
 }
 
 async function searchFor(query: string, fixtures: SearchFixtures) {
@@ -123,11 +134,66 @@ describe('Commit search in the graph toolbar', () => {
   });
 
   it('stays collapsed until the search button is pressed', async () => {
-    const { getByLabelText, queryByPlaceholderText } = await renderApp();
+    const { getByLabelText, getByPlaceholderText, queryByPlaceholderText } = await renderApp();
     expect(queryByPlaceholderText('Search commit message or hash...')).toBeNull();
 
     await fireEvent.click(getByLabelText('Search commits'));
     expect(queryByPlaceholderText('Search commit message or hash...')).not.toBeNull();
+    // Toggle and input keep distinct accessible names, so neither query is
+    // ambiguous while the box is open.
+    expect(getByLabelText(INPUT_LABEL)).toBe(getByPlaceholderText(PLACEHOLDER));
+    expect(getByLabelText('Search commits').tagName).toBe('BUTTON');
+  });
+
+  it('opens the search and focuses the input on Ctrl/Cmd+F', async () => {
+    const { getByPlaceholderText, queryByPlaceholderText } = await renderApp();
+    expect(queryByPlaceholderText(PLACEHOLDER)).toBeNull();
+
+    // The shortcut is bound on the window, so that is where it is fired.
+    await fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+    await settle();
+
+    const input = getByPlaceholderText(PLACEHOLDER);
+    expect(document.activeElement).toBe(input);
+  });
+
+  it('drops results and the highlight when a refresh brings a new layout', async () => {
+    const { container, getByLabelText, layout, search, send } = await searchFor('fix', {
+      hashes: ['a'.repeat(40), 'b'.repeat(40)],
+      rows: { ['a'.repeat(40)]: 12, ['b'.repeat(40)]: 40 },
+    });
+    expect(container.querySelector('.search-match')).not.toBeNull();
+    expect(search.textContent).toContain('1/2');
+
+    // Row indexes belong to the layout that produced them; a new layoutVersion
+    // makes every held hash a stale lookup that `graph.getRow` would reject.
+    layout.version = 2;
+    const callsBeforeRefresh = send.mock.calls.length;
+    await fireEvent.click(getByLabelText('Refresh'));
+    await settle();
+
+    await waitFor(() => expect(container.querySelector('.search-match')).toBeNull());
+    expect(container.querySelector('.search-match-active')).toBeNull();
+    expect((container.querySelector('.commit-search') as HTMLElement).textContent).not.toContain('1/2');
+
+    const staleRowLookups = send.mock.calls
+      .slice(callsBeforeRefresh)
+      .filter(([method, params]) => method === 'graph.getRow'
+        && (params as { layoutVersion: number }).layoutVersion === 1);
+    expect(staleRowLookups).toEqual([]);
+  });
+
+  it('does not leave a stale "No commits found" behind a layout change', async () => {
+    const { container, getByLabelText, layout } = await searchFor('nothing', { hashes: [], rows: {} });
+    expect((container.querySelector('.commit-search') as HTMLElement).textContent)
+      .toContain('No commits found');
+
+    layout.version = 2;
+    await fireEvent.click(getByLabelText('Refresh'));
+    await settle();
+
+    await waitFor(() => expect((container.querySelector('.commit-search') as HTMLElement).textContent)
+      .not.toContain('No commits found'));
   });
 
   it('debounces typing into a single search request', async () => {
@@ -158,6 +224,7 @@ describe('Commit search in the graph toolbar', () => {
 
     expect(send).toHaveBeenCalledWith('graph.getRow', { hash: 'a'.repeat(40), layoutVersion: 1 });
     expect(search.textContent).toContain('1/2');
+    expect((search.querySelector('[aria-live="polite"]') as HTMLElement).textContent).toContain('1/2');
     // The row is centred, matching the existing sidebar branch-select behaviour.
     expect((container.querySelector('.scroll-area') as HTMLElement).scrollTop)
       .toBe(Math.max(0, 12 * ROW_HEIGHT - Math.floor(DEFAULT_VIEWPORT_HEIGHT / 2)));
@@ -179,6 +246,9 @@ describe('Commit search in the graph toolbar', () => {
   it('reports when nothing matches', async () => {
     const { search } = await searchFor('nothing', { hashes: [], rows: {} });
     expect(search.textContent).toContain('No commits found');
+    // Announced rather than silently rendered.
+    const live = search.querySelector('[aria-live="polite"]') as HTMLElement;
+    expect(live.textContent).toContain('No commits found');
   });
 
   it('explains when the match is filtered out of the graph', async () => {

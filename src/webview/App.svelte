@@ -606,8 +606,9 @@
       maxLane = build.maxLane;
       layoutVersion = build.layoutVersion;
       // Match rows are indexes into the layout that produced them, so a new
-      // layout invalidates them wholesale.
-      if (searchHashes.length > 0) clearCommitSearch();
+      // layout invalidates them wholesale. Unconditional: gating on
+      // `searchHashes.length` would leave a stale "No commits found" on screen.
+      clearCommitSearch();
       graphWindow = nextWindow;
       currentStartRow = nextWindow.startRow;
       loading = false;
