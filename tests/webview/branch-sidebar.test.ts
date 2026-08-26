@@ -34,6 +34,13 @@ const submodules = [
   { name: 'legacy', path: 'vendor/legacy', head: null, state: 'uninitialized' as const },
 ];
 
+const pullRequests = [
+  {
+    id: 'pr-1', number: 42, title: 'Add feature', state: 'open' as const,
+    sourceBranch: 'feature/x', reviewers: [], commentCount: 0,
+  },
+];
+
 /**
  * Only LOCAL is expanded by default, so any test that reaches into another
  * section has to open it first — the same click a user makes.
@@ -387,5 +394,56 @@ describe('sidebar state persistence contract', () => {
 
     const last = seen[seen.length - 1]?.detail as { expandedGroups: Record<string, boolean> };
     expect(last.expandedGroups['local:fix/other']).toBe(true);
+  });
+});
+
+describe('PULL REQUESTS section', () => {
+  afterEach(cleanup);
+
+  it('renders no PULL REQUESTS header at all when the repo has no forge provider', () => {
+    const { queryByRole, container } = render(BranchSidebar, {
+      branches, tags, stashes, worktrees, submodules,
+    });
+
+    expect(queryByRole('button', { name: /pull requests/i })).toBeNull();
+    expect(container.textContent).not.toContain('PULL REQUESTS');
+  });
+
+  it('renders the header collapsed on first render, with no pull request rows in the DOM', async () => {
+    const { getByRole, queryByText } = render(BranchSidebar, {
+      branches, tags, stashes, worktrees, submodules,
+      forgeAvailable: true, forgeSignedIn: true, pullRequests,
+    });
+
+    expect(getByRole('button', { name: /pull requests/i })).toBeInTheDocument();
+    expect(queryByText('#42')).toBeNull();
+
+    // The header is real, not decorative: toggling it reveals the row.
+    await fireEvent.click(getByRole('button', { name: /pull requests/i }));
+    expect(queryByText('#42')).toBeInTheDocument();
+  });
+
+  it('shows exactly one row, the sign-in affordance, when signed out', async () => {
+    const { getByRole, container } = render(BranchSidebar, {
+      branches, tags, stashes, worktrees, submodules,
+      forgeAvailable: true, forgeSignedIn: false, pullRequests: [],
+    });
+
+    await fireEvent.click(getByRole('button', { name: /pull requests/i }));
+
+    expect(getByRole('button', { name: /sign in to bitbucket/i })).toBeInTheDocument();
+    expect(container.querySelectorAll('.pr-row')).toHaveLength(0);
+  });
+
+  it('keeps the sign-in row reachable while the branch search box has a query', async () => {
+    const { getByRole, container } = render(BranchSidebar, {
+      branches, tags, stashes, worktrees, submodules,
+      forgeAvailable: true, forgeSignedIn: false, pullRequests: [],
+    });
+
+    const input = container.querySelector('.sidebar-search input') as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: 'main' } });
+
+    expect(getByRole('button', { name: /sign in to bitbucket/i })).toBeInTheDocument();
   });
 });

@@ -83,7 +83,7 @@
     cursor: pointer;
   }
   .pr-signin:hover,
-  .pr-row:hover { background: var(--vscode-list-hoverBackground); }
+  .pr-row:hover { background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.04)); }
   .pr-signin { color: var(--vscode-textLink-foreground); }
   .pr-state { color: var(--vscode-gitDecoration-untrackedResourceForeground); font-size: 10px; }
   .pr-state.draft { opacity: 0.55; }
