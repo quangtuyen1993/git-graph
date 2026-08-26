@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
-  mapComments, mapPullRequestDetail, mapPullRequestSummary,
+  mapComments, mapDiffstat, mapPullRequestDetail, mapPullRequestSummary,
 } from '../../src/extension/services/forge/bitbucket/bitbucket-mapper';
 import detailFixture from '../fixtures/bitbucket/pull-request.json';
 import listFixture from '../fixtures/bitbucket/pull-request-list.json';
 import commentsFixture from '../fixtures/bitbucket/comments.json';
+import diffstatFixture from '../fixtures/bitbucket/diffstat.json';
 
 describe('bitbucket-mapper', () => {
   it('maps a pull request detail', () => {
@@ -68,6 +69,47 @@ describe('bitbucket-mapper', () => {
     expect(summary).toMatchObject({
       id: '7', number: 7, title: '', sourceBranch: '', targetBranch: '',
       commentCount: 0, reviewers: [], webUrl: '',
+    });
+  });
+
+  // Finding 3: the diffstat mapper backs `forge.pr.files`, which replaces
+  // fetching the whole diff just to list changed files. Covers a rename, a
+  // binary file, and an added and a removed file from one captured payload.
+  describe('mapDiffstat', () => {
+    const files = mapDiffstat((diffstatFixture as { values: unknown[] }).values as never);
+
+    it('maps an added file', () => {
+      expect(files[0]).toEqual({
+        path: 'src/auth/refresh.ts', oldPath: null, status: 'added',
+        additions: 42, deletions: 0, binary: false,
+      });
+    });
+
+    it('maps a removed file', () => {
+      expect(files[1]).toEqual({
+        path: 'src/auth/legacy-refresh.ts', oldPath: null, status: 'deleted',
+        additions: 0, deletions: 17, binary: false,
+      });
+    });
+
+    it('maps a rename with both paths', () => {
+      expect(files[2]).toEqual({
+        path: 'src/auth/token-cache.ts', oldPath: 'src/auth/token-store.ts', status: 'renamed',
+        additions: 3, deletions: 3, binary: false,
+      });
+    });
+
+    it('treats a zero-line modified entry as binary', () => {
+      expect(files[3]).toEqual({
+        path: 'assets/logo.png', oldPath: null, status: 'modified',
+        additions: 0, deletions: 0, binary: true,
+      });
+    });
+
+    it('survives missing optional fields', () => {
+      expect(mapDiffstat([{} as never])).toEqual([
+        { path: '', oldPath: null, status: 'modified', additions: 0, deletions: 0, binary: true },
+      ]);
     });
   });
 });

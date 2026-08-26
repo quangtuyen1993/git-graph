@@ -2,12 +2,12 @@ import {
   ForgeError,
   type CreatePullRequestInput, type ForgeCapabilities, type ForgeComment, type ForgeProvider,
   type ForgeRepoRef, type ForgeSession, type MergeStrategy, type ParsedRemote,
-  type PullRequestDetail, type PullRequestListState, type PullRequestSummary,
+  type PullRequestDetail, type PullRequestFile, type PullRequestListState, type PullRequestSummary,
 } from '../forge.types';
 import type { BitbucketApi } from './bitbucket-api';
 import type { BitbucketAuthProvider } from './bitbucket-auth';
 import { BITBUCKET_AUTH_ID, BITBUCKET_AUTH_LABEL, BITBUCKET_TOKEN_SCOPES } from './bitbucket-constants';
-import { mapComments, mapPullRequestDetail, mapPullRequestSummary } from './bitbucket-mapper';
+import { mapComments, mapDiffstat, mapPullRequestDetail, mapPullRequestSummary } from './bitbucket-mapper';
 
 const PAGE_LENGTH = 50;
 
@@ -70,6 +70,18 @@ export class BitbucketCloudProvider implements ForgeProvider {
 
   public async getPullRequestDiff(repo: ForgeRepoRef, id: string): Promise<string> {
     return this.deps.api.getText(`${this.base(repo)}/pullrequests/${encodeURIComponent(id)}/diff`);
+  }
+
+  /**
+   * The file list backed by diffstat rather than the full diff: selecting a
+   * pull request needs "which files, how many lines", not their content, and
+   * diffstat returns that in a few KB against a diff that can run to tens of
+   * MB for a regenerated lockfile or a vendored directory.
+   */
+  public async getPullRequestFiles(repo: ForgeRepoRef, id: string): Promise<PullRequestFile[]> {
+    const raw = await this.deps.api.getPaged<Parameters<typeof mapDiffstat>[0][number]>(
+      `${this.base(repo)}/pullrequests/${encodeURIComponent(id)}/diffstat?pagelen=${PAGE_LENGTH}`);
+    return mapDiffstat(raw);
   }
 
   public async listComments(repo: ForgeRepoRef, id: string): Promise<ForgeComment[]> {

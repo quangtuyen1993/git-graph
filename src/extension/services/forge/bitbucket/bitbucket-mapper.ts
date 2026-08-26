@@ -1,5 +1,5 @@
 import type {
-  ForgeComment, ForgeUser, PullRequestDetail, PullRequestState, PullRequestSummary, ReviewStatus,
+  ForgeComment, ForgeUser, PullRequestDetail, PullRequestFile, PullRequestState, PullRequestSummary, ReviewStatus,
 } from '../forge.types';
 
 interface RawUser {
@@ -116,4 +116,56 @@ export function mapComment(raw: RawComment): ForgeComment {
 /** Deleted comments come back as tombstones with empty bodies; drop them. */
 export function mapComments(raw: RawComment[]): ForgeComment[] {
   return raw.filter((comment) => !comment.deleted).map(mapComment);
+}
+
+interface RawDiffstatFile {
+  path?: string;
+}
+
+interface RawDiffstatEntry {
+  status?: string;
+  lines_added?: number;
+  lines_removed?: number;
+  old?: RawDiffstatFile | null;
+  new?: RawDiffstatFile | null;
+}
+
+function mapDiffstatStatus(status: string | undefined): string {
+  switch (status) {
+    case 'added': return 'added';
+    case 'removed': return 'deleted';
+    case 'renamed': return 'renamed';
+    default: return 'modified';
+  }
+}
+
+/**
+ * Bitbucket's diffstat entries carry no explicit binary flag — unlike the
+ * diff endpoint, which marks a binary file with a `Binary files ... differ`
+ * line `parseUnifiedDiff` already looks for. Zero added and zero removed
+ * lines on a 'modified' entry is the best available signal: a rename or an
+ * add/remove can legitimately report zero lines for an empty file, so the
+ * heuristic is scoped to 'modified' only, where a real text change always
+ * moves at least one line.
+ */
+function isLikelyBinary(entry: RawDiffstatEntry, status: string): boolean {
+  return status === 'modified' && !entry.lines_added && !entry.lines_removed;
+}
+
+export function mapDiffstatEntry(raw: RawDiffstatEntry): PullRequestFile {
+  const status = mapDiffstatStatus(raw.status);
+  const path = raw.new?.path ?? raw.old?.path ?? '';
+  const oldPath = status === 'renamed' && raw.old?.path && raw.old.path !== path ? raw.old.path : null;
+  return {
+    path,
+    oldPath,
+    status,
+    additions: raw.lines_added ?? 0,
+    deletions: raw.lines_removed ?? 0,
+    binary: isLikelyBinary(raw, status),
+  };
+}
+
+export function mapDiffstat(raw: RawDiffstatEntry[]): PullRequestFile[] {
+  return raw.map(mapDiffstatEntry);
 }

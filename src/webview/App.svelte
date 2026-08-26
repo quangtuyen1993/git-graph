@@ -20,7 +20,7 @@
   import PullRequestDetail from './components/detail/PullRequestDetail.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
   import { deriveBranchPullRequests } from './lib/branch-pull-requests';
-  import { parseUnifiedDiff, type ChangedFile as ForgeChangedFile } from './lib/unified-diff';
+  import type { ChangedFile as ForgeChangedFile } from './lib/unified-diff';
   import { formatFilterStatus, localNameFor, resolvePullTarget } from './lib/branch-menu';
   import BranchFilterDropdown from './components/toolbar/BranchFilterDropdown.svelte';
   import ResizeHandle from './components/layout/ResizeHandle.svelte';
@@ -350,10 +350,14 @@
   let pullRequestDetail: PullRequestDetailData | null = null;
   let pullRequestComments: ForgeComment[] = [];
   /**
-   * Display-only summary of the pull request's changed files, parsed in the
-   * webview from the unified-diff text `forge.pr.diff` returns. Not clickable:
-   * a pull request's head commit is usually not fetched locally, so there is
-   * no diff editor this could safely open yet — see `PullRequestDetail.svelte`.
+   * Display-only summary of the pull request's changed files, from
+   * `forge.pr.files` — the diffstat endpoint, not the full diff: selecting a
+   * pull request only needs "which files, how many lines", and the diff
+   * itself can run to tens of MB for a regenerated lockfile or a vendored
+   * directory. Not clickable: a pull request's head commit is usually not
+   * fetched locally, so there is no diff editor this could safely open yet —
+   * see `PullRequestDetail.svelte`. `parseUnifiedDiff` and `forge.pr.diff`
+   * still exist for Phase 4's AI review, which needs the real diff.
    */
   let pullRequestFiles: ForgeChangedFile[] = [];
   let pullRequestDetailLoading = false;
@@ -468,16 +472,16 @@
     pullRequestDetailLoading = true;
 
     try {
-      const [detail, commentsResult, diffResult] = await Promise.all([
+      const [detail, commentsResult, filesResult] = await Promise.all([
         bridge.send('forge.pr.get', { id }) as Promise<PullRequestDetailData>,
         bridge.send('forge.pr.comments', { id }) as Promise<{ comments: ForgeComment[] }>,
-        bridge.send('forge.pr.diff', { id }) as Promise<{ diff: string }>,
+        bridge.send('forge.pr.files', { id }) as Promise<{ files: ForgeChangedFile[] }>,
       ]);
       // A later selection superseded this one while it was in flight.
       if (selectedPullRequestId !== id) return;
       pullRequestDetail = detail;
       pullRequestComments = commentsResult.comments;
-      pullRequestFiles = parseUnifiedDiff(diffResult.diff);
+      pullRequestFiles = filesResult.files;
       await scrollToPullRequestHead(detail.sourceCommit);
     } catch (e) {
       if (selectedPullRequestId !== id) return;

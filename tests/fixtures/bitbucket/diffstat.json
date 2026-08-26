@@ -1,0 +1,36 @@
+{
+  "values": [
+    {
+      "type": "diffstat",
+      "status": "added",
+      "lines_added": 42,
+      "lines_removed": 0,
+      "old": null,
+      "new": { "path": "src/auth/refresh.ts", "type": "commit_file" }
+    },
+    {
+      "type": "diffstat",
+      "status": "removed",
+      "lines_added": 0,
+      "lines_removed": 17,
+      "old": { "path": "src/auth/legacy-refresh.ts", "type": "commit_file" },
+      "new": null
+    },
+    {
+      "type": "diffstat",
+      "status": "renamed",
+      "lines_added": 3,
+      "lines_removed": 3,
+      "old": { "path": "src/auth/token-store.ts", "type": "commit_file" },
+      "new": { "path": "src/auth/token-cache.ts", "type": "commit_file" }
+    },
+    {
+      "type": "diffstat",
+      "status": "modified",
+      "lines_added": 0,
+      "lines_removed": 0,
+      "old": { "path": "assets/logo.png", "type": "commit_file" },
+      "new": { "path": "assets/logo.png", "type": "commit_file" }
+    }
+  ]
+}

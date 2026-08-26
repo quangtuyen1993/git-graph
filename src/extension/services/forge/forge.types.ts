@@ -51,6 +51,22 @@ export interface ForgeComment {
   line?: number;
 }
 
+/**
+ * One changed file in a pull request, shaped to match the `ChangedFile` the
+ * webview already renders for a commit (`git.show`) and for a parsed diff
+ * (`parseUnifiedDiff`). Backed by the diffstat endpoint rather than the full
+ * diff: selecting a pull request needs this list, not its content, and the
+ * diffstat response is a few KB against a diff that can be tens of MB.
+ */
+export interface PullRequestFile {
+  path: string;
+  oldPath: string | null;
+  status: string;
+  additions: number;
+  deletions: number;
+  binary: boolean;
+}
+
 export interface CreatePullRequestInput {
   title: string;
   description: string;
@@ -114,6 +130,7 @@ export interface ForgeProvider {
   listPullRequests(repo: ForgeRepoRef, opts: { state: PullRequestListState }): Promise<PullRequestSummary[]>;
   getPullRequest(repo: ForgeRepoRef, id: string): Promise<PullRequestDetail>;
   getPullRequestDiff(repo: ForgeRepoRef, id: string): Promise<string>;
+  getPullRequestFiles(repo: ForgeRepoRef, id: string): Promise<PullRequestFile[]>;
   listComments(repo: ForgeRepoRef, id: string): Promise<ForgeComment[]>;
 
   createPullRequest(repo: ForgeRepoRef, input: CreatePullRequestInput): Promise<PullRequestDetail>;

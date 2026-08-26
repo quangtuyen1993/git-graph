@@ -3,6 +3,7 @@ import { BitbucketCloudProvider } from '../../src/extension/services/forge/bitbu
 import detailFixture from '../fixtures/bitbucket/pull-request.json';
 import listFixture from '../fixtures/bitbucket/pull-request-list.json';
 import commentsFixture from '../fixtures/bitbucket/comments.json';
+import diffstatFixture from '../fixtures/bitbucket/diffstat.json';
 
 function build(api: Partial<Record<'getJson' | 'getText' | 'getPaged', unknown>> = {}) {
   const stub = {
@@ -60,6 +61,17 @@ describe('BitbucketCloudProvider', () => {
     const { provider, stub } = build();
     expect(await provider.getPullRequestDiff(repo, '123')).toBe('diff --git a/a b/a\n');
     expect(stub.getText).toHaveBeenCalledWith('/repositories/acme/mpos/pullrequests/123/diff');
+  });
+
+  it('lists changed files through the diffstat endpoint', async () => {
+    const { provider, stub } = build({
+      getPaged: vi.fn().mockResolvedValue((diffstatFixture as { values: unknown[] }).values),
+    });
+    const files = await provider.getPullRequestFiles(repo, '123');
+    expect(stub.getPaged).toHaveBeenCalledWith(
+      '/repositories/acme/mpos/pullrequests/123/diffstat?pagelen=50');
+    expect(files).toHaveLength(4);
+    expect(files.map((f) => f.status)).toEqual(['added', 'deleted', 'renamed', 'modified']);
   });
 
   it('lists comments without the deleted ones', async () => {

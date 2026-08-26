@@ -156,6 +156,23 @@ export function createForgeHandler(deps: ForgeHandlerDeps) {
         return { diff: cached.value };
       }
 
+      case 'forge.pr.files': {
+        const { provider, repo, prefix } = await requireForge();
+        const id = String(p.id ?? '');
+        const detail = await deps.store.fetch(
+          `${prefix}pr:${id}`, PR_DETAIL_TTL_MS, () => provider.getPullRequest(repo, id));
+
+        // Same immutability argument as forge.pr.diff: keyed by the sha pair,
+        // so a new commit on the pull request produces a different key and
+        // this content can never go stale.
+        const cached = await deps.store.fetch(
+          `${prefix}files:${detail.value.targetCommit}..${detail.value.sourceCommit}`,
+          DIFF_TTL_MS,
+          () => provider.getPullRequestFiles(repo, id),
+        );
+        return { files: cached.value };
+      }
+
       case 'forge.pr.openExternal': {
         const { provider, repo, prefix } = await requireForge();
         const id = String(p.id ?? '');
