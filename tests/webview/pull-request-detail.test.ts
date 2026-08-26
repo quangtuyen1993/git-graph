@@ -146,6 +146,23 @@ describe('PullRequestDetail', () => {
     expect(screen.getByText('second')).toBeInTheDocument();
   });
 
+  // Stretch requirement: the full pull request diff is now sha-key cached and
+  // parseable in the webview, so a file row no longer needs a locally fetched
+  // commit to open a diff — it just asks the parent to render the file it
+  // was given.
+  it('opens a diff when a file row is clicked', async () => {
+    const files = [
+      { path: 'src/auth.ts', oldPath: null, status: 'modified', additions: 3, deletions: 1, binary: false },
+    ];
+    const { component, getByText } = render(PullRequestDetail, { ...props, files });
+    let opened: unknown;
+    component.$on('openFile', (event) => { opened = event.detail; });
+
+    await fireEvent.click(getByText('src/auth.ts'));
+
+    expect(opened).toEqual(files[0]);
+  });
+
   it('renders two files that resolve to the same path (rename plus mode change) without throwing', () => {
     const duplicatePathFiles = [
       { path: 'src/a.ts', oldPath: 'src/old-a.ts', status: 'renamed', additions: 1, deletions: 1, binary: false },

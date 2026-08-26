@@ -97,3 +97,53 @@ export function parseUnifiedDiff(diffText: string): ChangedFile[] {
 
   return files;
 }
+
+export interface FileDiffContent {
+  oldContent: string;
+  newContent: string;
+}
+
+const HUNK_HEADER = /^@@ .* @@/;
+
+/**
+ * Reconstructs one file's old and new text from its own slice of a unified
+ * diff — no local commit involved. Only what a hunk actually carries (its
+ * context lines plus its +/- lines) is known; nothing outside a hunk is
+ * fabricated, so two non-adjacent hunks are joined by a blank line on both
+ * sides rather than pretending the file is contiguous between them.
+ *
+ * This is what lets a pull request's changed-file rows open a real diff
+ * editor even when the pull request's head commit was never fetched locally
+ * — `forge.pr.diff` already returns the whole diff as plain text, sha-keyed
+ * and immutably cached, so no git resolution is needed to render one file's
+ * slice of it.
+ */
+export function extractFileDiffContent(diffText: string, path: string): FileDiffContent | null {
+  if (!diffText) return null;
+
+  const segments = diffText.split(/(?=^diff --git )/m);
+  const segment = segments.find((candidate) => {
+    const header = DIFF_GIT_LINE.exec(candidate.split('\n', 1)[0]);
+    return header?.[2] === path;
+  });
+  if (!segment) return null;
+
+  const oldLines: string[] = [];
+  const newLines: string[] = [];
+  let inHunk = false;
+
+  for (const line of segment.split('\n')) {
+    if (HUNK_HEADER.test(line)) {
+      if (inHunk) { oldLines.push(''); newLines.push(''); }
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk) continue;
+    if (line.startsWith('\\')) continue; // "\ No newline at end of file"
+    if (line.startsWith('+')) { newLines.push(line.slice(1)); continue; }
+    if (line.startsWith('-')) { oldLines.push(line.slice(1)); continue; }
+    if (line.startsWith(' ')) { oldLines.push(line.slice(1)); newLines.push(line.slice(1)); continue; }
+  }
+
+  return { oldContent: oldLines.join('\n'), newContent: newLines.join('\n') };
+}

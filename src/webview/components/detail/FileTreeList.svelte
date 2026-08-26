@@ -15,6 +15,16 @@
   export let nodes: PathTreeNode<ChangedFile>[] = [];
   export let collapsedFolders: Record<string, boolean> = {};
   export let depth = 0;
+  /**
+   * When true, file rows render as disabled buttons instead of active ones:
+   * no click, no hover affordance, no link-coloured path. A caller whose
+   * `openFile` handler silently no-ops for some state (the review panel's
+   * Pull Request mode, before its own diff-from-text support exists) must
+   * set this rather than let the row keep looking clickable while doing
+   * nothing — that mismatch is its own defect, independent of whatever the
+   * handler does or doesn't do.
+   */
+  export let disabled = false;
 
   const dispatch = createEventDispatcher();
 
@@ -58,7 +68,8 @@
           class="file-row"
           style={`--file-indent: ${depth * 16}px`}
           title={node.item.path}
-          on:click={() => dispatch('openFile', node.item)}
+          {disabled}
+          on:click={() => { if (!disabled) dispatch('openFile', node.item); }}
         >
           <span class="file-icon"><Icon name="file" size={14} /></span>
           <span class="file-label">{node.label}</span>
@@ -79,6 +90,7 @@
           nodes={node.children}
           {collapsedFolders}
           depth={depth + 1}
+          {disabled}
           on:openFile
           on:folderToggle
         />
@@ -111,8 +123,16 @@
   }
 
   .folder-row:hover,
-  .file-row:hover {
+  .file-row:hover:not(:disabled) {
     background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.12));
+  }
+
+  .file-row:disabled {
+    cursor: default;
+  }
+
+  .file-row:disabled .file-label {
+    color: var(--vscode-foreground, #cccccc);
   }
 
   .folder-row:focus-visible,

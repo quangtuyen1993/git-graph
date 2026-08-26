@@ -226,12 +226,23 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
       case 'review.setTarget': {
         const git = deps.getGitService();
         if (!git) throw new Error('No git repository found');
-        const resolved = await resolveReviewTarget(git, targetFromParams(p));
+        const target = targetFromParams(p);
+
+        // A pull request's sha pair comes from PullRequestDetail, never from
+        // revParse — targetFromParams leaves baseRef/headRef empty for kind
+        // 'pr', so falling through to the git-based resolver here would
+        // either throw on the empty ref or, for a branch never fetched
+        // locally, be exactly the regression review.start already guards
+        // against.
+        const resolved = target.kind === 'pr'
+          ? await resolvePullRequestTarget(git, deps.forge, target.prId as string)
+          : await resolveReviewTarget(git, target);
         const stored: ReviewTarget = {
           kind: resolved.kind,
           baseRef: resolved.baseRef,
           headRef: resolved.headRef,
           ...(resolved.subject ? { subject: resolved.subject } : {}),
+          ...(resolved.prId ? { prId: resolved.prId } : {}),
         };
         deps.targets.set(repoId, stored);
         await deps.focusReviewView();

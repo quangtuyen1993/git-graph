@@ -58,6 +58,7 @@
   const dispatch = createEventDispatcher<{
     openExternal: void;
     reviewWithAi: void;
+    openFile: ChangedFile;
     approve: void;
     requestChanges: void;
     merge: { strategy: string };
@@ -71,13 +72,11 @@
   };
 
   /*
-   * Deliberately not FileTreeList: that component's leaf rows are buttons
-   * that dispatch `openFile` to open a diff editor against the local
-   * repository. A pull request's head commit is usually not fetched locally
-   * (see App.svelte's `scrollToPullRequestHead`), so that action would fail
-   * for the common case. Until a later phase solves "open a diff for a
-   * commit we may not have", this list is read-only — no button, no click
-   * handler, no link styling — so it never promises what it cannot do.
+   * Deliberately not FileTreeList: this list is always flat (no folders), and
+   * its rows dispatch the file object itself rather than a `PathTreeNode`.
+   * A file row now opens a real diff: the parent renders it from
+   * `forge.pr.diff`'s text via `extractFileDiffContent`, so no locally
+   * fetched commit is required — see App.svelte's `handlePullRequestOpenFile`.
    */
   function statusLetter(status: string): string {
     if (status === 'added') return 'A';
@@ -140,17 +139,24 @@
       <h3>Files ({files.length})</h3>
       <ul class="pr-file-list">
         {#each files as file, fileIndex (fileIndex + ':' + file.path)}
-          <li class="pr-file-row" title={file.path}>
-            <span class="pr-file-path">{file.path}</span>
-            <span class="pr-file-meta">
-              {#if file.binary}
-                <span class="file-binary">BIN</span>
-              {:else}
-                {#if file.additions > 0}<span class="file-add">+{file.additions}</span>{/if}
-                {#if file.deletions > 0}<span class="file-del">-{file.deletions}</span>{/if}
-              {/if}
-              <span class="file-status file-status-{file.status}">{statusLetter(file.status)}</span>
-            </span>
+          <li>
+            <button
+              type="button"
+              class="pr-file-row"
+              title={file.path}
+              on:click={() => dispatch('openFile', file)}
+            >
+              <span class="pr-file-path">{file.path}</span>
+              <span class="pr-file-meta">
+                {#if file.binary}
+                  <span class="file-binary">BIN</span>
+                {:else}
+                  {#if file.additions > 0}<span class="file-add">+{file.additions}</span>{/if}
+                  {#if file.deletions > 0}<span class="file-del">-{file.deletions}</span>{/if}
+                {/if}
+                <span class="file-status file-status-{file.status}">{statusLetter(file.status)}</span>
+              </span>
+            </button>
           </li>
         {/each}
       </ul>
@@ -300,20 +306,35 @@
   .reviewer.changes_requested { color: var(--vscode-testing-iconFailed, #f14c4c); }
   .reviewer.pending { color: var(--vscode-descriptionForeground, #888); }
 
-  /* Display-only: no button, no hover affordance, no link colour on the path
-     — this list cannot open a diff yet, so it must not look like it can. */
   .pr-file-list {
     list-style: none;
     margin: 0;
     padding: 0;
   }
 
+  /* A real button now: clicking a row opens that file's diff. */
   .pr-file-row {
     display: flex;
     align-items: center;
+    width: 100%;
     gap: 8px;
     min-height: 22px;
     padding: 2px 0;
+    border: none;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .pr-file-row:hover {
+    background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.12));
+  }
+
+  .pr-file-row:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007acc);
+    outline-offset: -1px;
   }
 
   .pr-file-path {
@@ -322,6 +343,7 @@
     white-space: nowrap;
     font-family: var(--vscode-editor-font-family, monospace);
     font-size: 11px;
+    color: var(--vscode-textLink-foreground, #3794ff);
   }
 
   .pr-file-meta {

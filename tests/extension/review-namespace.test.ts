@@ -203,6 +203,29 @@ describe('review namespace', () => {
     expect(targets.get('repo-a')).toBeNull();
   });
 
+  it('setTarget resolves a pull request through forge, never through revParse', async () => {
+    // Mirrors review.start's own 'pr' branch: the sha pair must come from
+    // PullRequestDetail, not from resolving headRef/baseRef through git —
+    // targetFromParams leaves both '' for kind 'pr', so a naive setTarget
+    // that always calls resolveReviewTarget would revParse the empty string.
+    const { handler, targets, focusReviewView, broadcast, git, forge } = harness();
+    forge.getPullRequest.mockResolvedValue(fakePullRequest({
+      id: '123', number: 7, title: 'Add feature',
+      sourceBranch: 'feature/x', targetBranch: 'develop',
+    }));
+
+    const result = await handler('review.setTarget', { kind: 'pr', prId: '123' });
+
+    expect(result).toEqual({ success: true });
+    expect(git.revParse).not.toHaveBeenCalled();
+    expect(targets.get('repo-a')).toMatchObject({
+      kind: 'pr', prId: '123', baseRef: 'develop', headRef: 'feature/x', subject: 'Add feature',
+    });
+    expect(focusReviewView).toHaveBeenCalledOnce();
+    expect(broadcast).toHaveBeenCalledWith('review.target',
+      expect.objectContaining({ kind: 'pr', prId: '123' }));
+  });
+
   it('getTarget returns what setTarget stored, null before that', async () => {
     const { handler } = harness();
     expect(await handler('review.getTarget', {})).toBeNull();

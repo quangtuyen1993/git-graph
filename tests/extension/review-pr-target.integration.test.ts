@@ -118,3 +118,75 @@ describe('review.start against a real repository (pull request locality)', () =>
     expect(input.payloadText).toContain('hello from the feature branch');
   });
 });
+
+/**
+ * review.setTarget's 'pr' branch used to fall through to resolveReviewTarget
+ * — the git-based resolver — which revParses target.headRef. targetFromParams
+ * leaves headRef/baseRef as '' for kind 'pr', so that path either throws on
+ * the empty ref or, worse, silently "resolves" it. Same trap as review.start:
+ * a well-formed-but-absent sha is the only way to prove locality is decided
+ * by a real existence check rather than a mocked revParse that would echo
+ * anything back.
+ */
+describe('review.setTarget against a real repository (pull request locality)', () => {
+  let repo: TempGitRepo;
+  let git: GitService;
+  let storageRoot: string;
+  let store: ReviewStore;
+
+  beforeEach(async () => {
+    repo = await TempGitRepo.create();
+    await repo.commitFile('Initial commit', 'README.md', '# Test\n');
+    git = new GitService(repo.path);
+    storageRoot = await mkdtemp(join(tmpdir(), 'review-pr-target-'));
+    store = new ReviewStore(storageRoot);
+  });
+
+  afterEach(async () => {
+    await repo.cleanup();
+    await rm(storageRoot, { recursive: true, force: true });
+  });
+
+  it('stores a pull request target for an unfetched branch without ever consulting revParse', async () => {
+    const absentBase = 'e'.repeat(40);
+    const absentHead = 'f'.repeat(40);
+    const detail = fakePullRequest({
+      id: 'PR-1', number: 7, title: 'Add feature',
+      sourceCommit: absentHead, targetCommit: absentBase,
+      sourceBranch: 'feature/x', targetBranch: 'main',
+    });
+
+    const revParseSpy = vi.spyOn(git, 'revParse');
+    const targets = new ReviewTargetState();
+    const focusReviewView = vi.fn(async () => {});
+    const broadcast = vi.fn();
+    const forge = {
+      getPullRequest: vi.fn(async () => detail),
+      getDiff: vi.fn(async () => ''),
+      getFiles: vi.fn(async () => []),
+      getComments: vi.fn(async () => []),
+      getProviderId: vi.fn(async () => 'bitbucket-cloud'),
+    };
+    const handler = createReviewHandler({
+      store: store as never,
+      runner: { start: vi.fn(), cancel: vi.fn(), isRunning: vi.fn() } as never,
+      getGitService: () => git as never,
+      getRepoId: () => 'repo-x',
+      getRepos: () => [],
+      getMaxDiffChars: () => 0,
+      openBody: vi.fn(async () => {}),
+      targets,
+      focusReviewView,
+      broadcast,
+      forge: forge as never,
+    });
+
+    const result = await handler('review.setTarget', { kind: 'pr', prId: 'PR-1' });
+
+    expect(result).toEqual({ success: true });
+    expect(revParseSpy).not.toHaveBeenCalled();
+    expect(targets.get('repo-x')).toMatchObject({ kind: 'pr', prId: 'PR-1', headRef: 'feature/x', baseRef: 'main' });
+    expect(focusReviewView).toHaveBeenCalledOnce();
+    expect(broadcast).toHaveBeenCalledWith('review.target', expect.objectContaining({ kind: 'pr', prId: 'PR-1' }));
+  });
+});

@@ -547,6 +547,35 @@ describe('extension view sessions', () => {
     expect(currentUri.toString()).toBe('/repo/root/src/shared.ts');
   });
 
+  // Phase 4 task 3's stretch requirement: a pull request's changed-file rows
+  // open a diff reconstructed entirely from `forge.pr.diff` text in the
+  // webview — no git call may be involved, since the pull request's head is
+  // usually not fetched locally.
+  it('opens a diff from supplied text without touching git', async () => {
+    const view = await activateAndResolveView();
+
+    view.receive({
+      id: 'pr-diff',
+      type: 'request',
+      method: 'ui.openTextDiff',
+      params: {
+        path: 'src/widget.ts', oldPath: null, status: 'modified',
+        oldContent: 'old line', newContent: 'new line',
+      },
+    });
+    await responseFor(view, 'pr-diff');
+
+    expect(hostMocks.getParents).not.toHaveBeenCalled();
+    expect(hostMocks.showFile).not.toHaveBeenCalled();
+    expect(hostMocks.getHeadHash).not.toHaveBeenCalled();
+
+    const [, oldUri, newUri, title] = hostMocks.executeCommand.mock.calls
+      .find(([command]) => command === 'vscode.diff')!;
+    expect(oldUri.toString()).toContain('git-graph-pro-diff:');
+    expect(newUri.toString()).toContain('git-graph-pro-diff:');
+    expect(title).toContain('widget.ts');
+  });
+
   it('holds refresh events until the hidden view comes back', async () => {
     const view = await activateAndResolveView(fakeView(false));
 

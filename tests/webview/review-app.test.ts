@@ -265,6 +265,29 @@ describe('ReviewApp redesign', () => {
       });
     });
 
+    // A row that looks clickable and does nothing is the same defect class
+    // this project already fixed once for buttons that dispatched into
+    // nothing (see FileTreeList's `disabled` prop). The flat view already
+    // disables its rows in 'pr' mode; the tree view must match.
+    it('disables file rows in tree view for Pull Request mode, matching the flat view', async () => {
+      stub({ 'forge.status': { available: true }, 'forge.pr.list': { pullRequests } });
+      const { getByRole, getByText } = render(ReviewApp);
+      await waitFor(() => expect(getByRole('tab', { name: 'Pull Request' })).toBeInTheDocument());
+      await fireEvent.click(getByRole('tab', { name: 'Pull Request' }));
+      const combobox = await waitFor(() => getByRole('combobox', { name: 'Pull request' }));
+      await fireEvent.focus(combobox);
+      const option = await waitFor(() => getByRole('option', { name: /Add widgets/ }));
+      await fireEvent.click(option);
+      await waitFor(() => expect(getByText('src/widget.ts')).toBeInTheDocument());
+
+      await fireEvent.click(getByRole('button', { name: 'View as tree' }));
+
+      // The tree view shows only the leaf label ("widget.ts"), not the full
+      // path — the full path lives in the row's title attribute instead.
+      const row = await waitFor(() => getByText('widget.ts').closest('button')!);
+      expect(row).toBeDisabled();
+    });
+
     it('renders a pr history entry by its number and title, not a sha pair', async () => {
       stub({
         'forge.status': { available: true },

@@ -454,6 +454,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           await vscode.commands.executeCommand('vscode.diff', parentUri, currentUri, title);
           return { success: true };
         }
+        // A pull request's changed-file rows open a diff reconstructed
+        // entirely from `forge.pr.diff` text (parsed in the webview via
+        // `extractFileDiffContent`) — deliberately no GitService call here,
+        // since the pull request's head commit is usually not fetched
+        // locally. Content is exactly what the caller supplies; nothing here
+        // resolves a ref or reads the working tree.
+        case 'ui.openTextDiff': {
+          const filePath = p.path as string;
+          const oldPath = (p.oldPath as string | null | undefined) ?? filePath;
+          const status = (p.status as string) ?? 'modified';
+          const oldContent = status === 'added' ? '' : (p.oldContent as string) ?? '';
+          const newContent = status === 'deleted' ? '' : (p.newContent as string) ?? '';
+
+          const virtualDocumentRequestId = ++virtualDocumentRequestSequence;
+          const tag = `ts=${Date.now()}&session=${panelSessionId}&request=${virtualDocumentRequestId}`;
+          const oldUri = vscode.Uri.from({
+            scheme: GIT_GRAPH_SCHEME, path: `/${oldPath}`, query: `${tag}&side=old`,
+          });
+          const newUri = vscode.Uri.from({
+            scheme: GIT_GRAPH_SCHEME, path: `/${filePath}`, query: `${tag}&side=new`,
+          });
+          contentProvider.setContent(oldUri.toString(), oldContent);
+          contentProvider.setContent(newUri.toString(), newContent);
+
+          const fileName = filePath.split('/').pop() ?? filePath;
+          const title = `${fileName} (pull request)`;
+          await vscode.commands.executeCommand('vscode.diff', oldUri, newUri, title);
+          return { success: true };
+        }
         case 'ui.openFolder': {
           const folderUri = vscode.Uri.file(p.path as string);
           await vscode.commands.executeCommand('vscode.openFolder', folderUri, { forceNewWindow: true });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseUnifiedDiff } from '../../src/webview/lib/unified-diff';
+import { extractFileDiffContent, parseUnifiedDiff } from '../../src/webview/lib/unified-diff';
 
 describe('parseUnifiedDiff', () => {
   it('returns an empty list for empty input', () => {
@@ -158,5 +158,134 @@ describe('parseUnifiedDiff', () => {
     const files = parseUnifiedDiff(diff);
     expect(files.map((f) => f.path)).toEqual(['a.ts', 'b.ts']);
     expect(files[1].status).toBe('added');
+  });
+});
+
+describe('extractFileDiffContent', () => {
+  it('reconstructs both sides of a modified file from its hunk', () => {
+    const diff = [
+      'diff --git a/src/widget.ts b/src/widget.ts',
+      'index 1111111..2222222 100644',
+      '--- a/src/widget.ts',
+      '+++ b/src/widget.ts',
+      '@@ -1,3 +1,3 @@',
+      ' context line',
+      '-old line',
+      '+new line',
+      ' trailing context',
+    ].join('\n');
+
+    const result = extractFileDiffContent(diff, 'src/widget.ts');
+
+    expect(result).toEqual({
+      oldContent: 'context line\nold line\ntrailing context',
+      newContent: 'context line\nnew line\ntrailing context',
+    });
+  });
+
+  it('leaves the old side empty for an added file', () => {
+    const diff = [
+      'diff --git a/src/new.ts b/src/new.ts',
+      'new file mode 100644',
+      'index 0000000..3333333',
+      '--- /dev/null',
+      '+++ b/src/new.ts',
+      '@@ -0,0 +1,2 @@',
+      '+export const x = 1;',
+      '+export const y = 2;',
+    ].join('\n');
+
+    const result = extractFileDiffContent(diff, 'src/new.ts');
+
+    expect(result).toEqual({ oldContent: '', newContent: 'export const x = 1;\nexport const y = 2;' });
+  });
+
+  it('leaves the new side empty for a deleted file', () => {
+    const diff = [
+      'diff --git a/src/old.ts b/src/old.ts',
+      'deleted file mode 100644',
+      'index 4444444..0000000',
+      '--- a/src/old.ts',
+      '+++ /dev/null',
+      '@@ -1,2 +0,0 @@',
+      '-gone one',
+      '-gone two',
+    ].join('\n');
+
+    const result = extractFileDiffContent(diff, 'src/old.ts');
+
+    expect(result).toEqual({ oldContent: 'gone one\ngone two', newContent: '' });
+  });
+
+  it('picks the right file out of a multi-file diff', () => {
+    const diff = [
+      'diff --git a/a.ts b/a.ts',
+      '--- a/a.ts',
+      '+++ b/a.ts',
+      '@@ -1 +1 @@',
+      '-a',
+      '+aa',
+      'diff --git a/b.ts b/b.ts',
+      '--- a/b.ts',
+      '+++ b/b.ts',
+      '@@ -1 +1 @@',
+      '-b',
+      '+bb',
+    ].join('\n');
+
+    expect(extractFileDiffContent(diff, 'b.ts')).toEqual({ oldContent: 'b', newContent: 'bb' });
+  });
+
+  it('joins two non-adjacent hunks with a blank separator on both sides', () => {
+    const diff = [
+      'diff --git a/big.ts b/big.ts',
+      '--- a/big.ts',
+      '+++ b/big.ts',
+      '@@ -1,2 +1,2 @@',
+      ' top',
+      '-first old',
+      '+first new',
+      '@@ -50,2 +50,2 @@',
+      ' bottom',
+      '-second old',
+      '+second new',
+    ].join('\n');
+
+    const result = extractFileDiffContent(diff, 'big.ts');
+
+    expect(result?.oldContent).toBe('top\nfirst old\n\nbottom\nsecond old');
+    expect(result?.newContent).toBe('top\nfirst new\n\nbottom\nsecond new');
+  });
+
+  it('ignores a "no newline at end of file" marker', () => {
+    const diff = [
+      'diff --git a/README.md b/README.md',
+      '--- a/README.md',
+      '+++ b/README.md',
+      '@@ -1 +1 @@',
+      '-old text',
+      '\\ No newline at end of file',
+      '+new text',
+      '\\ No newline at end of file',
+    ].join('\n');
+
+    expect(extractFileDiffContent(diff, 'README.md')).toEqual({ oldContent: 'old text', newContent: 'new text' });
+  });
+
+  it('returns null when the path is not in the diff', () => {
+    const diff = [
+      'diff --git a/a.ts b/a.ts',
+      '--- a/a.ts',
+      '+++ b/a.ts',
+      '@@ -1 +1 @@',
+      '-a',
+      '+aa',
+    ].join('\n');
+
+    expect(extractFileDiffContent(diff, 'missing.ts')).toBeNull();
+  });
+
+  it('returns null for empty diff text', () => {
+    expect(extractFileDiffContent('', 'a.ts')).toBeNull();
   });
 });

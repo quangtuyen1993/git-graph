@@ -20,7 +20,7 @@
   import PullRequestDetail from './components/detail/PullRequestDetail.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
   import { deriveBranchPullRequests } from './lib/branch-pull-requests';
-  import type { ChangedFile as ForgeChangedFile } from './lib/unified-diff';
+  import { extractFileDiffContent, type ChangedFile as ForgeChangedFile } from './lib/unified-diff';
   import { formatFilterStatus, localNameFor, resolvePullTarget } from './lib/branch-menu';
   import BranchFilterDropdown from './components/toolbar/BranchFilterDropdown.svelte';
   import ResizeHandle from './components/layout/ResizeHandle.svelte';
@@ -357,17 +357,25 @@
   let pullRequestDetail: PullRequestDetailData | null = null;
   let pullRequestComments: ForgeComment[] = [];
   /**
-   * Display-only summary of the pull request's changed files, from
-   * `forge.pr.files` — the diffstat endpoint, not the full diff: selecting a
-   * pull request only needs "which files, how many lines", and the diff
-   * itself can run to tens of MB for a regenerated lockfile or a vendored
-   * directory. Not clickable: a pull request's head commit is usually not
-   * fetched locally, so there is no diff editor this could safely open yet —
-   * see `PullRequestDetail.svelte`. `parseUnifiedDiff` and `forge.pr.diff`
-   * still exist for Phase 4's AI review, which needs the real diff.
+   * Summary of the pull request's changed files, from `forge.pr.files` — the
+   * diffstat endpoint, not the full diff: selecting a pull request only
+   * needs "which files, how many lines" up front, and the diff itself can
+   * run to tens of MB for a regenerated lockfile or a vendored directory.
+   * Clicking a row still opens a real diff — see `handlePullRequestOpenFile`,
+   * which fetches `forge.pr.diff` lazily and reconstructs just that file's
+   * content from the text via `extractFileDiffContent`.
    */
   let pullRequestFiles: ForgeChangedFile[] = [];
   let pullRequestDetailLoading = false;
+  /**
+   * The full pull request diff, fetched lazily — only once a file row is
+   * actually clicked, not on every selection — and cached here so opening a
+   * second file in the same pull request doesn't refetch it. `forge.pr.diff`
+   * is sha-keyed and immutably cached on the host besides, but this avoids
+   * paying a message round trip for every file. Reset whenever the selected
+   * pull request changes.
+   */
+  let pullRequestDiffText: string | null = null;
 
   function clearPullRequestSelection(): void {
     selectedPullRequestId = null;
@@ -375,6 +383,7 @@
     pullRequestComments = [];
     pullRequestFiles = [];
     pullRequestDetailLoading = false;
+    pullRequestDiffText = null;
   }
 
   /**
@@ -480,6 +489,7 @@
     pullRequestComments = [];
     pullRequestFiles = [];
     pullRequestDetailLoading = true;
+    pullRequestDiffText = null;
 
     try {
       const [detail, commentsResult, filesResult] = await Promise.all([
@@ -505,6 +515,59 @@
     if (!pullRequestDetail) return;
     try {
       await bridge.send('forge.pr.openExternal', { id: pullRequestDetail.id });
+    } catch (e) {
+      showTransientMessage(messageOf(e));
+    }
+  }
+
+  /**
+   * Hands the selected pull request to the review panel. Sends only the pull
+   * request's own id and title — never a baseRef/headRef the webview
+   * resolved itself — so the host resolves the sha pair through
+   * `PullRequestDetail`, not through git (see review.setTarget's 'pr'
+   * branch), which is what keeps this working for a branch never fetched
+   * locally.
+   */
+  async function handlePullRequestReviewWithAi(): Promise<void> {
+    if (!pullRequestDetail) return;
+    try {
+      await bridge.send('review.setTarget', {
+        kind: 'pr', prId: pullRequestDetail.id,
+        ...(pullRequestDetail.title ? { subject: pullRequestDetail.title } : {}),
+      });
+    } catch (e) {
+      showTransientMessage(messageOf(e));
+    }
+  }
+
+  /**
+   * Opens a changed file's diff from a pull request. The full diff is fetched
+   * once (lazily, on first click — see `pullRequestDiffText`) and the file's
+   * own slice of it is reconstructed entirely from that text via
+   * `extractFileDiffContent`. No git call, no locally fetched commit: this is
+   * what makes the row functional even for a pull request whose head was
+   * never fetched — the case `PullRequestDetail.svelte` used to leave
+   * display-only.
+   */
+  async function handlePullRequestOpenFile(event: CustomEvent<ForgeChangedFile>): Promise<void> {
+    if (!selectedPullRequestId) return;
+    const prId = selectedPullRequestId;
+    const file = event.detail;
+    try {
+      if (pullRequestDiffText === null) {
+        const result = await bridge.send('forge.pr.diff', { id: prId }) as { diff: string };
+        if (selectedPullRequestId !== prId) return; // superseded while fetching
+        pullRequestDiffText = result.diff;
+      }
+      const content = extractFileDiffContent(pullRequestDiffText, file.path);
+      if (!content) {
+        showTransientMessage(`Couldn't find "${file.path}" in the pull request diff.`);
+        return;
+      }
+      await bridge.send('ui.openTextDiff', {
+        path: file.path, oldPath: file.oldPath, status: file.status,
+        oldContent: content.oldContent, newContent: content.newContent,
+      });
     } catch (e) {
       showTransientMessage(messageOf(e));
     }
@@ -1331,6 +1394,10 @@
     rightPanelOpen = false;
     detailCommit = null;
     detailFiles = null;
+    // A pull request selected before the filter changed must not resurface
+    // stale: its row indexes belonged to the layout being replaced, same as
+    // the commit selection above.
+    clearPullRequestSelection();
     scrollTop = 0;
     if (scrollContainer) scrollContainer.scrollTop = 0;
 
@@ -2321,7 +2388,10 @@
               comments={pullRequestComments}
               files={pullRequestFiles}
               capabilities={forgeCapabilities}
+              reviewWithAiEnabled={true}
               on:openExternal={handlePullRequestOpenExternal}
+              on:reviewWithAi={handlePullRequestReviewWithAi}
+              on:openFile={handlePullRequestOpenFile}
               on:close={closeRightPanel}
             />
           {/if}

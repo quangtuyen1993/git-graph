@@ -502,9 +502,14 @@
   }
 
   async function openFile(file: FileChange): Promise<void> {
-    // A pull request's head commit is usually not fetched locally, so there
-    // is no diff editor this can safely open yet — see PullRequestDetail.svelte
-    // for the same reasoning. The file rows stay display-only in this mode.
+    // ui.compareDiff resolves both sides through git, and a pull request's
+    // head commit is usually not fetched locally — so this mode can't reuse
+    // it the way the other three do. PullRequestDetail.svelte solves the same
+    // problem differently (rendering a file's diff from forge.pr.diff's text,
+    // no git involved); this pane doesn't fetch that text, so it stays
+    // display-only here. The row itself is marked `disabled` (see the
+    // FileTreeList/flat-view usages below) so it doesn't look clickable
+    // either.
     if (mode === 'pr') return;
     const params = getCompareParams();
     try {
@@ -749,6 +754,7 @@
         <FileTreeList
           nodes={fileTree}
           {collapsedFolders}
+          disabled={mode === 'pr'}
           on:folderToggle={(event) => toggleFolder(event.detail.path)}
           on:openFile={(event) => openFile(event.detail)}
         />
