@@ -6,7 +6,7 @@ import {
 } from '../forge.types';
 import type { BitbucketApi } from './bitbucket-api';
 import type { BitbucketAuthProvider } from './bitbucket-auth';
-import { BITBUCKET_AUTH_ID, BITBUCKET_AUTH_LABEL, BITBUCKET_TOKEN_SCOPES } from './bitbucket-auth';
+import { BITBUCKET_AUTH_ID, BITBUCKET_AUTH_LABEL, BITBUCKET_TOKEN_SCOPES } from './bitbucket-constants';
 import { mapComments, mapPullRequestDetail, mapPullRequestSummary } from './bitbucket-mapper';
 
 const PAGE_LENGTH = 50;
@@ -60,7 +60,7 @@ export class BitbucketCloudProvider implements ForgeProvider {
     return mapPullRequestDetail(raw);
   }
 
-  public getPullRequestDiff(repo: ForgeRepoRef, id: string): Promise<string> {
+  public async getPullRequestDiff(repo: ForgeRepoRef, id: string): Promise<string> {
     return this.deps.api.getText(`${this.base(repo)}/pullrequests/${encodeURIComponent(id)}/diff`);
   }
 
@@ -99,7 +99,20 @@ export class BitbucketCloudProvider implements ForgeProvider {
     return error.hostMessage;
   }
 
+  /**
+   * Defence in depth. `remote-url.ts` is the real boundary — it already
+   * refuses to produce a `ParsedRemote` with a `.`/`..`/empty segment — but
+   * this guards the case where a caller builds a `ForgeRepoRef` some other
+   * way. `encodeURIComponent` does not escape `.` (RFC 3986 unreserved), so
+   * a `..` segment left unchecked here would reach `/repositories/../x` and
+   * let the WHATWG URL parser inside `fetch` collapse it into a path outside
+   * `/repositories`, carrying this provider's Basic auth header with it.
+   */
   private base(repo: ForgeRepoRef): string {
-    return `/repositories/${encodeURIComponent(repo.owner)}/${repo.name.split('/').map(encodeURIComponent).join('/')}`;
+    const segments = [repo.owner, ...repo.name.split('/')];
+    if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+      throw new ForgeError('other', 0, `Invalid repository reference: ${repo.owner}/${repo.name}`);
+    }
+    return `/repositories/${segments.map(encodeURIComponent).join('/')}`;
   }
 }

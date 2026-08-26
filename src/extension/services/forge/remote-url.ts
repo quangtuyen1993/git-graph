@@ -8,6 +8,16 @@ export interface ParsedRemote {
 // scp-style: git@host:path — the form git writes by default for ssh remotes.
 const SCP_LIKE = /^(?:([^@/]+)@)?([^:/]+):(.+)$/;
 
+/**
+ * `.`, `..` and empty are the segments a path-traversal remote is built from.
+ * `encodeURIComponent` does not escape `.` (RFC 3986 unreserved), so a
+ * segment like this surviving into a provider's request path can redirect an
+ * authenticated request off the endpoint it was meant to hit.
+ */
+function isTraversalSegment(segment: string): boolean {
+  return segment === '' || segment === '.' || segment === '..';
+}
+
 function splitOwnerAndName(rawPath: string): { owner: string; name: string } | undefined {
   const path = rawPath.replace(/^\/+/, '').replace(/\.git$/, '').replace(/\/+$/, '');
   const firstSlash = path.indexOf('/');
@@ -20,7 +30,17 @@ function splitOwnerAndName(rawPath: string): { owner: string; name: string } | u
   // the first segment is the repository's name — splitting on the last slash
   // would drop those segments.
   const name = path.slice(firstSlash + 1);
-  return name ? { owner, name } : undefined;
+  if (!name) return undefined;
+
+  // A remote URL is untrusted input (an SCP-style URL is not normalized the
+  // way the URL parser normalizes https://, so a `..` segment survives
+  // verbatim into owner/name here). Refuse to produce a ParsedRemote a
+  // provider could turn into a traversal path — same as any other
+  // unparseable remote, this is simply absent for that repository.
+  if (isTraversalSegment(owner)) return undefined;
+  if (name.split('/').some(isTraversalSegment)) return undefined;
+
+  return { owner, name };
 }
 
 /**

@@ -1,20 +1,4 @@
 import { describe, expect, it, vi } from 'vitest';
-
-// bitbucket-cloud.provider.ts pulls in bitbucket-auth.ts for its BITBUCKET_*
-// constants, which unconditionally imports 'vscode'. Mocked here the same
-// way every other test file touching that module does.
-vi.mock('vscode', () => ({
-  EventEmitter: class {
-    public listeners: ((e: unknown) => void)[] = [];
-    public event = (listener: (e: unknown) => void) => {
-      this.listeners.push(listener);
-      return { dispose: () => {} };
-    };
-    public fire(e: unknown) { this.listeners.forEach((l) => l(e)); }
-    public dispose() {}
-  },
-}));
-
 import { BitbucketCloudProvider } from '../../src/extension/services/forge/bitbucket/bitbucket-cloud.provider';
 import detailFixture from '../fixtures/bitbucket/pull-request.json';
 import listFixture from '../fixtures/bitbucket/pull-request-list.json';
@@ -89,5 +73,19 @@ describe('BitbucketCloudProvider', () => {
   it('reports write methods as not implemented in this phase', async () => {
     const { provider } = build();
     await expect(provider.merge(repo, '1', { strategy: 'squash' })).rejects.toMatchObject({ status: 501 });
+  });
+
+  // remote-url.ts is the real boundary that keeps a traversal segment out of
+  // a ForgeRepoRef; this pins the defence-in-depth guard in base() for the
+  // case where a ForgeRepoRef is constructed some other way, so a caller can
+  // never turn one into a request that escapes /repositories/{owner}/{name}.
+  it.each([
+    { host: 'bitbucket.org', owner: '..', name: 'evil' },
+    { host: 'bitbucket.org', owner: 'acme', name: '../evil' },
+    { host: 'bitbucket.org', owner: '.', name: 'evil' },
+  ])('rejects a ForgeRepoRef with a traversal segment (%j) rather than requesting it', async (unsafeRepo) => {
+    const { provider, stub } = build();
+    await expect(provider.getPullRequest(unsafeRepo, '123')).rejects.toBeInstanceOf(Error);
+    expect(stub.getJson).not.toHaveBeenCalled();
   });
 });

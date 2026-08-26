@@ -1,21 +1,12 @@
 import * as vscode from 'vscode';
 import type { ForgeSession } from '../forge.types';
+import { BITBUCKET_AUTH_ID, BITBUCKET_AUTH_LABEL, BITBUCKET_TOKEN_SCOPES } from './bitbucket-constants';
 
-export const BITBUCKET_AUTH_ID = 'bitbucket-cloud';
-export const BITBUCKET_AUTH_LABEL = 'Bitbucket';
+// Re-exported so existing importers of this module keep working; the values
+// themselves live in bitbucket-constants.ts, which does not import 'vscode'.
+export { BITBUCKET_AUTH_ID, BITBUCKET_AUTH_LABEL, BITBUCKET_TOKEN_SCOPES };
+
 const SECRET_KEY = `forge:${BITBUCKET_AUTH_ID}:token`;
-
-/**
- * Bitbucket grants scopes to the token itself, not to the request, so a token
- * created without these can only fail later with a 403 that names nothing.
- * The sign-in prompt lists them verbatim.
- */
-export const BITBUCKET_TOKEN_SCOPES = [
-  'read:account',
-  'read:repository:bitbucket',
-  'read:pullrequest:bitbucket',
-  'write:pullrequest:bitbucket',
-] as const;
 
 export interface BitbucketCredentials {
   email: string;

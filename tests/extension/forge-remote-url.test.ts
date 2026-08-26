@@ -23,4 +23,24 @@ describe('parseRemoteUrl', () => {
     'returns undefined for %j', (url) => {
       expect(parseRemoteUrl(url)).toBeUndefined();
     });
+
+  // A crafted remote must never yield an owner/name that lets a provider
+  // build a path-traversal request. SCP-style remotes are the real risk: git
+  // writes them by default for ssh, and unlike https:// they are not run
+  // through a URL parser that normalizes dot segments, so `..`/`.` survive
+  // verbatim into owner/name unless rejected here.
+  it.each([
+    'git@bitbucket.org:../evil.git',
+    'git@bitbucket.org:./evil.git',
+    'git@bitbucket.org:acme/../evil.git',
+    'git@bitbucket.org:acme/../../evil.git',
+    // https:// equivalents: the URL parser normalizes these away before
+    // splitOwnerAndName ever sees a `.`/`..` segment, so this pins that the
+    // normalizing branch stays safe rather than exercising the new guard.
+    'https://bitbucket.org/../evil.git',
+    'https://bitbucket.org/./evil.git',
+    'https://bitbucket.org/acme/../evil.git',
+  ])('returns undefined for a traversal segment in %j', (url) => {
+    expect(parseRemoteUrl(url)).toBeUndefined();
+  });
 });
