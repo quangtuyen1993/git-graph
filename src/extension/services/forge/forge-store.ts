@@ -12,7 +12,7 @@ export interface CacheResult<T> {
 
 interface Entry {
   value: unknown;
-  fetchedAt: number;
+  fetchedAt?: number;
   inFlight?: Promise<unknown>;
 }
 
@@ -33,26 +33,44 @@ export class ForgeStore {
     const existing = this.entries.get(key);
 
     if (existing?.inFlight) {
-      const value = (await existing.inFlight) as T;
-      return { value, stale: false, fetchedAt: this.entries.get(key)?.fetchedAt ?? this.clock() };
+      try {
+        const value = (await existing.inFlight) as T;
+        return { value, stale: false, fetchedAt: this.entries.get(key)?.fetchedAt ?? this.clock() };
+      } catch (error) {
+        // Fix #1: followers share the same stale-fallback logic as the leader
+        const current = this.entries.get(key);
+        if (current && current.fetchedAt !== undefined) {
+          return { value: current.value as T, stale: true, fetchedAt: current.fetchedAt };
+        }
+        throw error;
+      }
     }
 
-    if (existing && this.clock() - existing.fetchedAt < ttlMs) {
+    if (existing && existing.fetchedAt !== undefined && this.clock() - existing.fetchedAt < ttlMs) {
       return { value: existing.value as T, stale: false, fetchedAt: existing.fetchedAt };
     }
 
     const inFlight = loader();
-    this.entries.set(key, { value: existing?.value, fetchedAt: existing?.fetchedAt ?? 0, inFlight });
+    this.entries.set(key, { value: existing?.value, fetchedAt: existing?.fetchedAt, inFlight });
 
     try {
       const value = await inFlight;
       const fetchedAt = this.clock();
-      this.entries.set(key, { value, fetchedAt });
+      // Fix #2: only update cache if this load is still valid (wasn't invalidated)
+      if (this.entries.get(key)?.inFlight === inFlight) {
+        this.entries.set(key, { value, fetchedAt });
+      }
       return { value, stale: false, fetchedAt };
     } catch (error) {
-      if (existing && existing.fetchedAt > 0) {
-        this.entries.set(key, { value: existing.value, fetchedAt: existing.fetchedAt });
-        return { value: existing.value as T, stale: true, fetchedAt: existing.fetchedAt };
+      const current = this.entries.get(key);
+      // Fix #2: only handle stale fallback if this load is still valid (wasn't invalidated)
+      if (current?.inFlight !== inFlight) {
+        this.entries.delete(key);
+        throw error;
+      }
+      if (current && current.fetchedAt !== undefined) {
+        this.entries.set(key, { value: current.value, fetchedAt: current.fetchedAt });
+        return { value: current.value as T, stale: true, fetchedAt: current.fetchedAt };
       }
       this.entries.delete(key);
       throw error;
