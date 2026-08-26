@@ -65,7 +65,7 @@ export class ForgeStore {
       const current = this.entries.get(key);
       // Fix #2: only handle stale fallback if this load is still valid (wasn't invalidated)
       if (current?.inFlight !== inFlight) {
-        this.entries.delete(key);
+        // Entry was invalidated or superseded by another load, don't touch the map
         throw error;
       }
       if (current && current.fetchedAt !== undefined) {

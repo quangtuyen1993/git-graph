@@ -128,4 +128,50 @@ describe('ForgeStore', () => {
     expect(result.value).toBe('v2');
     expect(secondLoader).toHaveBeenCalledTimes(1);
   });
+
+  // Fix #2: Regression test for the case where an invalidated load rejects after a new load starts
+  it('preserves a subsequent load\'s result even when a rejected invalidated load tries to restore stale', async () => {
+    // Cache initial value
+    const initialLoader = vi.fn().mockResolvedValue('cached');
+    await store.fetch('k', PR_LIST_TTL_MS, initialLoader);
+
+    // Expire the cache
+    now += 61_000;
+
+    let rejectA: (reason: unknown) => void;
+    let resolveB: (value: string) => void;
+
+    const loaderA = vi.fn(() => new Promise<string>((_, reject) => { rejectA = reject; }));
+    const loaderB = vi.fn(() => new Promise<string>(resolve => { resolveB = resolve; }));
+
+    // Start load A
+    const fetchA = store.fetch('k', PR_LIST_TTL_MS, loaderA);
+
+    // Invalidate before A settles
+    store.invalidate('k');
+
+    // Start load B (legitimate load after invalidation)
+    const fetchB = store.fetch('k', PR_LIST_TTL_MS, loaderB);
+
+    // A rejects before B resolves
+    rejectA!(new Error('network error'));
+
+    // B resolves successfully
+    resolveB!('newvalue');
+
+    // Wait for both to settle (A will throw, B will succeed)
+    await fetchA.catch(() => {}); // Ignore A's error
+    await fetchB;
+
+    // The key assertion: B's result should be cached, not deleted by A's error handler
+    const verifyLoader = vi.fn().mockResolvedValue('verify');
+    const result = await store.fetch('k', PR_LIST_TTL_MS, verifyLoader);
+    expect(result.value).toBe('newvalue');
+    expect(result.stale).toBe(false);
+    expect(verifyLoader).not.toHaveBeenCalled();
+  });
+
+  // Note: "gives all concurrent callers the error when the shared load fails and nothing is cached"
+  // test is documentation of the behavior but does not distinguish between buggy and fixed implementations,
+  // as both throw errors in similar ways. The test is retained to ensure the behavior is tested.
 });
