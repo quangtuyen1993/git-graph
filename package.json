@@ -56,7 +56,9 @@
       {
         "command": "gitGraphPro.open",
         "title": "Git Graph Pro: Open"
-      }
+      },
+      { "command": "gitGraphPro.forge.signIn",  "title": "Git Graph Pro: Sign in to Bitbucket" },
+      { "command": "gitGraphPro.forge.signOut", "title": "Git Graph Pro: Sign out of Bitbucket" }
     ],
     "configuration": {
       "title": "Git Graph Pro",
@@ -95,9 +97,20 @@
           "default": 0,
           "minimum": 0,
           "description": "Cap the diff sent for review, in characters. Default 0 sends the complete diff so the reviewer sees the real change. Only set this if a model rejects the request for size; files are then dropped whole (never mid-hunk) and the omitted ones are named in the prompt."
+        },
+        "gitGraphPro.forge.remote": {
+          "type": "string",
+          "default": "origin",
+          "description": "Which git remote identifies the hosting service for pull requests."
         }
       }
-    }
+    },
+    "authentication": [
+      {
+        "id": "bitbucket-cloud",
+        "label": "Bitbucket"
+      }
+    ]
   },
   "scripts": {
     "icon": "node scripts/make-icon.mjs resources/icon.png",
