@@ -78,6 +78,8 @@
   export let forgeSignedIn = false;
   export let pullRequests: PullRequestRow[] = [];
   export let pullRequestsStale = false;
+  /** Source branch name → live pull request number, for the `#123` badge on a LOCAL branch row. */
+  export let branchPullRequests: Map<string, number> = new Map();
 
   const dispatch = createEventDispatcher();
 
@@ -405,6 +407,7 @@
         groupPrefix="local"
         {selectedBranch}
         {favourites}
+        {branchPullRequests}
         on:groupToggle={(event) => toggleBranchGroup(event.detail.key)}
         on:select={(event) => dispatch('branchSelect', event.detail)}
         on:checkout={(event) => dispatch('checkout', event.detail)}

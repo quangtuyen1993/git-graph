@@ -17,7 +17,9 @@
   import LoadingSpinner from './components/common/LoadingSpinner.svelte';
   import { calculateDensity, calculatePanelLayout, defaultPanelWidths, type PanelSide } from './lib/panel-layout';
   import CommitDetail from './components/detail/CommitDetail.svelte';
+  import PullRequestDetail from './components/detail/PullRequestDetail.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
+  import { deriveBranchPullRequests } from './lib/branch-pull-requests';
   import { formatFilterStatus, localNameFor, resolvePullTarget } from './lib/branch-menu';
   import BranchFilterDropdown from './components/toolbar/BranchFilterDropdown.svelte';
   import ResizeHandle from './components/layout/ResizeHandle.svelte';
@@ -292,6 +294,179 @@
   }[] | null = null;
   let detailLoading = false;
 
+  // Forge (pull request) state. Additive: a repository with no forge provider
+  // leaves `forgeAvailable` false forever and every one of these stays at its
+  // empty default, so the sidebar renders exactly as it did before this
+  // feature existed.
+  interface ForgeUser { displayName: string; accountId: string; avatarUrl?: string }
+  interface ForgeReviewer { user: ForgeUser; status: 'approved' | 'changes_requested' | 'pending' }
+  interface ForgeCapabilities {
+    createPullRequest: boolean;
+    approve: boolean;
+    requestChanges: boolean;
+    merge: boolean;
+    mergeStrategies: string[];
+  }
+  interface PullRequestSummary {
+    id: string;
+    number: number;
+    title: string;
+    state: 'open' | 'merged' | 'closed' | 'draft';
+    sourceBranch: string;
+    targetBranch: string;
+    reviewers: ForgeReviewer[];
+    commentCount: number;
+  }
+  interface PullRequestDetailData extends PullRequestSummary {
+    description: string;
+    sourceCommit: string;
+    targetCommit: string;
+    mergeable: string;
+    webUrl: string;
+  }
+  interface ForgeComment {
+    id: string;
+    author: ForgeUser;
+    body: string;
+    createdAt: string;
+    parentId?: string;
+    path?: string;
+    line?: number;
+  }
+
+  const NO_FORGE_CAPABILITIES: ForgeCapabilities = {
+    createPullRequest: false, approve: false, requestChanges: false, merge: false, mergeStrategies: [],
+  };
+
+  let forgeAvailable = false;
+  let forgeSignedIn = false;
+  let forgeCapabilities: ForgeCapabilities = NO_FORGE_CAPABILITIES;
+  let pullRequests: PullRequestSummary[] = [];
+  let pullRequestsStale = false;
+  $: branchPullRequests = deriveBranchPullRequests(pullRequests);
+
+  let selectedPullRequestId: string | null = null;
+  let pullRequestDetail: PullRequestDetailData | null = null;
+  let pullRequestComments: ForgeComment[] = [];
+  let pullRequestDetailLoading = false;
+
+  function clearPullRequestSelection(): void {
+    selectedPullRequestId = null;
+    pullRequestDetail = null;
+    pullRequestComments = [];
+    pullRequestDetailLoading = false;
+  }
+
+  /** Pulls the open pull request list; failures leave whatever is on screen. */
+  async function loadPullRequests(): Promise<void> {
+    try {
+      const result = await bridge.send('forge.pr.list') as { pullRequests: PullRequestSummary[]; stale: boolean };
+      pullRequests = result.pullRequests;
+      pullRequestsStale = result.stale;
+    } catch {
+      // A blip here must not blank a list that was already on screen.
+    }
+  }
+
+  /**
+   * The section's one entry point: called on mount and again on every
+   * `forge.changed` broadcast. Never throws — a repository with no forge
+   * provider must produce no error and no console noise, and `forge.status`
+   * itself never throws for that case, but this stays defensive against a
+   * host-side hiccup on a repository that does have one.
+   */
+  async function refreshForgeStatus(): Promise<void> {
+    try {
+      const result = await bridge.send('forge.status') as {
+        available: boolean;
+        signedIn?: boolean;
+        capabilities?: ForgeCapabilities;
+      };
+      forgeAvailable = result.available;
+      forgeSignedIn = Boolean(result.signedIn);
+      forgeCapabilities = result.capabilities ?? NO_FORGE_CAPABILITIES;
+    } catch {
+      forgeAvailable = false;
+      forgeSignedIn = false;
+      forgeCapabilities = NO_FORGE_CAPABILITIES;
+    }
+
+    if (forgeAvailable && forgeSignedIn) {
+      await loadPullRequests();
+    } else {
+      pullRequests = [];
+      pullRequestsStale = false;
+    }
+  }
+
+  async function handleForgeSignIn(): Promise<void> {
+    try {
+      await bridge.send('forge.signIn');
+    } catch (e) {
+      showTransientMessage(messageOf(e));
+    }
+    await refreshForgeStatus();
+  }
+
+  /**
+   * Scrolls to a pull request's head commit through the same `graph.getRow`
+   * lookup commit search uses. A silent no-op when the commit sits outside the
+   * current branch filter, matching how a search match behaves in that case.
+   */
+  async function scrollToPullRequestHead(hash: string): Promise<void> {
+    const requestedLayoutVersion = layoutVersion;
+    if (requestedLayoutVersion === null || !scrollContainer) return;
+    try {
+      const result = await bridge.send('graph.getRow', {
+        hash, layoutVersion: requestedLayoutVersion,
+      }) as { row: number | null };
+      if (result.row === null || requestedLayoutVersion !== layoutVersion) return;
+      await scrollToGraphRow(result.row);
+    } catch {
+      // Outside the current filter, or the layout moved on — leave the view alone.
+    }
+  }
+
+  async function handlePullRequestSelect(event: CustomEvent<{ id: string }>): Promise<void> {
+    const id = event.detail.id;
+    clearBranchHighlight();
+    selectedPullRequestId = id;
+    rightPanelOpen = true;
+    detailCommit = null;
+    detailFiles = null;
+    selectedHash = null;
+    selectedHashes = new Set();
+    pullRequestDetail = null;
+    pullRequestComments = [];
+    pullRequestDetailLoading = true;
+
+    try {
+      const [detail, commentsResult] = await Promise.all([
+        bridge.send('forge.pr.get', { id }) as Promise<PullRequestDetailData>,
+        bridge.send('forge.pr.comments', { id }) as Promise<{ comments: ForgeComment[] }>,
+      ]);
+      // A later selection superseded this one while it was in flight.
+      if (selectedPullRequestId !== id) return;
+      pullRequestDetail = detail;
+      pullRequestComments = commentsResult.comments;
+      await scrollToPullRequestHead(detail.sourceCommit);
+    } catch (e) {
+      if (selectedPullRequestId !== id) return;
+      showTransientMessage(messageOf(e));
+    } finally {
+      if (selectedPullRequestId === id) pullRequestDetailLoading = false;
+    }
+  }
+
+  async function handlePullRequestOpenExternal(): Promise<void> {
+    if (!pullRequestDetail) return;
+    try {
+      await bridge.send('forge.pr.openExternal', { id: pullRequestDetail.id });
+    } catch (e) {
+      showTransientMessage(messageOf(e));
+    }
+  }
+
   // Panel state
   let leftSidebarOpen = true;
   let rightPanelOpen = false;
@@ -365,6 +540,7 @@
   $: repoOptionCount = repos.length + openableSubmodules.length;
 
   let invalidatedUnsubscribe: (() => void) | undefined;
+  let forgeChangedUnsubscribe: (() => void) | undefined;
 
   const refreshScheduler = createRefreshScheduler({
     run: () => refreshGraph(),
@@ -380,6 +556,16 @@
     // be dropped and leave the graph stale.
     const stopInvalidated = bridge.on('graph.invalidated', () => refreshScheduler.schedule());
     invalidatedUnsubscribe = stopInvalidated;
+    const stopForgeChanged = bridge.on('forge.changed', () => { void refreshForgeStatus(); });
+    forgeChangedUnsubscribe = stopForgeChanged;
+    // Fire-and-forget, issued before the graph's own startup sequence rather
+    // than after it: `refreshForgeStatus` swallows its own errors, and a slow
+    // or failing forge host must never delay the graph coming up or turn into
+    // a fatal banner for a feature that is purely additive. Starting it here,
+    // in parallel with — not chained after — the graph's requests, keeps a
+    // repository with a forge provider no slower to first paint than one
+    // without.
+    void refreshForgeStatus();
 
     try {
       await bridge.send('ping.hello');
@@ -414,6 +600,7 @@
       cancelTransientMessage();
       refreshScheduler.cancel();
       invalidatedUnsubscribe?.();
+      forgeChangedUnsubscribe?.();
     };
   });
 
@@ -576,6 +763,8 @@
       rightPanelOpen = false;
       detailCommit = null;
       detailFiles = null;
+      clearPullRequestSelection();
+      void refreshForgeStatus();
       await refreshGraph();
     } catch (e) {
       showTransientMessage(messageOf(e));
@@ -735,6 +924,8 @@
 
   function handleRowClick(hash: string, event?: MouseEvent) {
     clearBranchHighlight();
+    // A commit row click always wins the right panel back from a pull request.
+    clearPullRequestSelection();
     if (event?.shiftKey && lastClickedHash && graphWindow) {
       const allNodes = graphWindow.nodes;
       const lastIdx = allNodes.findIndex(n => n.hash === lastClickedHash);
@@ -772,6 +963,7 @@
     selectedHashes = new Set();
     detailCommit = null;
     detailFiles = null;
+    clearPullRequestSelection();
   }
 
   async function fetchCommitDetail(hash: string) {
@@ -1914,6 +2106,13 @@
             on:submoduleOpen={handleSidebarSubmoduleOpen}
             on:favouriteToggle={(event) => toggleFavourite(event.detail.name)}
             {favourites}
+            {forgeAvailable}
+            {forgeSignedIn}
+            {pullRequests}
+            {pullRequestsStale}
+            {branchPullRequests}
+            on:select={handlePullRequestSelect}
+            on:signIn={handleForgeSignIn}
           />
         {/key}
       </aside>
@@ -2065,19 +2264,37 @@
         on:reset={() => handlePanelReset('right')}
       />
       <aside class="right-panel" style="width: {rightPanelWidth}px;">
-        <!--
-          The commit detail owns its own header — its CHANGED FILES row is the
-          panel title, so there is no redundant "COMMIT" bar stacked above it.
-        -->
-        <CommitDetail
-          commit={detailCommit}
-          files={detailFiles}
-          loading={detailLoading}
-          initialViewMode={detailViewMode}
-          on:close={closeRightPanel}
-          on:viewModeChange={(e) => handleViewModeChange(e.detail.mode)}
-          on:openFile={(e) => bridge.send('ui.openDiff', e.detail)}
-        />
+        {#if selectedPullRequestId}
+          {#if pullRequestDetailLoading && !pullRequestDetail}
+            <div class="pr-detail-loading">
+              <LoadingSpinner label="Loading pull request…" />
+            </div>
+          {:else}
+            <!-- The sibling of CommitDetail: same panel, a pull request instead
+                 of a commit. It owns its own header the same way. -->
+            <PullRequestDetail
+              pullRequest={pullRequestDetail}
+              comments={pullRequestComments}
+              capabilities={forgeCapabilities}
+              on:openExternal={handlePullRequestOpenExternal}
+              on:openFile={(e) => bridge.send('ui.openDiff', e.detail)}
+            />
+          {/if}
+        {:else}
+          <!--
+            The commit detail owns its own header — its CHANGED FILES row is the
+            panel title, so there is no redundant "COMMIT" bar stacked above it.
+          -->
+          <CommitDetail
+            commit={detailCommit}
+            files={detailFiles}
+            loading={detailLoading}
+            initialViewMode={detailViewMode}
+            on:close={closeRightPanel}
+            on:viewModeChange={(e) => handleViewModeChange(e.detail.mode)}
+            on:openFile={(e) => bridge.send('ui.openDiff', e.detail)}
+          />
+        {/if}
       </aside>
     {/if}
   </div>
@@ -2268,6 +2485,14 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+  }
+
+  .pr-detail-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--vscode-descriptionForeground, #888);
   }
 
   /* Table header */

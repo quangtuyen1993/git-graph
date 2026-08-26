@@ -30,7 +30,19 @@ export default defineConfig({
         'src/webview/lib/**/*.ts',
         'src/webview/components/actions/ContextMenu.svelte',
         'src/webview/components/layout/ResizeHandle.svelte',
-        'src/webview/components/sidebar/BranchSidebar.svelte'
+        'src/webview/components/sidebar/BranchSidebar.svelte',
+        'src/extension/services/forge/remote-url.ts',
+        'src/extension/services/forge/forge-registry.ts',
+        'src/extension/services/forge/forge-store.ts',
+        'src/extension/services/forge/forge.types.ts',
+        'src/extension/services/forge/bitbucket/bitbucket-constants.ts',
+        'src/extension/services/forge/bitbucket/bitbucket-auth.ts',
+        'src/extension/services/forge/bitbucket/bitbucket-api.ts',
+        'src/extension/services/forge/bitbucket/bitbucket-mapper.ts',
+        'src/extension/services/forge/bitbucket/bitbucket-cloud.provider.ts',
+        'src/extension/controllers/forge-method-handler.ts',
+        'src/webview/components/sidebar/PullRequestList.svelte',
+        'src/webview/components/detail/PullRequestDetail.svelte'
       ],
       thresholds: {
         statements: 80,

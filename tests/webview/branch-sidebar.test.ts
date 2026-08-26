@@ -446,4 +446,19 @@ describe('PULL REQUESTS section', () => {
 
     expect(getByRole('button', { name: /sign in to bitbucket/i })).toBeInTheDocument();
   });
+
+  it('badges a LOCAL branch row with the number of its live pull request', () => {
+    // A slash-free name so the row is a direct LOCAL leaf rather than a
+    // collapsed group — this test is about the badge, not tree nesting.
+    const branchesWithPr = [...branches, { ...branches[0], name: 'feature-x', current: false }];
+    const { getByRole } = render(BranchSidebar, {
+      branches: branchesWithPr, tags, stashes, worktrees, submodules,
+      forgeAvailable: true, forgeSignedIn: true, pullRequests,
+      branchPullRequests: new Map([['feature-x', 42]]),
+    });
+
+    const row = getByRole('button', { name: 'feature-x' });
+    expect(row).toHaveTextContent('#42');
+    expect(getByRole('button', { name: 'main' })).not.toHaveTextContent('#42');
+  });
 });

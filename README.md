@@ -31,6 +31,17 @@ Interactive Git graph visualization for VS Code with full workflow operations an
 - Inline diff viewer with VS Code's native diff editor
 - Support for renamed, copied, and binary files
 
+### 🔀 Pull Requests (Bitbucket Cloud)
+
+- Open pull requests listed in the branch sidebar, tied to their source branch
+- Reviewer approval state, comment threads and changed files in the detail panel
+- Selecting a pull request jumps the graph to its head commit
+
+Requires an Atlassian API token with scopes `read:account`, `read:repository:bitbucket`,
+`read:pullrequest:bitbucket`, `write:pullrequest:bitbucket`. Run
+**Git Graph Pro: Sign in to Bitbucket** from the Command Palette. The token is stored in
+VS Code's SecretStorage and never leaves the extension host.
+
 ### 🤖 AI Code Review
 
 Review diffs using AI providers directly from the graph:

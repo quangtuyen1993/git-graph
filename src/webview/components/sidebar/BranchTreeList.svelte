@@ -19,6 +19,8 @@
   export let selectedBranch: string | null = null;
   export let depth = 0;
   export let favourites: string[] = [];
+  /** Source branch name → live pull request number, for the `#123` badge. */
+  export let branchPullRequests: Map<string, number> = new Map();
 
   /** Past this the exact number stops mattering and starts stretching the row. */
   const COUNT_CAP = 99;
@@ -124,6 +126,12 @@
               }
             }}
           ><Icon name="star-full" size={12} /></span>
+          {#if branchPullRequests.has(node.branch.name)}
+            <span
+              class="pr-badge"
+              title={`Pull request #${branchPullRequests.get(node.branch.name)}`}
+            >#{branchPullRequests.get(node.branch.name)}</span>
+          {/if}
           {#if node.branch.ahead > 0 || node.branch.behind > 0}
             <span class="ahead-behind">
               {#if node.branch.ahead > 0}
@@ -148,6 +156,7 @@
           {groupPrefix}
           {selectedBranch}
           {favourites}
+          {branchPullRequests}
           depth={depth + 1}
           on:groupToggle
           on:select
@@ -314,6 +323,23 @@
   .favourite.is-favourite {
     opacity: 1;
     color: var(--vscode-charts-yellow, #d7ba7d);
+  }
+
+  .pr-badge {
+    flex-shrink: 0;
+    margin-left: auto;
+    padding: 0 4px;
+    border-radius: 8px;
+    background: var(--vscode-badge-background, #4d4d4d);
+    color: var(--vscode-badge-foreground, #ffffff);
+    font-size: 11px;
+    line-height: 16px;
+  }
+
+  /* A badge already claims margin-left: auto; ahead/behind sits right after it
+     instead of competing for the same auto margin. */
+  .pr-badge + .ahead-behind {
+    margin-left: 4px;
   }
 
   .ahead-behind {
