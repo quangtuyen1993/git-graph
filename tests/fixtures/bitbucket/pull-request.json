@@ -1,0 +1,24 @@
+{
+  "id": 123,
+  "title": "fix(auth): refresh token race",
+  "description": "Single-flight the refresh.",
+  "state": "OPEN",
+  "draft": false,
+  "comment_count": 8,
+  "created_on": "2026-08-20T02:11:04.123456+00:00",
+  "updated_on": "2026-08-25T09:30:00.000000+00:00",
+  "links": { "html": { "href": "https://bitbucket.org/acme/mpos/pull-requests/123" } },
+  "author": {
+    "display_name": "An Tran",
+    "account_id": "acc-an",
+    "links": { "avatar": { "href": "https://avatar.example/an.png" } }
+  },
+  "source": { "branch": { "name": "feature/RMS-1027" }, "commit": { "hash": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678" } },
+  "destination": { "branch": { "name": "develop" }, "commit": { "hash": "b2c3d4e5f60718293a4b5c6d7e8f90123456789a" } },
+  "participants": [
+    { "role": "REVIEWER", "approved": true,  "state": "approved",         "user": { "display_name": "An Tran",  "account_id": "acc-an" } },
+    { "role": "REVIEWER", "approved": false, "state": "changes_requested","user": { "display_name": "Minh Le",  "account_id": "acc-minh" } },
+    { "role": "REVIEWER", "approved": false, "state": null,               "user": { "display_name": "Hoa Pham", "account_id": "acc-hoa" } },
+    { "role": "PARTICIPANT", "approved": false, "state": null,            "user": { "display_name": "Bot",      "account_id": "acc-bot" } }
+  ]
+}

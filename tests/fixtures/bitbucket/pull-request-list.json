@@ -1,0 +1,17 @@
+{
+  "values": [
+    {
+      "id": 118,
+      "title": "chore: bump deps",
+      "state": "OPEN",
+      "draft": true,
+      "comment_count": 0,
+      "updated_on": "2026-08-24T08:00:00.000000+00:00",
+      "links": { "html": { "href": "https://bitbucket.org/acme/mpos/pull-requests/118" } },
+      "author": { "display_name": "Hoa Pham", "account_id": "acc-hoa" },
+      "source": { "branch": { "name": "chore/deps" } },
+      "destination": { "branch": { "name": "develop" } },
+      "participants": []
+    }
+  ]
+}

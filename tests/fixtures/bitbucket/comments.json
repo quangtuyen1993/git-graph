@@ -1,0 +1,25 @@
+{
+  "values": [
+    {
+      "id": 9001,
+      "created_on": "2026-08-21T03:00:00.000000+00:00",
+      "content": { "raw": "This drops the mutex." },
+      "user": { "display_name": "Minh Le", "account_id": "acc-minh" },
+      "inline": { "path": "src/auth.ts", "to": 42 }
+    },
+    {
+      "id": 9002,
+      "created_on": "2026-08-21T04:00:00.000000+00:00",
+      "content": { "raw": "Fixed." },
+      "user": { "display_name": "An Tran", "account_id": "acc-an" },
+      "parent": { "id": 9001 }
+    },
+    {
+      "id": 9003,
+      "created_on": "2026-08-21T05:00:00.000000+00:00",
+      "deleted": true,
+      "content": { "raw": "" },
+      "user": { "display_name": "An Tran", "account_id": "acc-an" }
+    }
+  ]
+}
