@@ -63,6 +63,44 @@ describe('BitbucketApi', () => {
     expect(sleep).toHaveBeenCalledWith(5000);
   });
 
+  // Review finding: `pausedUntil` must extend monotonically, not be
+  // overwritten by whichever concurrent 429 finishes classifying last. Two
+  // requests are in flight together (within the concurrency cap); the one
+  // carrying the *longer* Retry-After is processed first, then the one with
+  // the *shorter* Retry-After is processed second. The bug (plain overwrite)
+  // would let the shorter deadline win; the fix (extend via Math.max) must
+  // keep the longer one, so a request made afterwards still waits close to it.
+  it('keeps the longer Retry-After deadline when a later concurrent 429 carries a shorter one', async () => {
+    let resolveLonger!: (response: Response) => void;
+    let resolveShorter!: (response: Response) => void;
+    const longerResponse = new Promise<Response>((resolve) => { resolveLonger = resolve; });
+    const shorterResponse = new Promise<Response>((resolve) => { resolveShorter = resolve; });
+
+    const fetchImpl = vi.fn()
+      .mockImplementationOnce(() => longerResponse)
+      .mockImplementationOnce(() => shorterResponse)
+      .mockResolvedValue(jsonResponse({ ok: true }));
+    const { api, sleep } = build(fetchImpl as never);
+
+    // Both start together, within the concurrency cap of 4.
+    const longerCall = api.getJson('/a').catch(() => {});
+    const shorterCall = api.getJson('/b').catch(() => {});
+
+    // The longer-Retry-After response is classified first...
+    resolveLonger(jsonResponse({ error: { message: 'Rate limit' } }, { status: 429, headers: { 'retry-after': '10' } }));
+    await longerCall;
+
+    // ...then the shorter-Retry-After response is classified second.
+    resolveShorter(jsonResponse({ error: { message: 'Rate limit' } }, { status: 429, headers: { 'retry-after': '3' } }));
+    await shorterCall;
+
+    await api.getJson('/c');
+    const lastWaitMs = sleep.mock.calls[sleep.mock.calls.length - 1][0] as number;
+    // ~10s remains (minus test execution jitter); a shortened-to-3s deadline
+    // would fail this by a wide margin.
+    expect(lastWaitMs).toBeGreaterThan(5000);
+  });
+
   it('never runs more than the concurrency cap at once', async () => {
     let inFlight = 0;
     let peak = 0;

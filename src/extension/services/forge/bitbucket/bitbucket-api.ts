@@ -22,6 +22,13 @@ interface PagedResponse<T> {
   next?: string;
 }
 
+/**
+ * Guards `getPaged` against a malformed or self-referential `next` link
+ * spinning forever and burning the request budget. Bitbucket's page sizes
+ * make any real pull request list finish in single digits of pages.
+ */
+const MAX_PAGINATION_PAGES = 200;
+
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export class BitbucketApi {
@@ -61,8 +68,17 @@ export class BitbucketApi {
   public async getPaged<T>(path: string): Promise<T[]> {
     const collected: T[] = [];
     let next: string | undefined = path;
+    let pageCount = 0;
 
     while (next) {
+      if (pageCount >= MAX_PAGINATION_PAGES) {
+        throw new ForgeError(
+          'other', 0,
+          `Bitbucket pagination did not finish within ${MAX_PAGINATION_PAGES} pages (last link: ${next})`,
+        );
+      }
+      pageCount += 1;
+
       const page: PagedResponse<T> = await this.getJson<PagedResponse<T>>(next);
       collected.push(...(page.values ?? []));
       next = page.next;
@@ -81,8 +97,7 @@ export class BitbucketApi {
 
     await this.acquire();
     try {
-      const wait = this.pausedUntil - Date.now();
-      if (wait > 0) await this.sleep(wait);
+      await this.waitForPause();
 
       const response = await this.fetchImpl(url, {
         ...init,
@@ -108,14 +123,35 @@ export class BitbucketApi {
 
     let retryAfterSeconds: number | undefined;
     if (response.status === 429) {
-      const header = Number(response.headers.get('retry-after'));
-      retryAfterSeconds = Number.isFinite(header) && header > 0 ? header : 60;
+      retryAfterSeconds = this.parseRetryAfter(response.headers.get('retry-after'));
       // Hold every queued request, not just this one: they would all hit the
       // same limit and turn one breach into a wall of identical failures.
-      this.pausedUntil = Date.now() + retryAfterSeconds * 1000;
+      // Extend rather than overwrite: under the concurrency cap, several
+      // requests can each land a 429 around the same time, and a later one
+      // with a *shorter* Retry-After must not cut a longer pause short.
+      this.pausedUntil = Math.max(this.pausedUntil, Date.now() + retryAfterSeconds * 1000);
     }
 
     return new ForgeError(this.classify(response.status), response.status, hostMessage, retryAfterSeconds);
+  }
+
+  /**
+   * Retry-After is delta-seconds or an HTTP-date (RFC 9110 §10.2.3); Bitbucket
+   * has been seen to send either. Anything that parses as neither falls back
+   * to 60s rather than firing again immediately.
+   */
+  private parseRetryAfter(header: string | null): number {
+    if (header) {
+      const deltaSeconds = Number(header);
+      if (Number.isFinite(deltaSeconds) && deltaSeconds > 0) return deltaSeconds;
+
+      const dateMs = Date.parse(header);
+      if (!Number.isNaN(dateMs)) {
+        const untilDate = Math.ceil((dateMs - Date.now()) / 1000);
+        if (untilDate > 0) return untilDate;
+      }
+    }
+    return 60;
   }
 
   /**
@@ -133,6 +169,26 @@ export class BitbucketApi {
       case 429: return 'rate-limited';
       case 400: return 'duplicate';
       default:  return 'other';
+    }
+  }
+
+  /**
+   * Waits out `pausedUntil`, then re-checks it: a concurrent request can
+   * extend the deadline (see `toForgeError`) while this one was asleep, and
+   * firing on the earlier, shorter deadline it started with would defeat the
+   * point of a queue-wide pause. Loops only while the deadline itself has
+   * moved further out since the last sleep — not against the raw clock —
+   * so it still resolves in one pass under a mocked, instantly-resolving
+   * `sleep` when nothing extended it.
+   */
+  private async waitForPause(): Promise<void> {
+    let deadline = this.pausedUntil;
+    for (;;) {
+      const wait = deadline - Date.now();
+      if (wait <= 0) return;
+      await this.sleep(wait);
+      if (this.pausedUntil <= deadline) return;
+      deadline = this.pausedUntil;
     }
   }
 
