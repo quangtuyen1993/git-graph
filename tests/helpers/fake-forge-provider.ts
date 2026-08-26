@@ -1,6 +1,6 @@
 import type {
   CreatePullRequestInput, ForgeCapabilities, ForgeComment, ForgeError, ForgeProvider, ForgeRepoRef,
-  ForgeSession, MergeStrategy, ParsedRemote, PullRequestDetail, PullRequestListState,
+  ForgeSession, MergeStrategy, ParsedRemote, PullRequestDetail, PullRequestFile, PullRequestListState,
   PullRequestSummary,
 } from '../../src/extension/services/forge/forge.types';
 
@@ -13,11 +13,16 @@ export interface FakeForgeOptions {
   signInFails?: boolean;
   pullRequests?: PullRequestDetail[];
   diff?: string;
+  files?: PullRequestFile[];
   comments?: ForgeComment[];
   capabilities?: Partial<ForgeCapabilities>;
 }
 
 export const FAKE_USER = { displayName: 'An Tran', accountId: 'acc-1' };
+
+export const FAKE_PR_FILES: PullRequestFile[] = [
+  { path: 'src/a.ts', oldPath: null, status: 'modified', additions: 4, deletions: 1, binary: false },
+];
 
 /** A PullRequestDetail with every field populated, overridable per test. */
 export function fakePullRequest(overrides: Partial<PullRequestDetail> = {}): PullRequestDetail {
@@ -43,6 +48,7 @@ export class FakeForgeProvider implements ForgeProvider {
   public readonly name: string;
   public readonly capabilities: ForgeCapabilities;
   public readonly calls: { method: string; args: unknown[] }[] = [];
+  public readonly filesResult: PullRequestFile[];
 
   private session: ForgeSession | undefined;
   private readonly host: string;
@@ -63,6 +69,7 @@ export class FakeForgeProvider implements ForgeProvider {
     this.signInFails = options.signInFails ?? false;
     this.pullRequests = options.pullRequests ?? [fakePullRequest()];
     this.diff = options.diff ?? 'diff --git a/a.ts b/a.ts\n';
+    this.filesResult = options.files ?? FAKE_PR_FILES;
     this.comments = options.comments ?? [];
     this.capabilities = {
       createPullRequest: true, approve: true, requestChanges: true, merge: true,
@@ -106,6 +113,11 @@ export class FakeForgeProvider implements ForgeProvider {
   public async getPullRequestDiff(repo: ForgeRepoRef, id: string): Promise<string> {
     this.record('getPullRequestDiff', repo, id);
     return this.diff;
+  }
+
+  public async getPullRequestFiles(repo: ForgeRepoRef, id: string): Promise<PullRequestFile[]> {
+    this.record('getPullRequestFiles', repo, id);
+    return this.filesResult;
   }
 
   public async listComments(repo: ForgeRepoRef, id: string): Promise<ForgeComment[]> {

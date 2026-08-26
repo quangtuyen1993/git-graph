@@ -17,6 +17,12 @@
   export let stale = false;
   export let signedIn = false;
   export let query = '';
+  /*
+   * No provider vocabulary belongs above forge/bitbucket/. This defaults to
+   * "your forge" rather than naming a provider, so the row still reads as a
+   * sentence on the rare tick before `forge.status` has resolved a name.
+   */
+  export let providerName = 'your forge';
 
   const dispatch = createEventDispatcher<{ select: { id: string }; signIn: void }>();
 
@@ -35,7 +41,7 @@
 
 {#if !signedIn}
   <button type="button" class="pr-signin" on:click={() => dispatch('signIn')}>
-    Sign in to Bitbucket
+    Sign in to {providerName}
   </button>
 {:else}
   {#if stale}

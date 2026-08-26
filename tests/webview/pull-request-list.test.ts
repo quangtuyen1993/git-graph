@@ -17,14 +17,22 @@ const pr = (overrides: Record<string, unknown> = {}) => ({
 describe('PullRequestList', () => {
   afterEach(cleanup);
 
-  it('shows a single sign-in row when signed out', () => {
-    render(PullRequestList, { pullRequests: [], stale: false, signedIn: false, query: '' });
+  it('shows a single sign-in row when signed out, naming the provider', () => {
+    render(PullRequestList, { pullRequests: [], stale: false, signedIn: false, query: '', providerName: 'Bitbucket' });
     expect(screen.getByRole('button', { name: /sign in to bitbucket/i })).toBeInTheDocument();
     expect(screen.queryByText(/#123/)).not.toBeInTheDocument();
   });
 
+  // Finding 10: no provider vocabulary belongs above forge/bitbucket/ — the
+  // component must not hardcode a host name, it must render whatever
+  // `forge.status` named.
+  it('names whichever provider it is given, not a hardcoded host', () => {
+    render(PullRequestList, { pullRequests: [], stale: false, signedIn: false, query: '', providerName: 'Acme Forge' });
+    expect(screen.getByRole('button', { name: /sign in to acme forge/i })).toBeInTheDocument();
+  });
+
   it('emits signIn when that row is clicked', async () => {
-    const { component } = render(PullRequestList, { pullRequests: [], stale: false, signedIn: false, query: '' });
+    const { component } = render(PullRequestList, { pullRequests: [], stale: false, signedIn: false, query: '', providerName: 'Bitbucket' });
     let fired = false;
     component.$on('signIn', () => { fired = true; });
     await fireEvent.click(screen.getByRole('button', { name: /sign in to bitbucket/i }));

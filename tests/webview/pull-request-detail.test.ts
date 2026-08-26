@@ -102,8 +102,56 @@ describe('PullRequestDetail', () => {
     expect(screen.getByRole('button', { name: /request changes/i })).toBeInTheDocument();
   });
 
-  it('renders nothing when no pull request is selected', () => {
-    const { container } = render(PullRequestDetail, { ...props, pullRequest: null });
-    expect(container.textContent?.trim()).toBe('');
+  // Finding 6: a failed forge.pr.get used to leave this panel rendering
+  // nothing — an empty pane the user had no way to dismiss, unlike its
+  // sibling CommitDetail, which always has a close button.
+  it('shows an error line and a close button when no pull request is loaded', () => {
+    render(PullRequestDetail, { ...props, pullRequest: null });
+    expect(screen.getByText(/couldn.t load this pull request/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /close/i })).toBeInTheDocument();
+  });
+
+  it('emits close from the error state', async () => {
+    const { component } = render(PullRequestDetail, { ...props, pullRequest: null });
+    let fired = false;
+    component.$on('close', () => { fired = true; });
+    await fireEvent.click(screen.getByRole('button', { name: /close/i }));
+    expect(fired).toBe(true);
+  });
+
+  // Finding 7: `mapUser` defaults a missing account_id to '' (deactivated or
+  // anonymised Atlassian accounts return this), and Svelte throws on
+  // duplicate keys in a keyed `{#each}`. Two reviewers with a blank
+  // account_id must not throw.
+  it('renders two reviewers that both have a blank account id without throwing', () => {
+    const blankIdReviewers = [
+      { user: { displayName: 'Ghost One', accountId: '' }, status: 'pending' as const },
+      { user: { displayName: 'Ghost Two', accountId: '' }, status: 'pending' as const },
+    ];
+    expect(() => render(PullRequestDetail, {
+      ...props,
+      pullRequest: { ...pullRequest, reviewers: blankIdReviewers },
+    })).not.toThrow();
+    expect(screen.getByText('Ghost One')).toBeInTheDocument();
+    expect(screen.getByText('Ghost Two')).toBeInTheDocument();
+  });
+
+  it('renders two comments that both resolve to a blank id without throwing', () => {
+    const blankIdComments = [
+      { id: '', author: { displayName: 'A', accountId: 'a' }, body: 'first', createdAt: '2026-08-21T03:00:00Z' },
+      { id: '', author: { displayName: 'B', accountId: 'b' }, body: 'second', createdAt: '2026-08-21T04:00:00Z' },
+    ];
+    expect(() => render(PullRequestDetail, { ...props, comments: blankIdComments })).not.toThrow();
+    expect(screen.getByText('first')).toBeInTheDocument();
+    expect(screen.getByText('second')).toBeInTheDocument();
+  });
+
+  it('renders two files that resolve to the same path (rename plus mode change) without throwing', () => {
+    const duplicatePathFiles = [
+      { path: 'src/a.ts', oldPath: 'src/old-a.ts', status: 'renamed', additions: 1, deletions: 1, binary: false },
+      { path: 'src/a.ts', oldPath: null, status: 'modified', additions: 0, deletions: 0, binary: false },
+    ];
+    expect(() => render(PullRequestDetail, { ...props, files: duplicatePathFiles })).not.toThrow();
+    expect(screen.getAllByTitle('src/a.ts')).toHaveLength(2);
   });
 });

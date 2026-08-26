@@ -76,9 +76,11 @@
    */
   export let forgeAvailable = false;
   export let forgeSignedIn = false;
+  /** From `forge.status`. No provider vocabulary belongs above forge/bitbucket/ — this is what lets the sign-in row read "Sign in to {provider}" instead of a hardcoded host name. */
+  export let forgeProviderName = '';
   export let pullRequests: PullRequestRow[] = [];
   export let pullRequestsStale = false;
-  /** Source branch name → live pull request number, for the `#123` badge on a LOCAL branch row. */
+  /** Source branch name → live pull request number, for the `#123` badge on a branch row — LOCAL or remote. */
   export let branchPullRequests: Map<string, number> = new Map();
 
   const dispatch = createEventDispatcher();
@@ -625,6 +627,7 @@
         {pullRequests}
         stale={pullRequestsStale}
         signedIn={forgeSignedIn}
+        providerName={forgeProviderName || 'your forge'}
         {query}
         on:select
         on:signIn

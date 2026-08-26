@@ -1,6 +1,7 @@
 <!-- The sibling of CommitDetail.svelte: shows one pull request in the right-hand panel. -->
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
+  import Icon from '../common/Icon.svelte';
 
   interface ForgeUser { displayName: string; accountId: string }
   type ReviewStatus = 'approved' | 'changes_requested' | 'pending';
@@ -60,6 +61,7 @@
     approve: void;
     requestChanges: void;
     merge: { strategy: string };
+    close: void;
   }>();
 
   const STATUS_MARK: Record<ReviewStatus, string> = {
@@ -123,7 +125,7 @@
 
     <section class="pr-reviewers" aria-label="Reviewers">
       <h3>Reviewers</h3>
-      {#each pullRequest.reviewers as reviewer (reviewer.user.accountId)}
+      {#each pullRequest.reviewers as reviewer, reviewerIndex (reviewer.user.accountId || reviewerIndex)}
         <span
           class="reviewer {reviewer.status}"
           aria-label="{reviewer.user.displayName} {reviewer.status}"
@@ -137,7 +139,7 @@
     <section class="pr-files" aria-label="Changed files">
       <h3>Files ({files.length})</h3>
       <ul class="pr-file-list">
-        {#each files as file (file.path)}
+        {#each files as file, fileIndex (fileIndex + ':' + file.path)}
           <li class="pr-file-row" title={file.path}>
             <span class="pr-file-path">{file.path}</span>
             <span class="pr-file-meta">
@@ -156,7 +158,7 @@
 
     <section class="pr-comments" aria-label="Comments">
       <h3>Comments ({comments.length})</h3>
-      {#each comments as comment (comment.id)}
+      {#each comments as comment, commentIndex (comment.id || commentIndex)}
         <article
           class="comment"
           class:reply={Boolean(comment.parentId)}
@@ -194,6 +196,20 @@
         </button>
       {/if}
     </footer>
+  </div>
+{:else}
+  <!--
+    A failed forge.pr.get leaves this panel with nothing to show, but the
+    panel itself is still open — unlike an `{#if}` with no `{:else}`, which
+    would render nothing and leave the user staring at an empty pane with no
+    way to dismiss it. CommitDetail always owns a close button; this is its
+    sibling's equivalent for the one state it previously had none for.
+  -->
+  <div class="pr-detail pr-detail-error">
+    <p class="pr-error-message">Couldn't load this pull request.</p>
+    <button type="button" class="pr-error-close" on:click={() => dispatch('close')}>
+      <Icon name="close" /> Close
+    </button>
   </div>
 {/if}
 
@@ -385,5 +401,32 @@
 
   .pr-actions button:hover {
     background: var(--vscode-button-hoverBackground, #1177bb);
+  }
+
+  .pr-detail-error {
+    align-items: flex-start;
+    justify-content: flex-start;
+  }
+
+  .pr-error-message {
+    margin: 0;
+    color: var(--vscode-descriptionForeground, #888);
+  }
+
+  .pr-error-close {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border: 1px solid var(--vscode-button-border, transparent);
+    border-radius: 3px;
+    background: var(--vscode-button-secondaryBackground, transparent);
+    color: var(--vscode-button-secondaryForeground, inherit);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .pr-error-close:hover {
+    background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
   }
 </style>

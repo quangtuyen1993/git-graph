@@ -426,7 +426,7 @@ describe('PULL REQUESTS section', () => {
   it('shows exactly one row, the sign-in affordance, when signed out', async () => {
     const { getByRole, container } = render(BranchSidebar, {
       branches, tags, stashes, worktrees, submodules,
-      forgeAvailable: true, forgeSignedIn: false, pullRequests: [],
+      forgeAvailable: true, forgeSignedIn: false, forgeProviderName: 'Bitbucket', pullRequests: [],
     });
 
     await fireEvent.click(getByRole('button', { name: /pull requests/i }));
@@ -438,13 +438,26 @@ describe('PULL REQUESTS section', () => {
   it('keeps the sign-in row reachable while the branch search box has a query', async () => {
     const { getByRole, container } = render(BranchSidebar, {
       branches, tags, stashes, worktrees, submodules,
-      forgeAvailable: true, forgeSignedIn: false, pullRequests: [],
+      forgeAvailable: true, forgeSignedIn: false, forgeProviderName: 'Bitbucket', pullRequests: [],
     });
 
     const input = container.querySelector('.sidebar-search input') as HTMLInputElement;
     await fireEvent.input(input, { target: { value: 'main' } });
 
     expect(getByRole('button', { name: /sign in to bitbucket/i })).toBeInTheDocument();
+  });
+
+  // Finding 10: no provider vocabulary belongs above forge/bitbucket/ — the
+  // sidebar must forward whatever name forge.status reported, not assume
+  // Bitbucket.
+  it('forwards forgeProviderName to the sign-in row instead of a hardcoded name', async () => {
+    const { getByRole } = render(BranchSidebar, {
+      branches, tags, stashes, worktrees, submodules,
+      forgeAvailable: true, forgeSignedIn: false, forgeProviderName: 'Acme Forge', pullRequests: [],
+    });
+
+    await fireEvent.click(getByRole('button', { name: /pull requests/i }));
+    expect(getByRole('button', { name: /sign in to acme forge/i })).toBeInTheDocument();
   });
 
   it('badges a LOCAL branch row with the number of its live pull request', () => {

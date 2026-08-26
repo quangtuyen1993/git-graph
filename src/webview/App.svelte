@@ -341,6 +341,13 @@
 
   let forgeAvailable = false;
   let forgeSignedIn = false;
+  /*
+   * No provider vocabulary belongs above forge/bitbucket/ — "Sign in to
+   * Bitbucket" hardcoded in PullRequestList used to violate that. forge.status
+   * already returns providerName; this is what plumbs it down instead of
+   * dropping it.
+   */
+  let forgeProviderName = '';
   let forgeCapabilities: ForgeCapabilities = NO_FORGE_CAPABILITIES;
   let pullRequests: PullRequestSummary[] = [];
   let pullRequestsStale = false;
@@ -402,14 +409,17 @@
     try {
       const result = await bridge.send('forge.status') as {
         available: boolean;
+        providerName?: string;
         signedIn?: boolean;
         capabilities?: ForgeCapabilities;
       };
       forgeAvailable = result.available;
+      forgeProviderName = result.providerName ?? '';
       forgeSignedIn = Boolean(result.signedIn);
       forgeCapabilities = result.capabilities ?? NO_FORGE_CAPABILITIES;
     } catch {
       forgeAvailable = false;
+      forgeProviderName = '';
       forgeSignedIn = false;
       forgeCapabilities = NO_FORGE_CAPABILITIES;
     }
@@ -2141,6 +2151,7 @@
             {favourites}
             {forgeAvailable}
             {forgeSignedIn}
+            {forgeProviderName}
             {pullRequests}
             {pullRequestsStale}
             {branchPullRequests}
@@ -2311,6 +2322,7 @@
               files={pullRequestFiles}
               capabilities={forgeCapabilities}
               on:openExternal={handlePullRequestOpenExternal}
+              on:close={closeRightPanel}
             />
           {/if}
         {:else}
