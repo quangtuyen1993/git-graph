@@ -7,12 +7,46 @@ import { GitService } from './services/git.service';
 import { openCompareDiff, type CompareDiffDeps } from './services/compare-diff';
 import type { ReviewRunner } from './services/review-runner';
 import type { WebviewHost } from './types/webview-host.types';
+import { createForgeHandler } from './controllers/forge-method-handler';
+import { ForgeRegistry } from './services/forge/forge-registry';
+import { ForgeStore } from './services/forge/forge-store';
+import { BitbucketApi } from './services/forge/bitbucket/bitbucket-api';
+import { BitbucketAuthProvider, BITBUCKET_TOKEN_SCOPES, type BitbucketCredentials } from './services/forge/bitbucket/bitbucket-auth';
+import { BitbucketCloudProvider } from './services/forge/bitbucket/bitbucket-cloud.provider';
 
 // The single ReviewRunner constructed in activate() below. Held here so
 // deactivate() can kill every in-flight CLI process — without this, a
 // detached review process keeps running (and keeps spending) after the
 // window closes.
 let activeRunner: ReviewRunner | undefined;
+
+/**
+ * Two input boxes rather than a browser flow. Bitbucket Cloud removed app
+ * passwords in July 2026 and has no PKCE, so an OAuth consumer would need both
+ * a client secret an extension cannot hide and workspace admin rights to
+ * create. The scopes are listed verbatim because Bitbucket grants them to the
+ * token, not to the request.
+ */
+async function promptForBitbucketCredentials(): Promise<BitbucketCredentials | undefined> {
+  const email = await vscode.window.showInputBox({
+    title: 'Sign in to Bitbucket (1 of 2)',
+    prompt: 'Your Atlassian account email',
+    ignoreFocusOut: true,
+    validateInput: (value) => (value.includes('@') ? undefined : 'Enter the email address of your Atlassian account'),
+  });
+  if (!email) return undefined;
+
+  const token = await vscode.window.showInputBox({
+    title: 'Sign in to Bitbucket (2 of 2)',
+    prompt: `API token with scopes: ${BITBUCKET_TOKEN_SCOPES.join(', ')}`,
+    password: true,
+    ignoreFocusOut: true,
+    validateInput: (value) => (value.trim() ? undefined : 'Paste the API token'),
+  });
+  if (!token) return undefined;
+
+  return { email: email.trim(), token: token.trim() };
+}
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -87,6 +121,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     createGitService: (path) => new GitService(path),
   });
   const getRepoId = () => activeRepo.getRepoId();
+
+  // The forge stack: additive to the graph, so nothing here may take
+  // activation down for a workspace with no forge remote at all.
+  const forgeRegistry = new ForgeRegistry();
+  const forgeStore = new ForgeStore();
+
+  const bitbucketAuth = new BitbucketAuthProvider({
+    secrets: context.secrets,
+    prompt: promptForBitbucketCredentials,
+    verify: async (credentials) => {
+      // A throwaway client bound to the credentials being verified — the real
+      // one reads from the auth provider, which has not stored them yet.
+      const probe = new BitbucketApi({ getCredentials: async () => credentials });
+      const user = await probe.getJson<{ display_name?: string }>('/user');
+      return user.display_name ?? credentials.email;
+    },
+  });
+  context.subscriptions.push({ dispose: () => bitbucketAuth.dispose() });
+
+  forgeRegistry.register(new BitbucketCloudProvider({
+    api: new BitbucketApi({ getCredentials: () => bitbucketAuth.getCredentials() }),
+    auth: bitbucketAuth,
+  }));
+
+  const forgeHandler = createForgeHandler({
+    registry: forgeRegistry,
+    store: forgeStore,
+    getRemoteUrl: async () => {
+      const gitService = activeRepo.getGitService();
+      if (!gitService) return undefined;
+      const remote = vscode.workspace.getConfiguration().get<string>('gitGraphPro.forge.remote') ?? 'origin';
+      return gitService.getRemoteUrl(remote);
+    },
+    broadcast: (event, data) => routers.broadcast(event, data),
+    openExternal: async (url) => { await vscode.env.openExternal(vscode.Uri.parse(url)); },
+  });
 
   // One runner for the whole extension, not one per session: its in-flight
   // map is the source of truth for cross-session dedup (review.start
@@ -264,7 +334,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (method === 'repo.switch') return queueRepositorySwitch(params);
       return session.handleRepo(method, params);
     });
-    router.register('git', (method: string, params: unknown) => session.handleGit(method, params));
+    const MUTATING_REMOTE_METHODS = new Set(['git.push', 'git.pull', 'git.fetch']);
+
+    router.register('git', async (method: string, params: unknown) => {
+      const result = await session.handleGit(method, params);
+      if (MUTATING_REMOTE_METHODS.has(method)) {
+        // Cheap: drops cache entries, does not fetch. The next panel read pays.
+        forgeStore.clear();
+        routers.broadcast('forge.changed', {});
+      }
+      return result;
+    });
     router.register('graph', (method: string, params: unknown) => session.handleGraph(method, params));
 
     router.register('ui', async (method: string, params: unknown) => {
@@ -404,6 +484,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     router.register('ping', async () => ({ pong: true, timestamp: Date.now() }));
 
     router.register('review', reviewHandler);
+    router.register('forge', forgeHandler);
 
     router.setHost(host);
     void bindGitWatcher();
@@ -441,6 +522,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const detachRouter = routers.attach(router);
 
     router.register('review', reviewHandler);
+    router.register('forge', forgeHandler);
 
     router.register('ai', async (method: string) => {
       if (method === 'ai.providers') return aiReview.detectProviders();
@@ -515,6 +597,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void vscode.commands.executeCommand('gitGraphPro.graph.focus');
   });
   context.subscriptions.push(openCommand);
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('gitGraphPro.forge.signIn', async () => {
+      await forgeHandler('forge.signIn', {});
+    }),
+    vscode.commands.registerCommand('gitGraphPro.forge.signOut', async () => {
+      await forgeHandler('forge.signOut', {});
+    }),
+  );
 }
 
 export function deactivate(): void {
