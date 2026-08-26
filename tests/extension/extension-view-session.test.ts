@@ -66,6 +66,13 @@ vi.mock('vscode', () => ({
     executeCommand: hostMocks.executeCommand,
     registerCommand: hostMocks.registerCommand,
   },
+  // activate() registers the Bitbucket AuthenticationProvider unconditionally
+  // (see forge-host-wiring.test.ts) — nothing here calls getSession, so only
+  // the registration call itself needs a stand-in, returning a disposable so
+  // context.subscriptions.push(...) has something real to hold.
+  authentication: {
+    registerAuthenticationProvider: vi.fn(() => ({ dispose: vi.fn() })),
+  },
   window: {
     createWebviewPanel: hostMocks.createWebviewPanel,
     registerWebviewViewProvider: hostMocks.registerWebviewViewProvider,
