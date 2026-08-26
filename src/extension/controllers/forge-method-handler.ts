@@ -180,6 +180,16 @@ export function createForgeHandler(deps: ForgeHandlerDeps) {
     } catch (error) {
       if (error instanceof ForgeError) {
         const resolved = await resolve();
+        // An expired or revoked credential must not fail silently forever:
+        // the credential is still in SecretStorage and `forge.status` would
+        // keep reporting signedIn: true otherwise, leaving the section stuck
+        // on a stale list with no way back except the sign-out command. A
+        // 401 clears the session itself and tells every open panel to
+        // refresh, the same way an explicit sign-out does.
+        if (error.kind === 'unauthorized' && resolved) {
+          await resolved.provider.signOut();
+          deps.broadcast('forge.changed', {});
+        }
         throw new Error(forgeErrorMessage(error, resolved?.provider));
       }
       throw error;

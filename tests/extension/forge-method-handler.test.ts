@@ -3,6 +3,7 @@ import { createForgeHandler, forgeErrorMessage } from '../../src/extension/contr
 import { ForgeRegistry } from '../../src/extension/services/forge/forge-registry';
 import { ForgeStore } from '../../src/extension/services/forge/forge-store';
 import { ForgeError } from '../../src/extension/services/forge/forge.types';
+import { isAllowedExternalUrl } from '../../src/extension/services/forge/url-safety';
 import { FakeForgeProvider, fakePullRequest } from '../helpers/fake-forge-provider';
 
 function build(options: {
@@ -121,6 +122,32 @@ describe('forge namespace', () => {
     expect(openExternal).toHaveBeenCalledWith('https://bitbucket.org/acme/mpos/pull-requests/123');
   });
 
+  // Finding 2: openExternal must not launch a server-supplied URI with no
+  // scheme check — PullRequestDetail.webUrl comes straight from the host's
+  // raw response with no validation anywhere between. This pins the
+  // wiring extension.ts uses (deps.openExternal enforcing the allowlist,
+  // same as isAllowedExternalUrl) end to end through the handler.
+  it('refuses to open a pull request whose webUrl is not http(s)', async () => {
+    const provider = new FakeForgeProvider({
+      host: 'bitbucket.org',
+      pullRequests: [fakePullRequest({ id: '9', webUrl: 'vscode://malicious.extension/do-something' })],
+    });
+    const registry = new ForgeRegistry();
+    registry.register(provider);
+    const store = new ForgeStore();
+    const handle = createForgeHandler({
+      registry,
+      store,
+      getRemoteUrl: async () => 'git@bitbucket.org:acme/mpos.git',
+      broadcast: vi.fn(),
+      openExternal: async (url) => {
+        if (!isAllowedExternalUrl(url)) throw new Error('Refusing to open a non-http(s) URL');
+      },
+    });
+
+    await expect(handle('forge.pr.openExternal', { id: '9' })).rejects.toThrow(/non-http/i);
+  });
+
   it('rejects an unknown method', async () => {
     const { handle } = build();
     await expect(handle('forge.nope', {})).rejects.toThrow('Unknown method: forge.nope');
@@ -129,6 +156,81 @@ describe('forge namespace', () => {
   it('rejects a pull request call when the repository is not on a forge', async () => {
     const { handle } = build({ remoteUrl: undefined });
     await expect(handle('forge.pr.list', {})).rejects.toThrow('No pull request provider for this repository');
+  });
+
+  it('fetches a pull request\'s changed files through the diffstat-backed method', async () => {
+    const { handle, provider } = build();
+    const result = await handle('forge.pr.files', { id: '123' }) as { files: unknown[] };
+    expect(result.files).toEqual(provider.filesResult);
+    expect(provider.calls.map((c) => c.method)).toEqual(['getPullRequest', 'getPullRequestFiles']);
+  });
+
+  it('keys the files cache by the sha pair, not the pull request id', async () => {
+    const provider = new FakeForgeProvider({
+      host: 'bitbucket.org',
+      pullRequests: [fakePullRequest({ id: '1', sourceCommit: 'aaa', targetCommit: 'bbb' })],
+    });
+    const { handle } = build({ provider });
+
+    await handle('forge.pr.files', { id: '1' });
+    await handle('forge.pr.files', { id: '1' });
+    expect(provider.calls.filter((c) => c.method === 'getPullRequestFiles')).toHaveLength(1);
+  });
+
+  // Finding 8: ForgeRepoRef carries `host` precisely so a single provider
+  // serving multiple hosts (a public cloud host plus a self-hosted instance)
+  // doesn't collide two repositories that share an owner/name across hosts.
+  it('scopes the cache by host, not just owner/name', async () => {
+    const provider = new FakeForgeProvider({ id: 'bitbucket-cloud', name: 'Bitbucket', host: 'bitbucket.org' });
+    provider.canHandle = () => true; // stands in for a provider that serves more than one host
+    const registry = new ForgeRegistry();
+    registry.register(provider);
+    const store = new ForgeStore();
+    let remoteUrl = 'git@bitbucket.org:acme/mpos.git';
+    const handle = createForgeHandler({
+      registry,
+      store,
+      getRemoteUrl: async () => remoteUrl,
+      broadcast: vi.fn(),
+      openExternal: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await handle('forge.pr.list', { state: 'open' });
+    remoteUrl = 'git@bitbucket-server.acme.internal:acme/mpos.git';
+    await handle('forge.pr.list', { state: 'open' });
+
+    expect(provider.calls.filter((c) => c.method === 'listPullRequests')).toHaveLength(2);
+  });
+
+  // Finding 1 (blocking): an expired or under-scoped token must not fail
+  // silently and permanently. A 401 clears the session itself and broadcasts
+  // forge.changed, the same way an explicit sign-out does, so the sidebar can
+  // return to its signed-out row instead of being stuck signedIn: true with a
+  // stale list and no way back but the sign-out command.
+  describe('a 401 clears the session', () => {
+    it('signs out and broadcasts forge.changed when forge.pr.list gets a 401', async () => {
+      const provider = new FakeForgeProvider({ host: 'bitbucket.org' });
+      provider.listPullRequests = () => Promise.reject(new ForgeError('unauthorized', 401, 'Unauthorized'));
+      const { handle, broadcast } = build({ provider });
+
+      await expect(handle('forge.pr.list', {})).rejects.toThrow(/expired or (has been )?revoked/i);
+
+      expect(await provider.getSession()).toBeUndefined();
+      expect(broadcast).toHaveBeenCalledWith('forge.changed', {});
+      // forge.status now reports the session gone — the sidebar's signed-out row.
+      expect(await handle('forge.status', {})).toMatchObject({ available: true, signedIn: false });
+    });
+
+    it('does not sign out on a 403 — only names the missing scopes', async () => {
+      const provider = new FakeForgeProvider({ host: 'bitbucket.org' });
+      const forbidden = new ForgeError('forbidden', 403, 'Forbidden');
+      provider.listPullRequests = () => Promise.reject(forbidden);
+      const { handle, broadcast } = build({ provider });
+
+      await expect(handle('forge.pr.list', {})).rejects.toThrow(provider.describeError(forbidden));
+      expect(await provider.getSession()).toBeDefined();
+      expect(broadcast).not.toHaveBeenCalledWith('forge.changed', {});
+    });
   });
 
   it('does not let one repository\'s cache invalidation clear a sibling whose name shares its prefix', async () => {

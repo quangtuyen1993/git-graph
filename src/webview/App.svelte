@@ -366,14 +366,24 @@
     pullRequestDetailLoading = false;
   }
 
-  /** Pulls the open pull request list; failures leave whatever is on screen. */
+  /**
+   * Pulls the open pull request list. A failure leaves whatever list is
+   * already on screen (that is right — an expired token must not blank a
+   * list a moment ago showed real data) but is no longer silent: it is
+   * surfaced as a transient message and the list is marked stale, since an
+   * unauthorized failure here is also what drives `handle()` on the host to
+   * sign the session out (see forge-method-handler.ts), and the next
+   * `forge.changed` this produces is what returns the sidebar to its
+   * signed-out row.
+   */
   async function loadPullRequests(): Promise<void> {
     try {
       const result = await bridge.send('forge.pr.list') as { pullRequests: PullRequestSummary[]; stale: boolean };
       pullRequests = result.pullRequests;
       pullRequestsStale = result.stale;
-    } catch {
-      // A blip here must not blank a list that was already on screen.
+    } catch (e) {
+      showTransientMessage(messageOf(e));
+      pullRequestsStale = true;
     }
   }
 
