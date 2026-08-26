@@ -3,7 +3,9 @@ import { GitService } from '../../src/extension/services/git.service';
 
 function serviceWith() {
   const service = new GitService('/repo');
-  const exec = vi.fn(async () => '');
+  // Declared with the real parameter list so `exec.mock.calls[n][0]` is typed
+  // as the argv the assertions below inspect, rather than an empty tuple.
+  const exec = vi.fn(async (_args: string[], _options?: unknown) => '');
   (service as unknown as { cli: { exec: typeof exec } }).cli = { exec };
   return { service, exec };
 }
