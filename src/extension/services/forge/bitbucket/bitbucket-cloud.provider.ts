@@ -1,0 +1,105 @@
+import {
+  ForgeError,
+  type CreatePullRequestInput, type ForgeCapabilities, type ForgeComment, type ForgeProvider,
+  type ForgeRepoRef, type ForgeSession, type MergeStrategy, type ParsedRemote,
+  type PullRequestDetail, type PullRequestListState, type PullRequestSummary,
+} from '../forge.types';
+import type { BitbucketApi } from './bitbucket-api';
+import type { BitbucketAuthProvider } from './bitbucket-auth';
+import { BITBUCKET_AUTH_ID, BITBUCKET_AUTH_LABEL, BITBUCKET_TOKEN_SCOPES } from './bitbucket-auth';
+import { mapComments, mapPullRequestDetail, mapPullRequestSummary } from './bitbucket-mapper';
+
+const PAGE_LENGTH = 50;
+
+const STATE_QUERY: Record<PullRequestListState, string> = {
+  open: 'OPEN',
+  merged: 'MERGED',
+  closed: 'DECLINED',
+};
+
+export interface BitbucketProviderDeps {
+  api: BitbucketApi;
+  auth: BitbucketAuthProvider;
+}
+
+export class BitbucketCloudProvider implements ForgeProvider {
+  public readonly id = BITBUCKET_AUTH_ID;
+  public readonly name = BITBUCKET_AUTH_LABEL;
+
+  public readonly capabilities: ForgeCapabilities = {
+    createPullRequest: true,
+    approve: true,
+    requestChanges: true,
+    merge: true,
+    mergeStrategies: ['merge-commit', 'squash', 'fast-forward'],
+  };
+
+  constructor(private readonly deps: BitbucketProviderDeps) {}
+
+  public canHandle(remote: ParsedRemote): boolean {
+    return remote.host === 'bitbucket.org';
+  }
+
+  public getSession(opts?: { createIfNone?: boolean }): Promise<ForgeSession | undefined> {
+    return this.deps.auth.getSession(opts);
+  }
+
+  public signOut(): Promise<void> {
+    return this.deps.auth.signOut();
+  }
+
+  public async listPullRequests(repo: ForgeRepoRef, opts: { state: PullRequestListState }): Promise<PullRequestSummary[]> {
+    const raw = await this.deps.api.getPaged<Parameters<typeof mapPullRequestSummary>[0]>(
+      `${this.base(repo)}/pullrequests?state=${STATE_QUERY[opts.state]}&pagelen=${PAGE_LENGTH}`);
+    return raw.map(mapPullRequestSummary);
+  }
+
+  public async getPullRequest(repo: ForgeRepoRef, id: string): Promise<PullRequestDetail> {
+    const raw = await this.deps.api.getJson<Parameters<typeof mapPullRequestDetail>[0]>(
+      `${this.base(repo)}/pullrequests/${encodeURIComponent(id)}`);
+    return mapPullRequestDetail(raw);
+  }
+
+  public getPullRequestDiff(repo: ForgeRepoRef, id: string): Promise<string> {
+    return this.deps.api.getText(`${this.base(repo)}/pullrequests/${encodeURIComponent(id)}/diff`);
+  }
+
+  public async listComments(repo: ForgeRepoRef, id: string): Promise<ForgeComment[]> {
+    const raw = await this.deps.api.getPaged<Parameters<typeof mapComments>[0][number]>(
+      `${this.base(repo)}/pullrequests/${encodeURIComponent(id)}/comments?pagelen=${PAGE_LENGTH}`);
+    return mapComments(raw);
+  }
+
+  public createPullRequest(_repo: ForgeRepoRef, _input: CreatePullRequestInput): Promise<PullRequestDetail> {
+    return Promise.reject(new ForgeError('other', 501, 'Creating pull requests arrives in phase 5'));
+  }
+
+  public setReviewStatus(
+    _repo: ForgeRepoRef,
+    _id: string,
+    _status: 'approved' | 'changes_requested',
+    _opts?: { body?: string },
+  ): Promise<void> {
+    return Promise.reject(new ForgeError('other', 501, 'Approving pull requests arrives in phase 6'));
+  }
+
+  public merge(_repo: ForgeRepoRef, _id: string, _opts: { strategy: MergeStrategy; closeSourceBranch?: boolean }): Promise<void> {
+    return Promise.reject(new ForgeError('other', 501, 'Merging pull requests arrives in phase 6'));
+  }
+
+  /**
+   * The provider-specific half of an error message. Naming the exact scopes a
+   * token is missing is something only this provider knows; the shared layer
+   * renders whatever comes back and never composes advice of its own.
+   */
+  public describeError(error: ForgeError): string {
+    if (error.kind === 'forbidden') {
+      return `Bitbucket refused the request. The API token is missing a scope. Required: ${BITBUCKET_TOKEN_SCOPES.join(', ')}.`;
+    }
+    return error.hostMessage;
+  }
+
+  private base(repo: ForgeRepoRef): string {
+    return `/repositories/${encodeURIComponent(repo.owner)}/${repo.name.split('/').map(encodeURIComponent).join('/')}`;
+  }
+}
