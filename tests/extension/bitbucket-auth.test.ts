@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import pkg from '../../package.json';
 
 vi.mock('vscode', () => ({
   EventEmitter: class {
@@ -97,9 +98,6 @@ describe('BitbucketAuthProvider', () => {
     spies.forEach((spy) => spy.mockRestore());
   });
 });
-
-// append to tests/extension/bitbucket-auth.test.ts
-import pkg from '../../package.json';
 
 describe('forge contributions', () => {
   const contributes = pkg.contributes as unknown as Record<string, never>;
