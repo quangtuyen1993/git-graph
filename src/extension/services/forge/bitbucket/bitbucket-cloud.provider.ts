@@ -1,3 +1,4 @@
+import * as vscode from 'vscode';
 import {
   ForgeError,
   type CreatePullRequestInput, type ForgeCapabilities, type ForgeComment, type ForgeProvider,
@@ -48,12 +49,33 @@ export class BitbucketCloudProvider implements ForgeProvider {
     return remote.host === 'bitbucket.org';
   }
 
-  public getSession(opts?: { createIfNone?: boolean }): Promise<ForgeSession | undefined> {
-    return this.deps.auth.getSession(opts);
+  /**
+   * Routed through vscode.authentication.getSession rather than calling the
+   * auth class directly: that is what makes this extension's own manifest
+   * entry (contributes.authentication) true — an Accounts-menu entry, the
+   * session-preference and consent plumbing VS Code owns, all live behind
+   * this call. `createIfNone` defaults to false so a caller that omits it —
+   * forge.status runs on every panel load — never puts a prompt in front of
+   * someone who never asked to sign in.
+   */
+  public async getSession(opts?: { createIfNone?: boolean }): Promise<ForgeSession | undefined> {
+    const session = await vscode.authentication.getSession(
+      BITBUCKET_AUTH_ID,
+      [...BITBUCKET_TOKEN_SCOPES],
+      { createIfNone: opts?.createIfNone ?? false },
+    );
+    return session ? { providerId: BITBUCKET_AUTH_ID, accountLabel: session.account.label } : undefined;
   }
 
-  public signOut(): Promise<void> {
-    return this.deps.auth.signOut();
+  /**
+   * Through the auth provider's own removal path, not vscode.authentication:
+   * there is no public "remove a session" call for a consumer, only the
+   * owning AuthenticationProvider's removeSession — which is this provider,
+   * reached through `deps.auth`.
+   */
+  public async signOut(): Promise<void> {
+    const sessions = await this.deps.auth.getSessions([...BITBUCKET_TOKEN_SCOPES]);
+    await Promise.all(sessions.map((session) => this.deps.auth.removeSession(session.id)));
   }
 
   public async listPullRequests(repo: ForgeRepoRef, opts: { state: PullRequestListState }): Promise<PullRequestSummary[]> {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import pkg from '../../package.json';
 
 vi.mock('vscode', () => ({
@@ -15,6 +15,8 @@ vi.mock('vscode', () => ({
 
 const { BitbucketAuthProvider, BITBUCKET_TOKEN_SCOPES } =
   await import('../../src/extension/services/forge/bitbucket/bitbucket-auth');
+
+const SCOPES = [...BITBUCKET_TOKEN_SCOPES];
 
 class MemorySecrets {
   private readonly values = new Map<string, string>();
@@ -36,50 +38,122 @@ function build(overrides: Partial<{ prompt: unknown; verify: unknown }> = {}) {
 describe('BitbucketAuthProvider', () => {
   it('has no session before sign-in', async () => {
     const { provider } = build();
-    expect(await provider.getSession()).toBeUndefined();
+    expect(await provider.getSessions()).toEqual([]);
   });
 
-  it('prompts, verifies, and stores on createIfNone', async () => {
+  it('prompts, verifies, and stores on createSession', async () => {
     const { provider, prompt, verify } = build();
-    const session = await provider.getSession({ createIfNone: true });
+    const session = await provider.createSession(SCOPES);
     expect(prompt).toHaveBeenCalledOnce();
     expect(verify).toHaveBeenCalledWith(credentials);
-    expect(session).toEqual({ providerId: 'bitbucket-cloud', accountLabel: 'Tuyen Nguyen' });
+    expect(session.account).toEqual({ id: credentials.email, label: 'Tuyen Nguyen' });
+    expect(session.scopes).toEqual(SCOPES);
   });
 
   // A mistyped or under-scoped token must fail where it was typed.
   it('stores nothing when verification fails', async () => {
     const { provider, secrets } = build({ verify: vi.fn().mockRejectedValue(new Error('401')) });
-    await expect(provider.getSession({ createIfNone: true })).rejects.toThrow('401');
-    expect(await provider.getCredentials()).toBeUndefined();
+    await expect(provider.createSession(SCOPES)).rejects.toThrow('401');
+    expect(await provider.getSessions()).toEqual([]);
     expect(await secrets.get('forge:bitbucket-cloud:token')).toBeUndefined();
   });
 
-  it('returns undefined without prompting when the user cancels', async () => {
-    const { provider } = build({ prompt: vi.fn().mockResolvedValue(undefined) });
-    expect(await provider.getSession({ createIfNone: true })).toBeUndefined();
+  // createSession must resolve to a session or reject — there is no third
+  // option in the vscode.AuthenticationProvider interface it implements.
+  it('rejects rather than resolving to nothing when the user cancels', async () => {
+    const { provider, secrets } = build({ prompt: vi.fn().mockResolvedValue(undefined) });
+    await expect(provider.createSession(SCOPES)).rejects.toThrow(/cancel/i);
+    expect(await secrets.get('forge:bitbucket-cloud:token')).toBeUndefined();
   });
 
   it('reuses the stored credential on later calls', async () => {
     const { provider, prompt } = build();
-    await provider.getSession({ createIfNone: true });
-    const again = await provider.getSession({ createIfNone: true });
+    await provider.createSession(SCOPES);
+    const again = await provider.getSessions();
     expect(prompt).toHaveBeenCalledTimes(1);
-    expect(again?.accountLabel).toBe('Tuyen Nguyen');
+    expect(again).toHaveLength(1);
+    expect(again[0].account.label).toBe('Tuyen Nguyen');
   });
 
-  it('signOut clears the credential and fires the change event', async () => {
+  // getSessions must genuinely filter by the requested scopes rather than
+  // handing back the stored session regardless.
+  describe('getSessions scope filtering', () => {
+    it('returns the session when the requested scopes are granted', async () => {
+      const { provider } = build();
+      await provider.createSession(SCOPES);
+      expect(await provider.getSessions(SCOPES)).toHaveLength(1);
+      expect(await provider.getSessions(['read:account'])).toHaveLength(1);
+    });
+
+    it('returns no session when a requested scope was never granted', async () => {
+      const { provider } = build();
+      await provider.createSession(SCOPES);
+      expect(await provider.getSessions(['admin:never-granted'])).toEqual([]);
+    });
+
+    it('returns the session when no scopes are requested', async () => {
+      const { provider } = build();
+      await provider.createSession(SCOPES);
+      expect(await provider.getSessions()).toHaveLength(1);
+      expect(await provider.getSessions(undefined)).toHaveLength(1);
+    });
+  });
+
+  // Stable across reloads: removeSession(sessionId) must be able to match
+  // the id a fresh provider instance (a window reload) derives from the same
+  // stored credential.
+  it('derives a session id that is stable across a reload of the same credential', async () => {
+    const secrets = new MemorySecrets();
+    const prompt = vi.fn().mockResolvedValue(credentials);
+    const verify = vi.fn().mockResolvedValue('Tuyen Nguyen');
+
+    const first = new BitbucketAuthProvider({ secrets, prompt, verify } as never);
+    const created = await first.createSession(SCOPES);
+
+    const second = new BitbucketAuthProvider({ secrets, prompt, verify } as never);
+    const [reloaded] = await second.getSessions();
+
+    expect(reloaded.id).toBe(created.id);
+  });
+
+  describe('removeSession', () => {
+    it('clears the credential and fires added/removed/changed', async () => {
+      const { provider } = build();
+      const created = await provider.createSession(SCOPES);
+      const fired: unknown[] = [];
+      provider.onDidChangeSessions((e: unknown) => fired.push(e));
+
+      await provider.removeSession(created.id);
+
+      expect(await provider.getSessions()).toEqual([]);
+      expect(fired).toEqual([{ added: [], removed: [created], changed: [] }]);
+    });
+
+    it('is a no-op for an id that does not match the stored credential', async () => {
+      const { provider } = build();
+      await provider.createSession(SCOPES);
+      const fired: unknown[] = [];
+      provider.onDidChangeSessions((e: unknown) => fired.push(e));
+
+      await provider.removeSession('not-the-real-session-id');
+
+      expect(await provider.getSessions()).toHaveLength(1);
+      expect(fired).toHaveLength(0);
+    });
+  });
+
+  it('createSession fires an added/removed/changed event, not a bare void', async () => {
     const { provider } = build();
-    await provider.getSession({ createIfNone: true });
     const fired: unknown[] = [];
     provider.onDidChangeSessions((e: unknown) => fired.push(e));
-    await provider.signOut();
-    expect(await provider.getSession()).toBeUndefined();
-    expect(fired).toHaveLength(1);
+
+    const session = await provider.createSession(SCOPES);
+
+    expect(fired).toEqual([{ added: [session], removed: [], changed: [] }]);
   });
 
   it('names every required scope', () => {
-    expect([...BITBUCKET_TOKEN_SCOPES]).toEqual([
+    expect(SCOPES).toEqual([
       'read:account',
       'read:repository:bitbucket',
       'read:pullrequest:bitbucket',
@@ -92,10 +166,22 @@ describe('BitbucketAuthProvider', () => {
     const spies = (['log', 'info', 'warn', 'error', 'debug'] as const)
       .map((level) => vi.spyOn(console, level).mockImplementation(() => {}));
     const { provider } = build({ verify: vi.fn().mockRejectedValue(new Error('401 Unauthorized')) });
-    await provider.getSession({ createIfNone: true }).catch(() => {});
+    await provider.createSession(SCOPES).catch(() => {});
     const written = spies.flatMap((spy) => spy.mock.calls.flat()).map(String).join('\n');
     expect(written).not.toContain(credentials.token);
     spies.forEach((spy) => spy.mockRestore());
+  });
+
+  // The credential never leaves the extension host: accessToken carries the
+  // API token (the AuthenticationSession shape requires it), but the id and
+  // account must not carry it too, and it never reaches JSON built from
+  // either of those.
+  it('keeps the token out of the session id and account', async () => {
+    const { provider } = build();
+    const session = await provider.createSession(SCOPES);
+    expect(session.accessToken).toBe(credentials.token);
+    expect(session.id).not.toContain(credentials.token);
+    expect(JSON.stringify(session.account)).not.toContain(credentials.token);
   });
 });
 

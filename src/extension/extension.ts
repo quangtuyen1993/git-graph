@@ -12,7 +12,7 @@ import { ForgeRegistry } from './services/forge/forge-registry';
 import { ForgeStore } from './services/forge/forge-store';
 import { isAllowedExternalUrl } from './services/forge/url-safety';
 import { BitbucketApi } from './services/forge/bitbucket/bitbucket-api';
-import { BitbucketAuthProvider } from './services/forge/bitbucket/bitbucket-auth';
+import { BitbucketAuthProvider, BITBUCKET_AUTH_ID, BITBUCKET_AUTH_LABEL } from './services/forge/bitbucket/bitbucket-auth';
 import { BitbucketCloudProvider } from './services/forge/bitbucket/bitbucket-cloud.provider';
 import { promptForBitbucketCredentials, verifyBitbucketCredentials } from './services/forge/bitbucket/bitbucket-sign-in';
 
@@ -107,6 +107,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     verify: verifyBitbucketCredentials,
   });
   context.subscriptions.push({ dispose: () => bitbucketAuth.dispose() });
+
+  // Makes the manifest's contributes.authentication entry true: without this
+  // call nothing backs it, so there is no Accounts-menu entry, no sign-out
+  // affordance there, and no session-change plumbing, even though the
+  // manifest advertises the integration exists.
+  context.subscriptions.push(
+    vscode.authentication.registerAuthenticationProvider(
+      BITBUCKET_AUTH_ID,
+      BITBUCKET_AUTH_LABEL,
+      bitbucketAuth,
+      { supportsMultipleAccounts: false },
+    ),
+  );
 
   forgeRegistry.register(new BitbucketCloudProvider({
     api: new BitbucketApi({ getCredentials: () => bitbucketAuth.getCredentials() }),

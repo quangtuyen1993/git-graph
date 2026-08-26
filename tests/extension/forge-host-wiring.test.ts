@@ -57,4 +57,23 @@ describe('forge host wiring', () => {
     expect(source).toContain('MUTATING_REMOTE_METHODS');
     expect(source).toMatch(/forgeStore\.clear\(\)/);
   });
+
+  // Makes the manifest's contributes.authentication entry true: without this
+  // call nothing backs it — see bitbucket-auth.test.ts's
+  // 'declares the bitbucket authentication provider' for the manifest side.
+  it('registers the Bitbucket authentication provider with VS Code', () => {
+    expect(source).toContain('vscode.authentication.registerAuthenticationProvider(');
+    expect(source).toContain('BITBUCKET_AUTH_ID');
+    expect(source).toContain('BITBUCKET_AUTH_LABEL');
+    expect(source).toContain('supportsMultipleAccounts: false');
+  });
+
+  it('pushes the authentication provider registration onto context.subscriptions', () => {
+    const idx = source.indexOf('vscode.authentication.registerAuthenticationProvider(');
+    expect(idx).toBeGreaterThan(-1);
+    // The call sits inside a context.subscriptions.push(...) a few lines up —
+    // a registration never disposed would leak on every deactivate/reload.
+    const preceding = source.slice(Math.max(0, idx - 120), idx);
+    expect(preceding).toContain('context.subscriptions.push(');
+  });
 });

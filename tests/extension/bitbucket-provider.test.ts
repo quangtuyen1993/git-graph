@@ -1,9 +1,24 @@
-import { describe, expect, it, vi } from 'vitest';
-import { BitbucketCloudProvider } from '../../src/extension/services/forge/bitbucket/bitbucket-cloud.provider';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import detailFixture from '../fixtures/bitbucket/pull-request.json';
 import listFixture from '../fixtures/bitbucket/pull-request-list.json';
 import commentsFixture from '../fixtures/bitbucket/comments.json';
 import diffstatFixture from '../fixtures/bitbucket/diffstat.json';
+
+// BitbucketCloudProvider.getSession/signOut route through
+// vscode.authentication now (see below), so importing it pulls in 'vscode' —
+// mocked minimally with just the one function these tests actually exercise.
+const authenticationMocks = vi.hoisted(() => ({ getSession: vi.fn() }));
+vi.mock('vscode', () => ({
+  authentication: { getSession: authenticationMocks.getSession },
+}));
+
+const { BitbucketCloudProvider } = await import('../../src/extension/services/forge/bitbucket/bitbucket-cloud.provider');
+const { BITBUCKET_AUTH_ID, BITBUCKET_TOKEN_SCOPES } =
+  await import('../../src/extension/services/forge/bitbucket/bitbucket-constants');
+
+beforeEach(() => {
+  authenticationMocks.getSession.mockReset();
+});
 
 function build(api: Partial<Record<'getJson' | 'getText' | 'getPaged', unknown>> = {}) {
   const stub = {
@@ -12,7 +27,10 @@ function build(api: Partial<Record<'getJson' | 'getText' | 'getPaged', unknown>>
     getPaged: vi.fn().mockResolvedValue((listFixture as { values: unknown[] }).values),
     ...api,
   };
-  const auth = { getSession: vi.fn().mockResolvedValue({ providerId: 'bitbucket-cloud', accountLabel: 'Tuyen' }), signOut: vi.fn() };
+  const auth = {
+    getSessions: vi.fn().mockResolvedValue([]),
+    removeSession: vi.fn().mockResolvedValue(undefined),
+  };
   const provider = new BitbucketCloudProvider({ api: stub as never, auth: auth as never });
   return { provider, stub, auth };
 }
@@ -99,5 +117,67 @@ describe('BitbucketCloudProvider', () => {
     const { provider, stub } = build();
     await expect(provider.getPullRequest(unsafeRepo, '123')).rejects.toBeInstanceOf(Error);
     expect(stub.getJson).not.toHaveBeenCalled();
+  });
+});
+
+describe('BitbucketCloudProvider auth routing', () => {
+  it('routes getSession through vscode.authentication.getSession, mapping the account label', async () => {
+    authenticationMocks.getSession.mockResolvedValue({
+      id: 'sid', accessToken: 'tok',
+      account: { id: 'a@b.com', label: 'Tuyen Nguyen' },
+      scopes: [...BITBUCKET_TOKEN_SCOPES],
+    });
+    const { provider } = build();
+
+    const session = await provider.getSession();
+
+    expect(authenticationMocks.getSession).toHaveBeenCalledWith(
+      BITBUCKET_AUTH_ID, [...BITBUCKET_TOKEN_SCOPES], { createIfNone: false });
+    expect(session).toEqual({ providerId: BITBUCKET_AUTH_ID, accountLabel: 'Tuyen Nguyen' });
+  });
+
+  // forge.status runs on every panel load and must never trigger a prompt:
+  // omitting opts must still pass createIfNone: false, not leave it unset.
+  it('defaults createIfNone to false when no options are given', async () => {
+    authenticationMocks.getSession.mockResolvedValue(undefined);
+    const { provider } = build();
+
+    await provider.getSession();
+
+    expect(authenticationMocks.getSession).toHaveBeenCalledWith(
+      expect.any(String), expect.any(Array), expect.objectContaining({ createIfNone: false }));
+  });
+
+  it('passes createIfNone through when the caller explicitly asks to sign in', async () => {
+    authenticationMocks.getSession.mockResolvedValue(undefined);
+    const { provider } = build();
+
+    await provider.getSession({ createIfNone: true });
+
+    expect(authenticationMocks.getSession).toHaveBeenCalledWith(
+      expect.any(String), expect.any(Array), expect.objectContaining({ createIfNone: true }));
+  });
+
+  it('returns undefined without inventing a session when none exists', async () => {
+    authenticationMocks.getSession.mockResolvedValue(undefined);
+    const { provider } = build();
+    expect(await provider.getSession()).toBeUndefined();
+  });
+
+  it('signs out by removing every session the auth provider currently holds, not via vscode.authentication', async () => {
+    const { provider, auth } = build();
+    auth.getSessions.mockResolvedValue([{ id: 'sid-1' }, { id: 'sid-2' }]);
+
+    await provider.signOut();
+
+    expect(auth.getSessions).toHaveBeenCalledWith([...BITBUCKET_TOKEN_SCOPES]);
+    expect(auth.removeSession).toHaveBeenCalledWith('sid-1');
+    expect(auth.removeSession).toHaveBeenCalledWith('sid-2');
+  });
+
+  it('signOut is a no-op when there is no session to remove', async () => {
+    const { provider, auth } = build();
+    await provider.signOut();
+    expect(auth.removeSession).not.toHaveBeenCalled();
   });
 });
