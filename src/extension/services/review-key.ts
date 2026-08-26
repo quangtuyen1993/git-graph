@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import type { ReviewTargetKind } from './review-store';
 
 /**
  * Reduce one id segment to characters that are safe in a filename. Model names
@@ -25,7 +26,17 @@ export function assertSafeReviewId(id: unknown): string {
   return id;
 }
 
+/**
+ * `kind` is required so every call site states it deliberately, but it only
+ * ever changes the id for `'pr'`: a pull-request review and a `'range'`
+ * review of the same sha pair must not collide (they used to — the entry's
+ * kind was whichever ran first, and rerun would rerun it as that kind), but
+ * `'branch' | 'commit' | 'range'` ids must stay byte-for-byte what they
+ * always were, so every review stored before this change still loads under
+ * the same id it was written with.
+ */
 export function buildReviewId(input: {
+  kind: ReviewTargetKind;
   baseSha: string;
   headSha: string;
   provider: string;
@@ -35,7 +46,8 @@ export function buildReviewId(input: {
   const target = input.headSha.slice(0, 7);
   const provider = slugSegment(input.provider);
   const model = slugSegment(input.model || 'default') || 'default';
-  return `${source}..${target}.${provider}.${model}`;
+  const kindSegment = input.kind === 'pr' ? '.pr' : '';
+  return `${source}..${target}${kindSegment}.${provider}.${model}`;
 }
 
 /** Stable, filesystem-safe token for a repository, derived from its real path. */

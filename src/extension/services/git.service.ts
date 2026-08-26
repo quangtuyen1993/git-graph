@@ -276,6 +276,21 @@ export class GitService {
   }
 
   /**
+   * A real existence check, unlike `revParse` above: plain `rev-parse` echoes
+   * any syntactically valid object name back successfully whether or not the
+   * object exists (see `searchCommits`'s comment below for the same trap).
+   * `cat-file -e` asks git to actually look the object up and dereference it
+   * as a commit, so a sha a pull request names but this repository has never
+   * fetched — the exact case a review of an unfetched pull request has to
+   * detect — correctly reports `false` instead of a false "yes".
+   */
+  public async commitExists(sha: string): Promise<boolean> {
+    return this.cli.exec(['cat-file', '-e', `${sha}^{commit}`])
+      .then(() => true)
+      .catch(() => false);
+  }
+
+  /**
    * Finds commits by abbreviated/full hash or by message text.
    *
    * `rev-parse --verify <q>^{commit}` is the only reliable existence check —

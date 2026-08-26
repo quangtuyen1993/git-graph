@@ -1,14 +1,19 @@
 import type { ReviewTargetKind } from './review-store';
+import type { PullRequestDetail } from './forge/forge.types';
 
 /** git's well-known empty tree — the base a root commit diffs against. */
 export const EMPTY_TREE_SHA = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 
 export interface ReviewTarget {
   kind: ReviewTargetKind;
-  /** Branch name or sha. Empty for kind 'commit' — the base is computed. */
+  /** Branch name or sha. Empty for kind 'commit' and 'pr' — computed or fetched instead. */
   baseRef: string;
   headRef: string;
   subject?: string;
+  /** The pull request's provider-local id. Required for, and only meaningful on, kind 'pr'. */
+  prId?: string;
+  /** Which forge provider the pull request came from. Optional even for kind 'pr'. */
+  providerId?: string;
 }
 
 export interface ResolvedTarget {
@@ -18,12 +23,39 @@ export interface ResolvedTarget {
   headRef: string;
   headSha: string;
   subject?: string;
+  /** Present only for kind 'pr'. */
+  prId?: string;
+  prNumber?: number;
+  providerId?: string;
+  /**
+   * Whether both `baseSha` and `headSha` already exist as objects in the
+   * local repository. Present only for kind 'pr' — it is what decides the
+   * local-vs-forge diff path. `undefined` for every other kind, which never
+   * has to ask: their refs are always resolved locally by definition.
+   */
+  localBothPresent?: boolean;
 }
 
 export interface TargetGit {
   revParse(ref: string): Promise<string>;
   getParents(hash: string): Promise<string[]>;
   log(options: { revisions: string[]; maxCount: number }): Promise<{ subject: string }[]>;
+}
+
+/** The slice of the forge stack a pull request target needs: fetch its detail. */
+export interface ForgePrLookup {
+  getPullRequest(id: string): Promise<PullRequestDetail>;
+}
+
+/**
+ * A real existence check for a sha that may never have been fetched. Plain
+ * `revParse` is not this — it echoes back any syntactically valid object name
+ * whether or not the object exists locally (see `GitService.searchCommits`'s
+ * comment on the same trap), which is exactly wrong for a pull request whose
+ * branch may never have been fetched.
+ */
+export interface PrExistenceGit {
+  commitExists(sha: string): Promise<boolean>;
 }
 
 async function revParseNamed(git: TargetGit, ref: string): Promise<string> {
@@ -65,19 +97,61 @@ export async function resolveReviewTarget(git: TargetGit, target: ReviewTarget):
   };
 }
 
+/**
+ * Resolves a pull request into the sha pair a review runs on — never through
+ * `revParse`. A pull request's branch frequently has never been fetched, so
+ * the pair comes straight from `PullRequestDetail.sourceCommit` /
+ * `targetCommit`, and locality is established with a real existence check
+ * (`PrExistenceGit.commitExists`), not a resolve-and-hope.
+ *
+ * The pull request's title stands in for `subject` — the same field a commit
+ * review's subject rides on — so it flows through the existing `subject`
+ * plumbing in `review-method-handler.ts` and `ReviewRunner` without a second,
+ * parallel "title" field.
+ */
+export async function resolvePullRequestTarget(
+  git: PrExistenceGit,
+  forge: ForgePrLookup,
+  prId: string,
+): Promise<ResolvedTarget> {
+  const detail = await forge.getPullRequest(prId);
+
+  const [baseLocal, headLocal] = await Promise.all([
+    git.commitExists(detail.targetCommit),
+    git.commitExists(detail.sourceCommit),
+  ]);
+
+  return {
+    kind: 'pr',
+    baseRef: detail.targetBranch, baseSha: detail.targetCommit,
+    headRef: detail.sourceBranch, headSha: detail.sourceCommit,
+    subject: detail.title,
+    prId,
+    prNumber: detail.number,
+    localBothPresent: baseLocal && headLocal,
+  };
+}
+
 /** The slice of vscode.Memento this state needs — injectable for tests. */
 export interface TargetStorage {
   get(key: string): unknown;
   update(key: string, value: unknown): Thenable<void> | Promise<void>;
 }
 
-const KINDS: ReadonlySet<string> = new Set(['branch', 'commit', 'range']);
+/**
+ * Every valid `ReviewTargetKind`. Exported so the two other places that must
+ * agree with it — `review-method-handler.ts`'s params parser and its
+ * `review.saveTarget` case — import this instead of restating the literal
+ * list, which is how a new kind silently stops being rejected in one of them
+ * and starts being rejected in another.
+ */
+export const REVIEW_TARGET_KINDS: ReadonlySet<string> = new Set(['branch', 'commit', 'range', 'pr']);
 
 function isReviewTarget(value: unknown): value is ReviewTarget {
   const t = value as ReviewTarget | null;
   return !!t
     && typeof t === 'object'
-    && KINDS.has(t.kind as string)
+    && REVIEW_TARGET_KINDS.has(t.kind as string)
     && typeof t.baseRef === 'string'
     && typeof t.headRef === 'string';
 }

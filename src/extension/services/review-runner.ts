@@ -10,6 +10,10 @@ export interface StartReviewInput {
   headRef: string;
   headSha: string;
   subject?: string;
+  /** Present only for kind 'pr'. */
+  prId?: string;
+  prNumber?: number;
+  providerId?: string;
   provider: string;
   model: string;
   payloadText: string;
@@ -51,6 +55,7 @@ export class ReviewRunner {
    */
   public async start(input: StartReviewInput): Promise<string> {
     const id = buildReviewId({
+      kind: input.kind,
       baseSha: input.baseSha,
       headSha: input.headSha,
       provider: input.provider,
@@ -68,6 +73,9 @@ export class ReviewRunner {
       headRef: input.headRef,
       headSha: input.headSha,
       ...(input.subject ? { subject: input.subject } : {}),
+      ...(input.prId ? { prId: input.prId } : {}),
+      ...(input.prNumber !== undefined ? { prNumber: input.prNumber } : {}),
+      ...(input.providerId ? { providerId: input.providerId } : {}),
       provider: input.provider,
       model: input.model || 'default',
       status: 'running',

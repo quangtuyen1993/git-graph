@@ -7,7 +7,9 @@ import { GitService } from './services/git.service';
 import { openCompareDiff, type CompareDiffDeps } from './services/compare-diff';
 import type { ReviewRunner } from './services/review-runner';
 import type { WebviewHost } from './types/webview-host.types';
-import { createForgeHandler, type ForgeSignOutResult } from './controllers/forge-method-handler';
+import { createForgeHandler, type ForgeSignOutResult, type ForgeStatus } from './controllers/forge-method-handler';
+import type { ReviewForgeDeps } from './controllers/review-method-handler';
+import type { ForgeComment, PullRequestDetail, PullRequestFile } from './services/forge/forge.types';
 import { ForgeRegistry } from './services/forge/forge-registry';
 import { ForgeStore } from './services/forge/forge-store';
 import { isAllowedExternalUrl } from './services/forge/url-safety';
@@ -221,6 +223,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await vscode.commands.executeCommand('gitGraphPro.reviews.focus');
     },
     broadcast: (event, data) => routers.broadcast(event, data),
+    // Narrow closures over the same translated `forgeHandler` the forge
+    // namespace itself dispatches through — mirroring how `getRemoteUrl` is
+    // injected above. A forge failure reaching review.start is therefore
+    // already the translated message `forgeHandler` produces, never a raw
+    // ForgeError, and this file is the only place under review-* that ever
+    // touches anything forge-shaped.
+    forge: {
+      getPullRequest: async (id) =>
+        (await forgeHandler('forge.pr.get', { id })) as PullRequestDetail,
+      getDiff: async (id) =>
+        ((await forgeHandler('forge.pr.diff', { id })) as { diff: string }).diff,
+      getFiles: async (id) =>
+        ((await forgeHandler('forge.pr.files', { id })) as { files: PullRequestFile[] }).files,
+      getComments: async (id) =>
+        ((await forgeHandler('forge.pr.comments', { id })) as { comments: ForgeComment[] }).comments,
+      getProviderId: async () => ((await forgeHandler('forge.status', {})) as ForgeStatus).providerId,
+    } satisfies ReviewForgeDeps,
   });
 
   function createSession(host: WebviewHost): () => void {

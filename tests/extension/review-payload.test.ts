@@ -156,6 +156,34 @@ describe('buildReviewPayload', () => {
     expect(payload.truncated).toBe(false);
   });
 
+  it('renders prior discussion ahead of the diff, carrying path, line and side for a deleted-line comment', () => {
+    const payload = buildReviewPayload({
+      ...base,
+      diff: fileDiff('src/a.ts'),
+      files: [summary('src/a.ts')],
+      priorDiscussion: [
+        { author: 'An Tran', body: 'This looks unsafe.', path: 'src/a.ts', line: 12, side: 'old' },
+        { author: 'Reviewer Two', body: 'General note, no anchor.' },
+      ],
+      budget: 100_000,
+    });
+
+    const discussionIndex = payload.text.indexOf('Prior discussion');
+    const diffIndex = payload.text.indexOf('### Diff');
+    expect(discussionIndex).toBeGreaterThan(-1);
+    expect(discussionIndex).toBeLessThan(diffIndex);
+    expect(payload.text).toContain('An Tran');
+    expect(payload.text).toContain('src/a.ts:12');
+    expect(payload.text).toContain('old side');
+    expect(payload.text).toContain('This looks unsafe.');
+    expect(payload.text).toContain('General note, no anchor.');
+  });
+
+  it('omits the discussion section entirely when there is none', () => {
+    const payload = buildReviewPayload({ ...base, diff: fileDiff('src/a.ts'), files: [summary('src/a.ts')] });
+    expect(payload.text).not.toContain('Prior discussion');
+  });
+
   it('keeps files whole on a real repository diff that exceeds the budget', () => {
     // Guards the original bug against real git output, not just synthetic diffs.
     const repo = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();

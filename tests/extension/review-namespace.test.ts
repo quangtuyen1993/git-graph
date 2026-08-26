@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { createReviewHandler } from '../../src/extension/controllers/review-method-handler';
 import { ReviewTargetState } from '../../src/extension/services/review-target';
 import type { Commit } from '../../src/extension/types/git.types';
+import { fakePullRequest, FAKE_PR_FILES } from '../helpers/fake-forge-provider';
+import type { ForgeComment, PullRequestDetail, PullRequestFile } from '../../src/extension/services/forge/forge.types';
 
 function harness(over: Record<string, unknown> = {}) {
   const store = {
@@ -21,6 +23,20 @@ function harness(over: Record<string, unknown> = {}) {
     diff: vi.fn(async () => ({ files: [] })),
     log: vi.fn(async (): Promise<Commit[]> => []),
     getParents: vi.fn(async () => ['c'.repeat(40)]),
+    // The pull request path never uses revParse to test locality — it needs
+    // its own real existence check. Tests that care about local-vs-forge
+    // routing override this per case.
+    commitExists: vi.fn(async () => true),
+  };
+  // A pull request that has never been fetched: forge is the only place that
+  // knows about it, which is exactly the shape review.start's 'pr' branch
+  // must work against.
+  const forge = {
+    getPullRequest: vi.fn(async (): Promise<PullRequestDetail> => fakePullRequest()),
+    getDiff: vi.fn(async () => 'diff --git a/x b/x'),
+    getFiles: vi.fn(async (): Promise<PullRequestFile[]> => FAKE_PR_FILES),
+    getComments: vi.fn(async (): Promise<ForgeComment[]> => []),
+    getProviderId: vi.fn(async () => 'bitbucket-cloud'),
   };
   const targets = new ReviewTargetState();
   const focusReviewView = vi.fn(async () => {});
@@ -36,9 +52,10 @@ function harness(over: Record<string, unknown> = {}) {
     targets,
     focusReviewView,
     broadcast,
+    forge: forge as never,
     ...over,
   });
-  return { handler, store, runner, git, targets, focusReviewView, broadcast };
+  return { handler, store, runner, git, forge, targets, focusReviewView, broadcast };
 }
 
 describe('review namespace', () => {
@@ -284,5 +301,154 @@ describe('review.saveTarget', () => {
     await expect(handler('review.saveTarget', { kind: 'nope', headRef: 'x' }))
       .rejects.toThrow();
     expect(targets.get('repo-a')).toBeNull();
+  });
+
+  it('round-trips a pull request target', async () => {
+    // I5: saveTarget round-trips a 'pr' target — the pickers must be able to
+    // reopen on the same pull request after a window reload.
+    const { handler, targets, git } = harness();
+
+    const result = await handler('review.saveTarget', {
+      kind: 'pr', prId: 'PR-9', headRef: 'feature/x', subject: 'Add feature',
+    });
+
+    expect(result).toEqual({ success: true });
+    expect(targets.get('repo-a')).toMatchObject({ kind: 'pr', prId: 'PR-9', subject: 'Add feature' });
+    expect(git.revParse).not.toHaveBeenCalled();
+  });
+
+  it('rejects a pull request target with no id', async () => {
+    const { handler, targets } = harness();
+
+    await expect(handler('review.saveTarget', { kind: 'pr', headRef: 'feature/x' }))
+      .rejects.toThrow(/invalid review target/i);
+    expect(targets.get('repo-a')).toBeNull();
+  });
+});
+
+describe('review.start for a pull request', () => {
+  it('uses the local diff and never touches the forge diff when both shas are already fetched', async () => {
+    // I2: a fully-fetched pull request must diff locally, not through the API.
+    const { handler, runner, git, forge } = harness();
+    git.commitExists.mockResolvedValue(true);
+
+    const result = await handler('review.start', { kind: 'pr', prId: '123', provider: 'claude', model: 'sonnet' });
+
+    expect(result).toMatchObject({ cached: false });
+    expect(git.getDiff).toHaveBeenCalledWith('b'.repeat(40), 'a'.repeat(40));
+    expect(forge.getDiff).not.toHaveBeenCalled();
+    // Files still come from forge.pr.files even on the local path.
+    expect(forge.getFiles).toHaveBeenCalledWith('123');
+    expect(runner.start).toHaveBeenCalledOnce();
+  });
+
+  it('includes commit subjects only on the local path', async () => {
+    const { handler, git, runner } = harness();
+    git.commitExists.mockResolvedValue(true);
+    git.log.mockResolvedValue([{ subject: 'fix: race' }] as never);
+
+    await handler('review.start', { kind: 'pr', prId: '123', provider: 'claude', model: 'sonnet' });
+
+    const input = runner.start.mock.calls[0][0] as Record<string, unknown>;
+    expect(input.payloadText).toContain('fix: race');
+  });
+
+  it('omits commit subjects on the forge-diff path — the interface has no support for them there', async () => {
+    const { handler, git, forge, runner } = harness();
+    git.commitExists.mockResolvedValue(false);
+
+    await handler('review.start', { kind: 'pr', prId: '123', provider: 'claude', model: 'sonnet' });
+
+    expect(forge.getDiff).toHaveBeenCalledWith('123');
+    expect(git.log).not.toHaveBeenCalled();
+    const input = runner.start.mock.calls[0][0] as Record<string, unknown>;
+    expect(input.payloadText).not.toContain('### Commits');
+  });
+
+  it('files history as "PR #<number> <title>" via the existing subject field, and rerun re-fetches the pull request', async () => {
+    // I3: the entry must carry enough for a "PR #<number> <title>" history
+    // row, and a rerun must ask the provider again rather than trust the old
+    // sha pair.
+    const { handler, runner, store, forge } = harness();
+    forge.getPullRequest.mockResolvedValue(fakePullRequest({ id: '123', number: 123, title: 'Add feature' }));
+
+    await handler('review.start', { kind: 'pr', prId: '123', provider: 'claude', model: 'sonnet' });
+
+    const started = runner.start.mock.calls[0][0] as Record<string, unknown>;
+    expect(started.subject).toBe('Add feature');
+    expect(started.prNumber).toBe(123);
+    expect(started.prId).toBe('123');
+    expect(started.providerId).toBe('bitbucket-cloud');
+
+    // rerun
+    store.get.mockResolvedValueOnce({
+      id: 'old-id', kind: 'pr', baseRef: 'develop', baseSha: 'a'.repeat(40),
+      headRef: 'feature/RMS-1027', headSha: 'b'.repeat(40), prId: '123', prNumber: 123,
+      providerId: 'bitbucket-cloud', provider: 'claude', model: 'sonnet',
+      status: 'done', startedAt: '2026-08-01T00:00:00.000Z',
+    } as never);
+    forge.getPullRequest.mockClear();
+
+    await handler('review.rerun', { id: 'old-id' });
+
+    expect(forge.getPullRequest).toHaveBeenCalledWith('123');
+  });
+
+  it('rejects a rerun of a pull request entry with no stored id', async () => {
+    const { handler, store } = harness();
+    store.get.mockResolvedValueOnce({
+      id: 'old-id', kind: 'pr', baseRef: 'develop', baseSha: 'a'.repeat(40),
+      headRef: 'feature/x', headSha: 'b'.repeat(40), provider: 'claude', model: 'sonnet',
+      status: 'done', startedAt: '2026-08-01T00:00:00.000Z',
+    } as never);
+
+    await expect(handler('review.rerun', { id: 'old-id' })).rejects.toThrow(/missing its pull request id/i);
+  });
+
+  it('renders prior discussion ahead of the diff, carrying path, line and side for a deleted-line comment', async () => {
+    // I4: a comment on a deleted line is ambiguous without path, line and side.
+    const { handler, forge, runner } = harness();
+    forge.getComments.mockResolvedValue([
+      {
+        id: 'c1', author: { displayName: 'An Tran', accountId: 'acc-1' }, body: 'Why remove this?',
+        createdAt: '2026-08-25T00:00:00Z', path: 'src/a.ts', line: 42, side: 'old',
+      },
+    ] as never);
+
+    await handler('review.start', { kind: 'pr', prId: '123', provider: 'claude', model: 'sonnet' });
+
+    const input = runner.start.mock.calls[0][0] as Record<string, unknown>;
+    const text = input.payloadText as string;
+    const discussionIndex = text.indexOf('Prior discussion');
+    const diffIndex = text.indexOf('### Diff');
+    expect(discussionIndex).toBeGreaterThan(-1);
+    expect(discussionIndex).toBeLessThan(diffIndex);
+    expect(text).toContain('An Tran');
+    expect(text).toContain('src/a.ts');
+    expect(text).toContain('42');
+    expect(text).toContain('old side');
+    expect(text).toContain('Why remove this?');
+  });
+
+  it('refuses an empty diff without starting a run', async () => {
+    const { handler, runner, git } = harness();
+    git.commitExists.mockResolvedValue(true);
+    git.getDiff.mockResolvedValue('   ');
+
+    await expect(handler('review.start', { kind: 'pr', prId: '123', provider: 'claude', model: 'sonnet' }))
+      .rejects.toThrow(/no differences/i);
+    expect(runner.start).not.toHaveBeenCalled();
+  });
+
+  it('requires a pull request id', async () => {
+    const { handler } = harness();
+    await expect(handler('review.start', { kind: 'pr', provider: 'claude', model: 'sonnet' }))
+      .rejects.toThrow(/missing pull request id/i);
+  });
+
+  it('rejects an unknown review kind up front', async () => {
+    const { handler } = harness();
+    await expect(handler('review.start', { kind: 'issue', headRef: 'x', provider: 'claude', model: 'sonnet' }))
+      .rejects.toThrow(/unknown review kind/i);
   });
 });

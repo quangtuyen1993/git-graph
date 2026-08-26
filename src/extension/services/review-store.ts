@@ -4,7 +4,7 @@ import { assertSafeReviewId } from './review-key';
 
 export type ReviewStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
 
-export type ReviewTargetKind = 'branch' | 'commit' | 'range';
+export type ReviewTargetKind = 'branch' | 'commit' | 'range' | 'pr';
 
 export interface ReviewEntry {
   id: string;
@@ -15,8 +15,14 @@ export interface ReviewEntry {
   /** Head of the comparison. */
   headRef: string;
   headSha: string;
-  /** Commit subject — only meaningful for kind 'commit'. */
+  /** Commit subject for kind 'commit'; the pull request's title for kind 'pr'. */
   subject?: string;
+  /** The pull request's provider-local id. Present only for kind 'pr'. */
+  prId?: string;
+  /** The pull request's human-facing number (`#123`). Present only for kind 'pr'. */
+  prNumber?: number;
+  /** Which forge provider the pull request came from. Present only for kind 'pr'. */
+  providerId?: string;
   provider: string;
   model: string;
   status: ReviewStatus;

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  EMPTY_TREE_SHA, ReviewTargetState, resolveReviewTarget,
+  EMPTY_TREE_SHA, REVIEW_TARGET_KINDS, ReviewTargetState, resolvePullRequestTarget, resolveReviewTarget,
 } from '../../src/extension/services/review-target';
+import { fakePullRequest } from '../helpers/fake-forge-provider';
 
 const SHA_A = 'a'.repeat(40);
 const SHA_B = 'b'.repeat(40);
@@ -51,6 +52,66 @@ describe('resolveReviewTarget', () => {
   });
 });
 
+describe('REVIEW_TARGET_KINDS', () => {
+  it('includes every kind the params parser and review.saveTarget must also accept', () => {
+    expect(REVIEW_TARGET_KINDS.has('branch')).toBe(true);
+    expect(REVIEW_TARGET_KINDS.has('commit')).toBe(true);
+    expect(REVIEW_TARGET_KINDS.has('range')).toBe(true);
+    expect(REVIEW_TARGET_KINDS.has('pr')).toBe(true);
+    expect(REVIEW_TARGET_KINDS.has('issue')).toBe(false);
+  });
+});
+
+describe('resolvePullRequestTarget', () => {
+  function fakePrGit(over: Record<string, unknown> = {}) {
+    return { commitExists: vi.fn(async () => true), ...over };
+  }
+
+  it('resolves the sha pair from PullRequestDetail without ever calling revParse', async () => {
+    const detail = fakePullRequest({
+      id: 'PR-1', number: 42, title: 'fix(auth): refresh token race',
+      sourceBranch: 'feature/x', targetBranch: 'develop',
+      sourceCommit: SHA_A, targetCommit: SHA_B,
+    });
+    const forge = { getPullRequest: vi.fn(async () => detail) };
+    const git = fakePrGit();
+
+    const resolved = await resolvePullRequestTarget(git, forge, 'PR-1');
+
+    expect(resolved).toMatchObject({
+      kind: 'pr',
+      baseRef: 'develop', baseSha: SHA_B,
+      headRef: 'feature/x', headSha: SHA_A,
+      subject: 'fix(auth): refresh token race',
+      prId: 'PR-1', prNumber: 42,
+    });
+    expect(forge.getPullRequest).toHaveBeenCalledWith('PR-1');
+    expect('revParse' in git).toBe(false);
+  });
+
+  it('reports both shas present when the existence check finds them both', async () => {
+    const forge = { getPullRequest: vi.fn(async () => fakePullRequest()) };
+    const git = fakePrGit({ commitExists: vi.fn(async () => true) });
+
+    const resolved = await resolvePullRequestTarget(git, forge, '123');
+    expect(resolved.localBothPresent).toBe(true);
+  });
+
+  it('reports not-present when only one sha exists locally', async () => {
+    const forge = { getPullRequest: vi.fn(async () => fakePullRequest()) };
+    const calls: string[] = [];
+    const git = fakePrGit({
+      commitExists: vi.fn(async (sha: string) => { calls.push(sha); return sha === fakePullRequest().targetCommit; }),
+    });
+
+    const resolved = await resolvePullRequestTarget(git, forge, '123');
+    expect(resolved.localBothPresent).toBe(false);
+    // Both sides are checked with a real existence call, not skipped once one fails.
+    expect(calls).toContain(fakePullRequest().targetCommit);
+    expect(calls).toContain(fakePullRequest().sourceCommit);
+  });
+});
+
 describe('ReviewTargetState', () => {
   it('keeps targets separate per repo', () => {
     const state = new ReviewTargetState();
@@ -59,6 +120,12 @@ describe('ReviewTargetState', () => {
     expect(state.get('repo-a')?.headRef).toBe('feat/x');
     expect(state.get('repo-b')?.kind).toBe('commit');
     expect(state.get('repo-c')).toBeNull();
+  });
+
+  it('keeps a pull request target intact, including its provider-local id', () => {
+    const state = new ReviewTargetState();
+    state.set('repo-a', { kind: 'pr', baseRef: '', headRef: '', prId: 'PR-9' });
+    expect(state.get('repo-a')).toMatchObject({ kind: 'pr', prId: 'PR-9' });
   });
 });
 

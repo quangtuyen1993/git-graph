@@ -21,6 +21,25 @@ export interface ReviewFileSummary {
   binary: boolean;
 }
 
+/**
+ * One prior comment, rendered ahead of the diff so the model reviews with the
+ * same context a human reviewer would have. Deliberately not `ForgeComment`:
+ * this module stays provider-agnostic — a caller maps whatever comment shape
+ * it has (a pull request's, one day an issue's) into this before calling in.
+ */
+export interface PriorDiscussionEntry {
+  author: string;
+  body: string;
+  path?: string;
+  line?: number;
+  /**
+   * Which side of the diff `line` refers to. Present only alongside `line`.
+   * Without it a comment anchored to a line the change deleted — which has no
+   * counterpart on the new side — is ambiguous.
+   */
+  side?: 'old' | 'new';
+}
+
 export interface ReviewPayloadInput {
   baseBranch: string;
   headBranch: string;
@@ -30,6 +49,8 @@ export interface ReviewPayloadInput {
   files?: ReviewFileSummary[];
   /** Commit subjects in the range, newest first. */
   commits?: string[];
+  /** Prior comments on the change, rendered ahead of the diff. */
+  priorDiscussion?: PriorDiscussionEntry[];
   /**
    * Character budget for the diff body. Omit or pass 0 to send the diff in full,
    * which is the default: the reviewer should see the real change. A budget is
@@ -111,8 +132,15 @@ function statLine(f: ReviewFileSummary): string {
   return `- ${f.status.padEnd(8)} ${f.path}${rename} — ${churn}`;
 }
 
+function discussionLine(c: PriorDiscussionEntry): string {
+  if (!c.path) return `- **${c.author}**: ${c.body.replace(/\r?\n+/g, ' ')}`;
+  const line = typeof c.line === 'number' ? `:${c.line}` : '';
+  const side = c.side ? ` (${c.side} side)` : '';
+  return `- **${c.author}** on \`${c.path}${line}\`${side}: ${c.body.replace(/\r?\n+/g, ' ')}`;
+}
+
 export function buildReviewPayload(input: ReviewPayloadInput): ReviewPayload {
-  const { baseBranch, headBranch, diff, files, commits, budget } = input;
+  const { baseBranch, headBranch, diff, files, commits, priorDiscussion, budget } = input;
 
   const header: string[] = [
     REVIEW_INSTRUCTIONS,
@@ -141,6 +169,13 @@ export function buildReviewPayload(input: ReviewPayloadInput): ReviewPayload {
       ...files.map(statLine),
       '',
     );
+  }
+
+  // Ahead of the diff, same as a human reviewer would see it before the code.
+  if (priorDiscussion?.length) {
+    header.push(`### Prior discussion (${priorDiscussion.length} comments)`, '');
+    header.push(...priorDiscussion.map(discussionLine));
+    header.push('');
   }
 
   const chunks = splitDiffByFile(diff);
