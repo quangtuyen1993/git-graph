@@ -1,8 +1,6 @@
 <!-- The sibling of CommitDetail.svelte: shows one pull request in the right-hand panel. -->
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import FileTreeList from './FileTreeList.svelte';
-  import { buildPathTree } from '../../lib/path-tree';
 
   interface ForgeUser { displayName: string; accountId: string }
   type ReviewStatus = 'approved' | 'changes_requested' | 'pending';
@@ -48,16 +46,17 @@
   export let comments: ForgeComment[] = [];
   export let files: ChangedFile[] = [];
   export let capabilities: ForgeCapabilities;
-
-  /* Same shape CommitDetail feeds FileTreeList; the component takes a tree,
-     not a flat list, and owns no collapse state of its own. */
-  let collapsedFolders: Record<string, boolean> = {};
-  $: fileTree = buildPathTree(files, (file) => file.path);
+  /*
+   * No capability backs this yet — the design spec assigns AI review to a
+   * later phase. Defaulting false, with no wiring from App.svelte, keeps the
+   * button honest the same way the four `capabilities.*` gates below do:
+   * absent until the thing it triggers actually exists.
+   */
+  export let reviewWithAiEnabled = false;
 
   const dispatch = createEventDispatcher<{
     openExternal: void;
     reviewWithAi: void;
-    openFile: ChangedFile;
     approve: void;
     requestChanges: void;
     merge: { strategy: string };
@@ -68,6 +67,22 @@
     changes_requested: '✗',
     pending: '⧗',
   };
+
+  /*
+   * Deliberately not FileTreeList: that component's leaf rows are buttons
+   * that dispatch `openFile` to open a diff editor against the local
+   * repository. A pull request's head commit is usually not fetched locally
+   * (see App.svelte's `scrollToPullRequestHead`), so that action would fail
+   * for the common case. Until a later phase solves "open a diff for a
+   * commit we may not have", this list is read-only — no button, no click
+   * handler, no link styling — so it never promises what it cannot do.
+   */
+  function statusLetter(status: string): string {
+    if (status === 'added') return 'A';
+    if (status === 'deleted') return 'D';
+    if (status === 'renamed') return 'R';
+    return 'M';
+  }
 
   /*
    * The indentation that shows a reply belongs to its thread is purely visual —
@@ -121,14 +136,22 @@
 
     <section class="pr-files" aria-label="Changed files">
       <h3>Files ({files.length})</h3>
-      <FileTreeList
-        nodes={fileTree}
-        {collapsedFolders}
-        on:folderToggle={(event) => {
-          collapsedFolders = { ...collapsedFolders, [event.detail.path]: !collapsedFolders[event.detail.path] };
-        }}
-        on:openFile={(event) => dispatch('openFile', event.detail)}
-      />
+      <ul class="pr-file-list">
+        {#each files as file (file.path)}
+          <li class="pr-file-row" title={file.path}>
+            <span class="pr-file-path">{file.path}</span>
+            <span class="pr-file-meta">
+              {#if file.binary}
+                <span class="file-binary">BIN</span>
+              {:else}
+                {#if file.additions > 0}<span class="file-add">+{file.additions}</span>{/if}
+                {#if file.deletions > 0}<span class="file-del">-{file.deletions}</span>{/if}
+              {/if}
+              <span class="file-status file-status-{file.status}">{statusLetter(file.status)}</span>
+            </span>
+          </li>
+        {/each}
+      </ul>
     </section>
 
     <section class="pr-comments" aria-label="Comments">
@@ -153,7 +176,9 @@
     </section>
 
     <footer class="pr-actions">
-      <button type="button" on:click={() => dispatch('reviewWithAi')}>Review with AI</button>
+      {#if reviewWithAiEnabled}
+        <button type="button" on:click={() => dispatch('reviewWithAi')}>Review with AI</button>
+      {/if}
       {#if capabilities.approve}
         <button type="button" on:click={() => dispatch('approve')}>Approve</button>
       {/if}
@@ -258,6 +283,54 @@
   .reviewer.approved { color: var(--vscode-testing-iconPassed, #73c991); }
   .reviewer.changes_requested { color: var(--vscode-testing-iconFailed, #f14c4c); }
   .reviewer.pending { color: var(--vscode-descriptionForeground, #888); }
+
+  /* Display-only: no button, no hover affordance, no link colour on the path
+     — this list cannot open a diff yet, so it must not look like it can. */
+  .pr-file-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .pr-file-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 22px;
+    padding: 2px 0;
+  }
+
+  .pr-file-path {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 11px;
+  }
+
+  .pr-file-meta {
+    margin-left: auto;
+    padding-left: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    font-size: 11px;
+  }
+
+  .file-add { color: var(--vscode-gitDecoration-addedResourceForeground, #6a9955); }
+  .file-del { color: var(--vscode-gitDecoration-deletedResourceForeground, #c74e39); }
+  .file-binary { color: var(--vscode-descriptionForeground, #767676); }
+
+  .file-status {
+    width: 12px;
+    text-align: center;
+    font-weight: 600;
+    color: var(--vscode-descriptionForeground, #767676);
+  }
+
+  .file-status-added { color: var(--vscode-gitDecoration-addedResourceForeground, #6a9955); }
+  .file-status-deleted { color: var(--vscode-gitDecoration-deletedResourceForeground, #c74e39); }
 
   .comment {
     padding: 6px 0;

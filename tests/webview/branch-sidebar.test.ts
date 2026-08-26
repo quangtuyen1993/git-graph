@@ -461,4 +461,22 @@ describe('PULL REQUESTS section', () => {
     expect(row).toHaveTextContent('#42');
     expect(getByRole('button', { name: 'main' })).not.toHaveTextContent('#42');
   });
+
+  // Read-only PR browsing is mostly for someone else's pull request, whose
+  // source branch usually exists locally only as an `origin/…` row — so the
+  // badge has to reach REMOTE too, keyed by the short name (no remote
+  // prefix), which is what a pull request's `sourceBranch` actually is.
+  it('badges a REMOTE branch row, keyed by its short name without the remote prefix', async () => {
+    const remoteBranch = { ...branches[0], name: 'origin/feature-y', current: false, remote: 'origin' };
+    const { getByRole } = await renderExpanded({
+      branches: [...branches, remoteBranch], tags, stashes, worktrees, submodules,
+      forgeAvailable: true, forgeSignedIn: true, pullRequests,
+      branchPullRequests: new Map([['feature-y', 77]]),
+    });
+
+    await fireEvent.click(getByRole('button', { name: 'Remote group origin' }));
+
+    const row = getByRole('button', { name: 'origin/feature-y' });
+    expect(row).toHaveTextContent('#77');
+  });
 });

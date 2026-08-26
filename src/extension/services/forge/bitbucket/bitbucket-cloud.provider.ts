@@ -26,11 +26,19 @@ export class BitbucketCloudProvider implements ForgeProvider {
   public readonly id = BITBUCKET_AUTH_ID;
   public readonly name = BITBUCKET_AUTH_LABEL;
 
+  /*
+   * All four still `false`: the methods below reject every one of them with a
+   * 501 ("arrives in a later phase"). A capability advertises what actually
+   * works, not what the type eventually will — the webview gates its buttons
+   * on this object precisely so it never has to know the difference. Flip
+   * each back to `true` in the same change that implements it; the UI needs
+   * no other update to pick that up.
+   */
   public readonly capabilities: ForgeCapabilities = {
-    createPullRequest: true,
-    approve: true,
-    requestChanges: true,
-    merge: true,
+    createPullRequest: false,
+    approve: false,
+    requestChanges: false,
+    merge: false,
     mergeStrategies: ['merge-commit', 'squash', 'fast-forward'],
   };
 

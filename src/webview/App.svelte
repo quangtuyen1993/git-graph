@@ -20,6 +20,7 @@
   import PullRequestDetail from './components/detail/PullRequestDetail.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
   import { deriveBranchPullRequests } from './lib/branch-pull-requests';
+  import { parseUnifiedDiff, type ChangedFile as ForgeChangedFile } from './lib/unified-diff';
   import { formatFilterStatus, localNameFor, resolvePullTarget } from './lib/branch-menu';
   import BranchFilterDropdown from './components/toolbar/BranchFilterDropdown.svelte';
   import ResizeHandle from './components/layout/ResizeHandle.svelte';
@@ -348,12 +349,20 @@
   let selectedPullRequestId: string | null = null;
   let pullRequestDetail: PullRequestDetailData | null = null;
   let pullRequestComments: ForgeComment[] = [];
+  /**
+   * Display-only summary of the pull request's changed files, parsed in the
+   * webview from the unified-diff text `forge.pr.diff` returns. Not clickable:
+   * a pull request's head commit is usually not fetched locally, so there is
+   * no diff editor this could safely open yet — see `PullRequestDetail.svelte`.
+   */
+  let pullRequestFiles: ForgeChangedFile[] = [];
   let pullRequestDetailLoading = false;
 
   function clearPullRequestSelection(): void {
     selectedPullRequestId = null;
     pullRequestDetail = null;
     pullRequestComments = [];
+    pullRequestFiles = [];
     pullRequestDetailLoading = false;
   }
 
@@ -410,8 +419,11 @@
 
   /**
    * Scrolls to a pull request's head commit through the same `graph.getRow`
-   * lookup commit search uses. A silent no-op when the commit sits outside the
-   * current branch filter, matching how a search match behaves in that case.
+   * lookup commit search uses. When the commit isn't in the loaded graph —
+   * the common case for a colleague's pull request whose branch was never
+   * fetched locally — this says so, the same way `revealSearchMatch` explains
+   * a search match the branch filter excludes, rather than moving nothing and
+   * leaving the user to guess why.
    */
   async function scrollToPullRequestHead(hash: string): Promise<void> {
     const requestedLayoutVersion = layoutVersion;
@@ -420,10 +432,14 @@
       const result = await bridge.send('graph.getRow', {
         hash, layoutVersion: requestedLayoutVersion,
       }) as { row: number | null };
-      if (result.row === null || requestedLayoutVersion !== layoutVersion) return;
+      if (requestedLayoutVersion !== layoutVersion) return;
+      if (result.row === null) {
+        showTransientMessage("This pull request's head commit isn't in the loaded graph — the branch may not be fetched locally.");
+        return;
+      }
       await scrollToGraphRow(result.row);
     } catch {
-      // Outside the current filter, or the layout moved on — leave the view alone.
+      // The layout moved on mid-lookup; the next selection starts clean.
     }
   }
 
@@ -438,17 +454,20 @@
     selectedHashes = new Set();
     pullRequestDetail = null;
     pullRequestComments = [];
+    pullRequestFiles = [];
     pullRequestDetailLoading = true;
 
     try {
-      const [detail, commentsResult] = await Promise.all([
+      const [detail, commentsResult, diffResult] = await Promise.all([
         bridge.send('forge.pr.get', { id }) as Promise<PullRequestDetailData>,
         bridge.send('forge.pr.comments', { id }) as Promise<{ comments: ForgeComment[] }>,
+        bridge.send('forge.pr.diff', { id }) as Promise<{ diff: string }>,
       ]);
       // A later selection superseded this one while it was in flight.
       if (selectedPullRequestId !== id) return;
       pullRequestDetail = detail;
       pullRequestComments = commentsResult.comments;
+      pullRequestFiles = parseUnifiedDiff(diffResult.diff);
       await scrollToPullRequestHead(detail.sourceCommit);
     } catch (e) {
       if (selectedPullRequestId !== id) return;
@@ -2275,9 +2294,9 @@
             <PullRequestDetail
               pullRequest={pullRequestDetail}
               comments={pullRequestComments}
+              files={pullRequestFiles}
               capabilities={forgeCapabilities}
               on:openExternal={handlePullRequestOpenExternal}
-              on:openFile={(e) => bridge.send('ui.openDiff', e.detail)}
             />
           {/if}
         {:else}

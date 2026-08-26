@@ -126,11 +126,11 @@
               }
             }}
           ><Icon name="star-full" size={12} /></span>
-          {#if branchPullRequests.has(node.branch.name)}
+          {#if branchPullRequests.has(node.path)}
             <span
               class="pr-badge"
-              title={`Pull request #${branchPullRequests.get(node.branch.name)}`}
-            >#{branchPullRequests.get(node.branch.name)}</span>
+              title={`Pull request #${branchPullRequests.get(node.path)}`}
+            >#{branchPullRequests.get(node.path)}</span>
           {/if}
           {#if node.branch.ahead > 0 || node.branch.behind > 0}
             <span class="ahead-behind">

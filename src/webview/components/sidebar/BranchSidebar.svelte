@@ -450,6 +450,7 @@
               expandedGroups={effectiveGroups}
               groupPrefix={`remote:${remote}`}
               {selectedBranch}
+              {branchPullRequests}
               depth={1}
               on:groupToggle={(event) => toggleBranchGroup(event.detail.key)}
               on:select={(event) => dispatch('branchSelect', event.detail)}

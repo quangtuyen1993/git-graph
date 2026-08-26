@@ -68,8 +68,15 @@ describe('PullRequestDetail', () => {
     expect(screen.getByText(/in reply to minh le/i)).toBeInTheDocument();
   });
 
-  it('emits reviewWithAi', async () => {
-    const { component } = render(PullRequestDetail, props);
+  // No capability backs this yet (it arrives in a later phase), so it is a
+  // separate opt-in prop rather than one of the `capabilities.*` gates below.
+  it('hides Review with AI unless explicitly enabled', () => {
+    render(PullRequestDetail, props);
+    expect(screen.queryByRole('button', { name: /review with ai/i })).not.toBeInTheDocument();
+  });
+
+  it('emits reviewWithAi when enabled', async () => {
+    const { component } = render(PullRequestDetail, { ...props, reviewWithAiEnabled: true });
     let fired = false;
     component.$on('reviewWithAi', () => { fired = true; });
     await fireEvent.click(screen.getByRole('button', { name: /review with ai/i }));
