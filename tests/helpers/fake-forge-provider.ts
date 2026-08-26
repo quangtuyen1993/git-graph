@@ -55,7 +55,11 @@ export class FakeForgeProvider implements ForgeProvider {
     this.id = options.id ?? 'fake';
     this.name = options.name ?? 'Fake';
     this.host = options.host ?? 'fake.test';
-    this.session = options.session ?? { providerId: this.id, accountLabel: 'An Tran' };
+    // 'session' in options (rather than ??) so an explicit `session: undefined`
+    // simulates a signed-out provider instead of falling through to the default
+    // signed-in session — the two must be distinguishable for tests that need
+    // "no session, and don't prompt for one".
+    this.session = 'session' in options ? options.session : { providerId: this.id, accountLabel: 'An Tran' };
     this.signInFails = options.signInFails ?? false;
     this.pullRequests = options.pullRequests ?? [fakePullRequest()];
     this.diff = options.diff ?? 'diff --git a/a.ts b/a.ts\n';
