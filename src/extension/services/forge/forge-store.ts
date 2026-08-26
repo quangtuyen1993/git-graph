@@ -3,6 +3,16 @@ export const PR_DETAIL_TTL_MS = 300_000;
 /** A diff is keyed by its sha pair, so its content can never change. */
 export const DIFF_TTL_MS = Number.POSITIVE_INFINITY;
 
+/**
+ * Cap on how many never-expiring entries (diffs, diffstat file lists) the
+ * store holds at once. The immutability argument for DIFF_TTL_MS being
+ * infinite is sound — the content genuinely never changes — but nothing
+ * bounded the memory: browsing twenty pull requests across a few
+ * repositories in one session held every one of their diffs forever. An
+ * entry with a finite TTL ages out on its own and needs no such cap.
+ */
+const MAX_IMMUTABLE_ENTRIES = 20;
+
 export interface CacheResult<T> {
   value: T;
   /** True when the loader failed and this is the previous value. */
@@ -26,6 +36,8 @@ interface Entry {
  */
 export class ForgeStore {
   private readonly entries = new Map<string, Entry>();
+  /** Recency order (oldest first) for entries fetched with an infinite TTL. */
+  private readonly immutableOrder: string[] = [];
 
   constructor(private readonly clock: () => number = Date.now) {}
 
@@ -47,6 +59,7 @@ export class ForgeStore {
     }
 
     if (existing && existing.fetchedAt !== undefined && this.clock() - existing.fetchedAt < ttlMs) {
+      if (ttlMs === Number.POSITIVE_INFINITY) this.touchImmutable(key);
       return { value: existing.value as T, stale: false, fetchedAt: existing.fetchedAt };
     }
 
@@ -59,6 +72,7 @@ export class ForgeStore {
       // Fix #2: only update cache if this load is still valid (wasn't invalidated)
       if (this.entries.get(key)?.inFlight === inFlight) {
         this.entries.set(key, { value, fetchedAt });
+        if (ttlMs === Number.POSITIVE_INFINITY) this.touchImmutable(key);
       }
       return { value, stale: false, fetchedAt };
     } catch (error) {
@@ -77,14 +91,35 @@ export class ForgeStore {
     }
   }
 
+  /**
+   * Marks `key` most-recently-used among the infinite-TTL entries, then
+   * evicts the least-recently-used ones down to the cap. Those entries never
+   * age out on their own — TTL-bounded entries need no such cap, since they
+   * expire and get replaced regardless.
+   */
+  private touchImmutable(key: string): void {
+    const idx = this.immutableOrder.indexOf(key);
+    if (idx !== -1) this.immutableOrder.splice(idx, 1);
+    this.immutableOrder.push(key);
+
+    while (this.immutableOrder.length > MAX_IMMUTABLE_ENTRIES) {
+      const oldest = this.immutableOrder.shift();
+      if (oldest !== undefined) this.entries.delete(oldest);
+    }
+  }
+
   /** Drops every entry whose key starts with `prefix`. */
   public invalidate(prefix: string): void {
     for (const key of this.entries.keys()) {
       if (key.startsWith(prefix)) this.entries.delete(key);
     }
+    for (let i = this.immutableOrder.length - 1; i >= 0; i -= 1) {
+      if (this.immutableOrder[i].startsWith(prefix)) this.immutableOrder.splice(i, 1);
+    }
   }
 
   public clear(): void {
     this.entries.clear();
+    this.immutableOrder.length = 0;
   }
 }

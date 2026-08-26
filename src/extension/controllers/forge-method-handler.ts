@@ -49,8 +49,11 @@ export function createForgeHandler(deps: ForgeHandlerDeps) {
     // Terminated with ':' so ForgeStore.invalidate's bare startsWith match
     // cannot cross into a sibling repository whose name extends this one's
     // (e.g. 'mpos' vs 'mpos2') — without the delimiter, invalidating 'mpos'
-    // would also drop 'mpos2's cache.
-    return { provider, repo, prefix: `${provider.id}:${repo.owner}/${repo.name}:` };
+    // would also drop 'mpos2's cache. `host` is included too: ForgeRepoRef
+    // carries it precisely so one provider serving multiple hosts (a public
+    // cloud host plus a self-hosted instance) doesn't collide two repos that
+    // share an owner/name across hosts.
+    return { provider, repo, prefix: `${provider.id}:${repo.host}/${repo.owner}/${repo.name}:` };
   }
 
   async function requireForge(): Promise<Resolved> {

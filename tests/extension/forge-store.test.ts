@@ -171,6 +171,66 @@ describe('ForgeStore', () => {
     expect(verifyLoader).not.toHaveBeenCalled();
   });
 
+  // Finding 4: the immutability argument for DIFF_TTL_MS = Infinity is
+  // sound, but nothing bounded the memory — browsing enough pull requests in
+  // one session held every one of their diffs forever.
+  describe('immutable-entry cap', () => {
+    it('evicts the oldest infinite-TTL entry once the cap is exceeded', async () => {
+      const loader = (value: string) => vi.fn().mockResolvedValue(value);
+
+      // Fill the cache to the cap (20) with distinct keys.
+      for (let i = 0; i < 20; i += 1) {
+        await store.fetch(`diff:${i}`, DIFF_TTL_MS, loader(`v${i}`));
+      }
+      // One more pushes it over — the oldest (diff:0) must be evicted.
+      await store.fetch('diff:20', DIFF_TTL_MS, loader('v20'));
+
+      const reloadOldest = vi.fn().mockResolvedValue('reloaded');
+      const oldest = await store.fetch('diff:0', DIFF_TTL_MS, reloadOldest);
+      expect(reloadOldest).toHaveBeenCalledTimes(1);
+      expect(oldest.value).toBe('reloaded');
+
+      // The most recently added entry is still cached.
+      const stillCachedLoader = vi.fn().mockResolvedValue('should not be called');
+      const newest = await store.fetch('diff:20', DIFF_TTL_MS, stillCachedLoader);
+      expect(stillCachedLoader).not.toHaveBeenCalled();
+      expect(newest.value).toBe('v20');
+    });
+
+    it('reading an entry again keeps it out of eviction (true LRU, not FIFO)', async () => {
+      const loader = (value: string) => vi.fn().mockResolvedValue(value);
+
+      for (let i = 0; i < 20; i += 1) {
+        await store.fetch(`diff:${i}`, DIFF_TTL_MS, loader(`v${i}`));
+      }
+      // Re-read the oldest entry, moving it to most-recently-used.
+      await store.fetch('diff:0', DIFF_TTL_MS, vi.fn());
+      // Adding one more should now evict diff:1 (the new oldest), not diff:0.
+      await store.fetch('diff:20', DIFF_TTL_MS, loader('v20'));
+
+      const reloadZero = vi.fn().mockResolvedValue('should not be called');
+      const stillThere = await store.fetch('diff:0', DIFF_TTL_MS, reloadZero);
+      expect(reloadZero).not.toHaveBeenCalled();
+      expect(stillThere.value).toBe('v0');
+
+      const reloadOne = vi.fn().mockResolvedValue('reloaded');
+      const evicted = await store.fetch('diff:1', DIFF_TTL_MS, reloadOne);
+      expect(reloadOne).toHaveBeenCalledTimes(1);
+      expect(evicted.value).toBe('reloaded');
+    });
+
+    it('does not cap TTL-bounded entries', async () => {
+      const loader = (value: string) => vi.fn().mockResolvedValue(value);
+      for (let i = 0; i < 25; i += 1) {
+        await store.fetch(`list:${i}`, PR_LIST_TTL_MS, loader(`v${i}`));
+      }
+      const reload = vi.fn().mockResolvedValue('should not be called');
+      const first = await store.fetch('list:0', PR_LIST_TTL_MS, reload);
+      expect(reload).not.toHaveBeenCalled();
+      expect(first.value).toBe('v0');
+    });
+  });
+
   // Note: "gives all concurrent callers the error when the shared load fails and nothing is cached"
   // test is documentation of the behavior but does not distinguish between buggy and fixed implementations,
   // as both throw errors in similar ways. The test is retained to ensure the behavior is tested.
