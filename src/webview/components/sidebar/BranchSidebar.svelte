@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import BranchTreeList from './BranchTreeList.svelte';
+  import PullRequestList from './PullRequestList.svelte';
   import Icon from '../common/Icon.svelte';
   import type { SidebarPersistedState } from '../../lib/sidebar-state';
   import { activeBranchGroupPaths, buildBranchTree, type BranchTreeNode } from '../../lib/branch-tree';
@@ -45,6 +46,21 @@
     state: 'initialized' | 'uninitialized' | 'modified' | 'conflicted';
   }
 
+  interface PullRequestReviewer {
+    user: { displayName: string; accountId: string };
+    status: 'approved' | 'changes_requested' | 'pending';
+  }
+
+  interface PullRequestRow {
+    id: string;
+    number: number;
+    title: string;
+    state: 'open' | 'merged' | 'closed' | 'draft';
+    sourceBranch: string;
+    reviewers: PullRequestReviewer[];
+    commentCount: number;
+  }
+
   export let branches: Branch[] = [];
   export let tags: Tag[] = [];
   export let stashes: StashEntry[] = [];
@@ -52,6 +68,16 @@
   export let submodules: SubmoduleEntry[] = [];
   export let selectedBranch: string | null = null;
   export let favourites: string[] = [];
+
+  /*
+   * PULL REQUESTS is invisible unless the active repository has a matching
+   * forge provider. A plain local repo must never show a trace of this
+   * feature, so `forgeAvailable` gates the section, not just its contents.
+   */
+  export let forgeAvailable = false;
+  export let forgeSignedIn = false;
+  export let pullRequests: PullRequestRow[] = [];
+  export let pullRequestsStale = false;
 
   const dispatch = createEventDispatcher();
 
@@ -69,6 +95,12 @@
   $: visibleSubmodules = searching
     ? submodules.filter((m) => matches(m.name) || matches(m.path))
     : submodules;
+  $: visiblePullRequests = searching
+    ? pullRequests.filter((pr) =>
+        String(pr.number).includes(needle)
+        || matches(pr.title)
+        || matches(pr.sourceBranch))
+    : pullRequests;
 
   $: currentBranch = branches.find((b) => b.current) ?? null;
 
@@ -112,6 +144,11 @@
     stashes: searching ? visibleStashes.length > 0 : stashesExpanded,
     worktrees: searching ? visibleWorktrees.length > 0 : worktreesExpanded,
     submodules: searching ? visibleSubmodules.length > 0 : submodulesExpanded,
+    /*
+     * Signed-out has nothing to filter — its one CTA row isn't a search
+     * result, so a branch-name search must not fold it away.
+     */
+    pullRequests: searching ? (!forgeSignedIn || visiblePullRequests.length > 0) : pullRequestsExpanded,
   };
   /* An empty section during a search is noise, so its header goes too. */
   $: sectionVisible = {
@@ -121,6 +158,7 @@
     stashes: !searching || visibleStashes.length > 0,
     worktrees: !searching || visibleWorktrees.length > 0,
     submodules: !searching || visibleSubmodules.length > 0,
+    pullRequests: forgeAvailable && (!searching || !forgeSignedIn || visiblePullRequests.length > 0),
   };
 
   // Group remote branches by remote name
@@ -148,6 +186,7 @@
   let stashesExpanded = false;
   let worktreesExpanded = false;
   let submodulesExpanded = false;
+  let pullRequestsExpanded = false;
   let expandedRemotes: Record<string, boolean> = {};
   let expandedGroups: Record<string, boolean> = {};
   let branchGroupsInitialized = false;
@@ -171,6 +210,7 @@
       stashesExpanded = initialState.sections.stashes ?? false;
       worktreesExpanded = initialState.sections.worktrees ?? false;
       submodulesExpanded = initialState.sections.submodules ?? false;
+      pullRequestsExpanded = initialState.sections.pullRequests ?? false;
       expandedRemotes = { ...initialState.expandedRemotes };
       expandedGroups = { ...initialState.expandedGroups };
       branchGroupsInitialized = true;
@@ -181,6 +221,7 @@
       stashesExpanded = false;
       worktreesExpanded = false;
       submodulesExpanded = false;
+      pullRequestsExpanded = false;
       expandedRemotes = {};
       expandedGroups = {};
       branchGroupsInitialized = false;
@@ -196,6 +237,7 @@
         stashes: stashesExpanded,
         worktrees: worktreesExpanded,
         submodules: submodulesExpanded,
+        pullRequests: pullRequestsExpanded,
       },
       expandedRemotes,
       expandedGroups,
@@ -558,6 +600,31 @@
           </li>
         {/each}
       </ul>
+    {/if}
+  </div>
+  {/if}
+
+  <!-- PULL REQUESTS section -->
+  {#if sectionVisible.pullRequests}
+  <div class="section">
+    <button
+      class="section-header"
+      on:click={() => { pullRequestsExpanded = !pullRequestsExpanded; emitState(); }}
+    >
+      <span class="chevron" class:collapsed={!sectionOpen.pullRequests}><Icon name="chevron-right" /></span>
+      <span class="section-title">PULL REQUESTS</span>
+      <span class="section-count">{visiblePullRequests.length}</span>
+    </button>
+
+    {#if sectionOpen.pullRequests}
+      <PullRequestList
+        {pullRequests}
+        stale={pullRequestsStale}
+        signedIn={forgeSignedIn}
+        {query}
+        on:select
+        on:signIn
+      />
     {/if}
   </div>
   {/if}
