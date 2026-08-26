@@ -138,6 +138,9 @@ export class BitbucketCloudProvider implements ForgeProvider {
     if (error.kind === 'forbidden') {
       return `Bitbucket refused the request. The API token is missing a scope. Required: ${BITBUCKET_TOKEN_SCOPES.join(', ')}.`;
     }
+    if (error.kind === 'not-found') {
+      return 'Cannot access this repository or pull request on Bitbucket — it may be private, or the API token is missing a scope.';
+    }
     return error.hostMessage;
   }
 

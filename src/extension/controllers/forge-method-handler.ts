@@ -103,6 +103,16 @@ export function createForgeHandler(deps: ForgeHandlerDeps) {
 
       case 'forge.signOut': {
         const resolved = await requireForge();
+        // Optional on ForgeProvider: a provider that only consumes a
+        // session it does not own (e.g. one built on VS Code's built-in
+        // `github` provider) has no API to remove one. Answer with
+        // guidance instead of throwing or silently doing nothing.
+        if (!resolved.provider.signOut) {
+          return {
+            success: false,
+            guidance: `Sign out of ${resolved.provider.name} from the VS Code Accounts menu.`,
+          };
+        }
         await resolved.provider.signOut();
         deps.store.invalidate(resolved.prefix);
         deps.broadcast('forge.changed', {});
@@ -217,8 +227,13 @@ export function createForgeHandler(deps: ForgeHandlerDeps) {
           // 401 in the window between VS Code disposing another panel and
           // its onDidDispose running detachRouter(). A rejecting signOut()
           // (a SecretStorage failure) must not swallow the message either.
+          // signOut is optional: `?.()` skips it when absent rather than
+          // skipping this whole cleanup — the cache still needs dropping and
+          // every open panel still needs telling, or a provider with no
+          // signOut would leave the sidebar stuck on a stale signed-in list
+          // forever with no way back at all.
           try {
-            await resolved.provider.signOut();
+            await resolved.provider.signOut?.();
             deps.store.invalidate(resolved.prefix);
             deps.broadcast('forge.changed', {});
           } catch (cleanupError) {
@@ -258,7 +273,11 @@ export function forgeErrorMessage(error: unknown, provider?: ForgeProvider): str
     case 'forbidden':
       return provider?.describeError(error) ?? error.hostMessage;
     case 'not-found':
-      return 'Cannot access this repository — private repository or insufficient token scope.';
+      // Delegated like 'forbidden': whether this means "no such repository"
+      // or "no access to it", and why, is host-specific — a missing
+      // credential permission on one host, something else entirely on
+      // another — so the shared layer never composes that wording itself.
+      return provider?.describeError(error) ?? error.hostMessage;
     case 'rate-limited':
       return `Rate limit reached. Retrying in ${error.retryAfterSeconds ?? 60}s.`;
     case 'duplicate':

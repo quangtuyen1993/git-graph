@@ -107,8 +107,14 @@ export function mapComment(raw: RawComment): ForgeComment {
   if (raw.parent?.id !== undefined) comment.parentId = String(raw.parent.id);
   if (raw.inline?.path) {
     comment.path = raw.inline.path;
-    const line = raw.inline.to ?? raw.inline.from;
+    const { to, from } = raw.inline;
+    const line = to ?? from;
     if (typeof line === 'number') comment.line = line;
+    // Prefers `to` (the new/changed side), falling back to `from` — the
+    // same preference the line number above already uses. A comment
+    // anchored only to `from` sits on a line the change removed.
+    if (typeof to === 'number') comment.side = 'new';
+    else if (typeof from === 'number') comment.side = 'old';
   }
   return comment;
 }

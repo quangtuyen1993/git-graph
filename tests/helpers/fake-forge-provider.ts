@@ -11,6 +11,13 @@ export interface FakeForgeOptions {
   session?: ForgeSession | undefined;
   /** When set, `getSession({ createIfNone: true })` never establishes a session — simulates rejected credentials. */
   signInFails?: boolean;
+  /**
+   * When `false`, this provider has no `signOut` member at all — simulates a
+   * provider (e.g. GitHub, via VS Code's built-in `github` provider) that
+   * consumes a session it does not own and so has no API to remove one.
+   * Defaults to `true`.
+   */
+  signOutSupported?: boolean;
   pullRequests?: PullRequestDetail[];
   diff?: string;
   files?: PullRequestFile[];
@@ -49,6 +56,8 @@ export class FakeForgeProvider implements ForgeProvider {
   public readonly capabilities: ForgeCapabilities;
   public readonly calls: { method: string; args: unknown[] }[] = [];
   public readonly filesResult: PullRequestFile[];
+  /** Optional, per the amended ForgeProvider interface — see FakeForgeOptions.signOutSupported. */
+  public signOut?: () => Promise<void>;
 
   private session: ForgeSession | undefined;
   private readonly host: string;
@@ -76,6 +85,12 @@ export class FakeForgeProvider implements ForgeProvider {
       mergeStrategies: ['merge-commit', 'squash', 'fast-forward'],
       ...options.capabilities,
     };
+    if (options.signOutSupported ?? true) {
+      this.signOut = async () => {
+        this.record('signOut');
+        this.session = undefined;
+      };
+    }
   }
 
   private record(method: string, ...args: unknown[]): void {
@@ -90,11 +105,6 @@ export class FakeForgeProvider implements ForgeProvider {
       this.session = { providerId: this.id, accountLabel: 'An Tran' };
     }
     return this.session;
-  }
-
-  public async signOut(): Promise<void> {
-    this.record('signOut');
-    this.session = undefined;
   }
 
   public async listPullRequests(repo: ForgeRepoRef, opts: { state: PullRequestListState }): Promise<PullRequestSummary[]> {

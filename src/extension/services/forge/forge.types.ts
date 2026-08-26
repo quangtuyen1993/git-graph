@@ -13,7 +13,7 @@ export interface ForgeUser { displayName: string; accountId: string; avatarUrl?:
 export interface ForgeRepoRef { host: string; owner: string; name: string }
 
 export type PullRequestState = 'open' | 'merged' | 'closed' | 'draft';
-export type ReviewStatus     = 'approved' | 'changes_requested' | 'pending';
+export type ReviewStatus     = 'approved' | 'changes_requested' | 'pending' | 'commented';
 export type MergeStrategy    = 'merge-commit' | 'squash' | 'fast-forward' | 'rebase';
 export type MergeableState   = 'clean' | 'conflicted' | 'blocked' | 'unknown';
 
@@ -28,6 +28,16 @@ export interface PullRequestSummary {
   author: ForgeUser;
   sourceBranch: string;
   targetBranch: string;
+  /**
+   * A provider may report `'pending'` for every reviewer here when this
+   * summary came from `listPullRequests` — GitHub's list endpoint returns
+   * requested reviewers without their review state, and getting the real
+   * state per reviewer would cost an extra call per pull request (an N+1)
+   * just to render a list. Treat this array as a hint on a list response,
+   * never a source of truth: no UI may depend on summary chips being
+   * accurate. The same field on a `PullRequestDetail` from `getPullRequest`
+   * (a per-PR call) is authoritative.
+   */
   reviewers: { user: ForgeUser; status: ReviewStatus }[];
   commentCount: number;
   webUrl: string;
@@ -41,6 +51,9 @@ export interface PullRequestDetail extends PullRequestSummary {
   mergeable: MergeableState;
 }
 
+/** Which side of the diff an inline comment's `line` refers to. */
+export type ForgeCommentSide = 'old' | 'new';
+
 export interface ForgeComment {
   id: string;
   author: ForgeUser;
@@ -49,6 +62,14 @@ export interface ForgeComment {
   parentId?: string;
   path?: string;
   line?: number;
+  /**
+   * Present only alongside `line`. 'new' when the anchor is on the changed
+   * (target) version of the file, 'old' when it is only meaningful on the
+   * pre-change version — e.g. a comment anchored to a line the change
+   * deleted, which has no counterpart on the new side. Without this, such a
+   * comment's line number is ambiguous.
+   */
+  side?: ForgeCommentSide;
 }
 
 /**
@@ -125,7 +146,18 @@ export interface ForgeProvider {
   canHandle(remote: ParsedRemote): boolean;
 
   getSession(opts?: { createIfNone?: boolean }): Promise<ForgeSession | undefined>;
-  signOut(): Promise<void>;
+  /**
+   * Removes this provider's stored session. Optional: it is only
+   * implementable by a provider that owns the `AuthenticationProvider` a
+   * session came from, the way Bitbucket's does here — a provider that only
+   * *consumes* a session it does not own (e.g. one built on VS Code's
+   * built-in `github` provider) has no API to remove one; only the owning
+   * extension does. Callers must not throw when this is absent:
+   * `forge.signOut` falls back to guidance ("use the Accounts menu"), and
+   * the 401-cleanup path in the shared handler skips the call but still
+   * invalidates the cache and broadcasts `forge.changed` on its own.
+   */
+  signOut?(): Promise<void>;
 
   listPullRequests(repo: ForgeRepoRef, opts: { state: PullRequestListState }): Promise<PullRequestSummary[]>;
   getPullRequest(repo: ForgeRepoRef, id: string): Promise<PullRequestDetail>;

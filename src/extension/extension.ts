@@ -609,7 +609,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await forgeHandler('forge.signIn', {});
     }),
     vscode.commands.registerCommand('gitGraphPro.forge.signOut', async () => {
-      await forgeHandler('forge.signOut', {});
+      // forge.signOut can no longer just discard its result: a provider with
+      // no signOut() (see forge.types.ts) answers with guidance instead of
+      // performing a sign-out, and that guidance must reach the user.
+      const result = await forgeHandler('forge.signOut', {}) as { success: boolean; guidance?: string };
+      if (!result.success && result.guidance) {
+        void vscode.window.showInformationMessage(result.guidance);
+      }
     }),
   );
 }

@@ -20,6 +20,13 @@
       "deleted": true,
       "content": { "raw": "" },
       "user": { "display_name": "An Tran", "account_id": "acc-an" }
+    },
+    {
+      "id": 9004,
+      "created_on": "2026-08-21T06:00:00.000000+00:00",
+      "content": { "raw": "This line is gone now." },
+      "user": { "display_name": "Hoa Pham", "account_id": "acc-hoa" },
+      "inline": { "path": "src/auth.ts", "from": 40 }
     }
   ]
 }

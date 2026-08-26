@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ForgeError } from '../../src/extension/services/forge/forge.types';
 import detailFixture from '../fixtures/bitbucket/pull-request.json';
 import listFixture from '../fixtures/bitbucket/pull-request-list.json';
 import commentsFixture from '../fixtures/bitbucket/comments.json';
@@ -97,12 +98,22 @@ describe('BitbucketCloudProvider', () => {
       getPaged: vi.fn().mockResolvedValue((commentsFixture as { values: unknown[] }).values),
     });
     const comments = await provider.listComments(repo, '123');
-    expect(comments.map((c) => c.id)).toEqual(['9001', '9002']);
+    expect(comments.map((c) => c.id)).toEqual(['9001', '9002', '9004']);
   });
 
   it('reports write methods as not implemented in this phase', async () => {
     const { provider } = build();
     await expect(provider.merge(repo, '1', { strategy: 'squash' })).rejects.toMatchObject({ status: 501 });
+  });
+
+  // Requirement 4: 'not-found' is now Bitbucket's own wording, reached
+  // through describeError rather than a shared hardcoded string — the
+  // shared layer no longer speaks API-token vocabulary on Bitbucket's
+  // behalf.
+  it('explains a not-found in Bitbucket-specific terms via describeError', () => {
+    const { provider } = build();
+    expect(provider.describeError(new ForgeError('not-found', 404, 'Not found')))
+      .toMatch(/bitbucket/i);
   });
 
   // remote-url.ts is the real boundary that keeps a traversal segment out of

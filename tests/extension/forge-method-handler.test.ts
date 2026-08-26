@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'fs';
+import path from 'path';
 import { createForgeHandler, forgeErrorMessage } from '../../src/extension/controllers/forge-method-handler';
 import { ForgeRegistry } from '../../src/extension/services/forge/forge-registry';
 import { ForgeStore } from '../../src/extension/services/forge/forge-store';
 import { ForgeError } from '../../src/extension/services/forge/forge.types';
 import { isAllowedExternalUrl } from '../../src/extension/services/forge/url-safety';
-import { FakeForgeProvider, fakePullRequest } from '../helpers/fake-forge-provider';
+import { FAKE_USER, FakeForgeProvider, fakePullRequest } from '../helpers/fake-forge-provider';
 
 function build(options: {
   remoteUrl?: string | undefined;
@@ -80,6 +82,21 @@ describe('forge namespace', () => {
     expect(provider.calls.map((c) => c.method)).toEqual(['getPullRequest', 'getPullRequestDiff', 'listComments']);
   });
 
+  // Requirement 3: ReviewStatus gains 'commented' — it must survive the
+  // round trip rather than collapsing into 'pending', which would claim a
+  // reviewer never responded when they did.
+  it('passes a commented reviewer status through unmodified', async () => {
+    const provider = new FakeForgeProvider({
+      host: 'bitbucket.org',
+      pullRequests: [fakePullRequest({ id: '5', reviewers: [{ user: FAKE_USER, status: 'commented' }] })],
+    });
+    const { handle } = build({ provider });
+
+    const pr = await handle('forge.pr.get', { id: '5' }) as { reviewers: { status: string }[] };
+
+    expect(pr.reviewers[0].status).toBe('commented');
+  });
+
   it('keys the diff cache by the sha pair, not the pull request id', async () => {
     const provider = new FakeForgeProvider({
       host: 'bitbucket.org',
@@ -114,6 +131,21 @@ describe('forge namespace', () => {
     await handle('forge.signOut', {});
     expect(await provider.getSession()).toBeUndefined();
     expect(broadcast).toHaveBeenCalledWith('forge.changed', {});
+  });
+
+  // Requirement 1a: signOut() is optional on ForgeProvider — a provider that
+  // consumes a session it does not own (e.g. GitHub's built-in provider) has
+  // no API to remove one. forge.signOut must answer with guidance rather
+  // than throw when the method is absent.
+  it('answers forge.signOut with Accounts-menu guidance when the provider has no signOut', async () => {
+    const provider = new FakeForgeProvider({ host: 'bitbucket.org', signOutSupported: false });
+    const { handle, broadcast } = build({ provider });
+
+    const result = await handle('forge.signOut', {}) as { success: boolean; guidance?: string };
+
+    expect(result.success).toBe(false);
+    expect(result.guidance).toMatch(/accounts menu/i);
+    expect(broadcast).not.toHaveBeenCalled();
   });
 
   it('opens a pull request in the browser', async () => {
@@ -282,6 +314,29 @@ describe('forge namespace', () => {
       errorSpy.mockRestore();
     });
 
+    // Requirement 1b: the session-cleanup path must not depend on the
+    // optional signOut method — a provider without one still needs its
+    // cache dropped and forge.changed broadcast, or a 401 leaves the sidebar
+    // stuck on a stale list forever with no signOut to fall back on either.
+    it('still invalidates the cache and broadcasts on a 401 when the provider has no signOut', async () => {
+      const provider = new FakeForgeProvider({ host: 'bitbucket.org', signOutSupported: false });
+      const { handle, broadcast } = build({ provider });
+
+      // Cache a list under the still-good session.
+      await handle('forge.pr.list', { state: 'open' });
+
+      provider.getPullRequest = () => Promise.reject(new ForgeError('unauthorized', 401, 'Unauthorized'));
+      await expect(handle('forge.pr.get', { id: '123' })).rejects.toThrow(/expired or (has been )?revoked/i);
+
+      expect(broadcast).toHaveBeenCalledWith('forge.changed', {});
+
+      // Proof the cache was actually dropped, not just that broadcast fired:
+      // a re-list has to hit the provider again rather than serve the stale
+      // cached list.
+      await handle('forge.pr.list', { state: 'open' });
+      expect(provider.calls.filter((c) => c.method === 'listPullRequests')).toHaveLength(2);
+    });
+
     // A1, the other half: a rejecting signOut() (e.g. a SecretStorage
     // failure) must not cost the caller the translated message either.
     it('still surfaces the translated message when signOut itself rejects', async () => {
@@ -355,9 +410,31 @@ describe('forgeErrorMessage', () => {
     expect(forbidden).not.toMatch(/sign in again/i);
   });
 
-  it('explains a not-found as access rather than absence', () => {
-    expect(forgeErrorMessage(new ForgeError('not-found', 404, 'Not found')))
-      .toMatch(/private repository or insufficient token scope/i);
+  // Requirement 4: 'not-found' routes through describeError like 'forbidden'
+  // already does — the previous shared text spoke API-token vocabulary
+  // ("insufficient token scope"), which is meaningless for a GitHub OAuth
+  // user. With no provider to delegate to, it falls back to the host's own
+  // message, exactly like 'forbidden' does.
+  it('delegates a not-found to the provider, like forbidden already does', () => {
+    const provider = new FakeForgeProvider({ host: 'bitbucket.org' });
+    const notFoundError = new ForgeError('not-found', 404, 'Not found');
+
+    const message = forgeErrorMessage(notFoundError, provider);
+
+    expect(message).toBe(provider.describeError(notFoundError));
+  });
+
+  it('falls back to the host message for a not-found with no provider given', () => {
+    expect(forgeErrorMessage(new ForgeError('not-found', 404, 'Not found'))).toBe('Not found');
+  });
+
+  // The vocabulary itself must have moved out of the shared file, not just
+  // out of this one code path — grepping the source is what the existing
+  // neutrality tests below already do for hosting-service names.
+  it('keeps no API-token vocabulary in the shared handler', () => {
+    const source = readFileSync(
+      path.join(__dirname, '../../src/extension/controllers/forge-method-handler.ts'), 'utf8');
+    expect(source).not.toMatch(/token scope/i);
   });
 
   it('reports the retry delay on a rate limit', () => {

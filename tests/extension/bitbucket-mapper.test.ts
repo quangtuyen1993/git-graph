@@ -49,16 +49,24 @@ describe('bitbucket-mapper', () => {
     expect(summary.state).toBe(expected);
   });
 
-  it('maps comments, threading and inline anchors, and drops deleted ones', () => {
+  // Requirement 2: ForgeComment gains `side` — 'new' when the anchor comes
+  // from inline.to (9001), 'old' when only inline.from is present, e.g. a
+  // comment anchored to a line that no longer exists on the current side
+  // (9004). A comment on a deleted line is ambiguous without it.
+  it('maps comments, threading and inline anchors (with side), and drops deleted ones', () => {
     const comments = mapComments((commentsFixture as { values: unknown[] }).values as never);
     expect(comments).toEqual([
       {
         id: '9001', body: 'This drops the mutex.', createdAt: '2026-08-21T03:00:00.000000+00:00',
-        author: { displayName: 'Minh Le', accountId: 'acc-minh' }, path: 'src/auth.ts', line: 42,
+        author: { displayName: 'Minh Le', accountId: 'acc-minh' }, path: 'src/auth.ts', line: 42, side: 'new',
       },
       {
         id: '9002', body: 'Fixed.', createdAt: '2026-08-21T04:00:00.000000+00:00',
         author: { displayName: 'An Tran', accountId: 'acc-an' }, parentId: '9001',
+      },
+      {
+        id: '9004', body: 'This line is gone now.', createdAt: '2026-08-21T06:00:00.000000+00:00',
+        author: { displayName: 'Hoa Pham', accountId: 'acc-hoa' }, path: 'src/auth.ts', line: 40, side: 'old',
       },
     ]);
   });
