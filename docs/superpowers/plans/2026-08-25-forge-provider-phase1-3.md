@@ -322,7 +322,7 @@ import type { ParsedRemote } from './remote-url';
 export type { ParsedRemote };
 
 export interface ForgeUser { displayName: string; accountId: string; avatarUrl?: string }
-export interface ForgeRepoRef { owner: string; name: string }
+export interface ForgeRepoRef { host: string; owner: string; name: string }
 
 export type PullRequestState = 'open' | 'merged' | 'closed' | 'draft';
 export type ReviewStatus     = 'approved' | 'changes_requested' | 'pending';
@@ -413,7 +413,8 @@ export interface ForgeProvider {
   listComments(repo: ForgeRepoRef, id: string): Promise<ForgeComment[]>;
 
   createPullRequest(repo: ForgeRepoRef, input: CreatePullRequestInput): Promise<PullRequestDetail>;
-  setReviewStatus(repo: ForgeRepoRef, id: string, status: 'approved' | 'changes_requested'): Promise<void>;
+  setReviewStatus(repo: ForgeRepoRef, id: string, status: 'approved' | 'changes_requested', opts?: { body?: string }): Promise<void>;
+  describeError(error: ForgeError): string;
   merge(repo: ForgeRepoRef, id: string, opts: { strategy: MergeStrategy; closeSourceBranch?: boolean }): Promise<void>;
 }
 ```
@@ -1681,7 +1682,7 @@ git commit -m "feat(forge): map Bitbucket pull request and comment payloads"
 
 **Interfaces:**
 - Consumes: `BitbucketApi` (Task 6), the mappers (Task 7), `BitbucketAuthProvider` (Task 5).
-- Produces: `BitbucketCloudProvider implements ForgeProvider`, constructed as `new BitbucketCloudProvider({ api, auth })`. The write methods (`createPullRequest`, `setReviewStatus`, `merge`) throw `ForgeError(501, ...)` in these phases and are implemented in Phases 5 and 6.
+- Produces: `BitbucketCloudProvider implements ForgeProvider`, constructed as `new BitbucketCloudProvider({ api, auth })`. The write methods (`createPullRequest`, `setReviewStatus`, `merge`) reject with `new ForgeError('other', 501, ...)` in these phases and are implemented in Phases 5 and 6. `describeError` is implemented now, not deferred: it is what keeps provider-specific remediation text out of the shared controller.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1705,7 +1706,7 @@ function build(api: Partial<Record<'getJson' | 'getText' | 'getPaged', unknown>>
   return { provider, stub, auth };
 }
 
-const repo = { owner: 'acme', name: 'mpos' };
+const repo = { host: 'bitbucket.org', owner: 'acme', name: 'mpos' };
 
 describe('BitbucketCloudProvider', () => {
   it('claims bitbucket.org and nothing else', () => {
@@ -1980,7 +1981,7 @@ describe('forge namespace', () => {
       providerName: 'Bitbucket',
       signedIn: true,
       accountLabel: 'An Tran',
-      repo: { owner: 'acme', name: 'mpos' },
+      repo: { host: 'bitbucket.org', owner: 'acme', name: 'mpos' },
     });
   });
 
@@ -2123,7 +2124,7 @@ export function createForgeHandler(deps: ForgeHandlerDeps) {
     const provider = deps.registry.resolve(remote);
     if (!provider) return undefined;
 
-    const repo = { owner: remote.owner, name: remote.name };
+    const repo = { host: remote.host, owner: remote.owner, name: remote.name };
     return { provider, repo, prefix: `${provider.id}:${repo.owner}/${repo.name}` };
   }
 
