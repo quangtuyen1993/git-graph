@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import pkg from '../../package.json';
 
-const contributes = pkg.contributes as Record<string, never>;
+const contributes = pkg.contributes as unknown as Record<string, never>;
 
 describe('review contributions', () => {
   it('keeps the Code Review container in the bottom Panel', () => {

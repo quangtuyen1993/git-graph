@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createReviewHandler } from '../../src/extension/controllers/review-method-handler';
 import { ReviewTargetState } from '../../src/extension/services/review-target';
+import type { Commit } from '../../src/extension/types/git.types';
 
 function harness(over: Record<string, unknown> = {}) {
   const store = {
@@ -10,7 +11,7 @@ function harness(over: Record<string, unknown> = {}) {
     bodyPath: vi.fn(() => '/tmp/body.md'),
   };
   const runner = {
-    start: vi.fn(async () => 'new-id'),
+    start: vi.fn(async (_input: Record<string, unknown>) => 'new-id'),
     cancel: vi.fn(() => true),
     isRunning: vi.fn(() => true),
   };
@@ -18,7 +19,7 @@ function harness(over: Record<string, unknown> = {}) {
     revParse: vi.fn(async (ref: string) => (ref === 'main' ? 'a'.repeat(40) : 'b'.repeat(40))),
     getDiff: vi.fn(async () => 'diff --git a/x b/x'),
     diff: vi.fn(async () => ({ files: [] })),
-    log: vi.fn(async () => []),
+    log: vi.fn(async (): Promise<Commit[]> => []),
     getParents: vi.fn(async () => ['c'.repeat(40)]),
   };
   const targets = new ReviewTargetState();

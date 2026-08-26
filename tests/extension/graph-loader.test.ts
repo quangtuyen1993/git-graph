@@ -128,7 +128,7 @@ describe('loadAllCommits integration', () => {
       const realLog = service.log.bind(service);
       const revisionSnapshots: (string[] | undefined)[] = [];
       let batchCount = 0;
-      vi.spyOn(service, 'log').mockImplementation(async (options) => {
+      vi.spyOn(service, 'log').mockImplementation(async (options = {}) => {
         revisionSnapshots.push(options.revisions);
         const batch = await realLog(options);
         batchCount += 1;
@@ -174,9 +174,9 @@ describe('loadAllCommits integration', () => {
         [expect.objectContaining({ maxCount: 500, skip: 0 })],
         [expect.objectContaining({ maxCount: 500, skip: 500 })],
       ]);
-      const firstSnapshot = logSpy.mock.calls[0][0].revisions;
+      const firstSnapshot = logSpy.mock.calls[0][0]?.revisions;
       expect(firstSnapshot).toHaveLength(1);
-      expect(logSpy.mock.calls[1][0].revisions).toEqual(firstSnapshot);
+      expect(logSpy.mock.calls[1][0]?.revisions).toEqual(firstSnapshot);
     } finally {
       await repo.cleanup();
     }

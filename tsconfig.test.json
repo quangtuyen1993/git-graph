@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node"]
+  },
+  // Mirrors the base config's own boundary: src/webview (and its tests) has
+  // no type-checking story in this project yet (no svelte-check wiring), so
+  // this gate covers the extension host — src/extension plus the tests that
+  // exercise it, including tests/helpers/*, where `implements ForgeProvider`
+  // lives and needs a real type-checker watching it.
+  "include": ["src/**/*.ts", "tests/**/*.ts"],
+  "exclude": ["node_modules", "dist", "src/webview/**", "tests/webview/**"]
+}

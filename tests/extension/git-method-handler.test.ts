@@ -3,13 +3,16 @@ import path from 'path';
 import { describe, expect, it } from 'vitest';
 import { handleGitMethod } from '../../src/extension/controllers/git-method-handler';
 import { GitService } from '../../src/extension/services/git.service';
+import type { Commit } from '../../src/extension/types/git.types';
 
 const fakeGitService = {
   log: async () => [],
   searchCommits: async () => [],
   branches: async () => [],
   tags: async () => [],
-  status: async () => ({ branch: '', ahead: 0, behind: 0, staged: [], unstaged: [], untracked: [] }),
+  status: async () => ({
+    branch: '', ahead: 0, behind: 0, staged: [], unstaged: [], untracked: [], conflicted: [], upstream: null,
+  }),
   submoduleList: async () => [{
     name: 'sdk',
     path: 'packages/sdk',
@@ -17,7 +20,7 @@ const fakeGitService = {
     head: 'f'.repeat(40),
     state: 'initialized' as const,
   }],
-  show: async () => ({ commit: {}, files: [] }),
+  show: async () => ({ commit: {} as Commit, files: [] }),
   diff: async () => ({ files: [], raw: '' }),
   diffWorkingTree: async () => ({ files: [], raw: '' }),
   checkout: async () => undefined,
@@ -51,7 +54,7 @@ const fakeGitService = {
 
 describe('handleGitMethod', () => {
   it('returns discovered submodules without exposing host-only absolute paths', async () => {
-    await expect(handleGitMethod(fakeGitService as GitService, 'git.submoduleList', {}))
+    await expect(handleGitMethod(fakeGitService as unknown as GitService, 'git.submoduleList', {}))
       .resolves.toEqual([{
         name: 'sdk',
         path: 'packages/sdk',
@@ -68,7 +71,7 @@ describe('handleGitMethod', () => {
 
     for (const method of methods) {
       try {
-        await handleGitMethod(fakeGitService as GitService, method, {
+        await handleGitMethod(fakeGitService as unknown as GitService, method, {
           hash: 'abc123',
           hashes: ['abc123', 'def456'],
           ref: 'main',

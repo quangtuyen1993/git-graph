@@ -417,6 +417,27 @@ export class GitService {
     await this.cli.exec(args, { timeout: 60000 });
   }
 
+  /**
+   * The configured fetch URL of a remote, or undefined when it is not
+   * configured. Uses `git remote get-url`, the porcelain for this, rather
+   * than `git config --get remote.<name>.url`: `remote.<name>.url` is
+   * legitimately multi-valued (e.g. `git remote set-url --add` for a push
+   * mirror), and `git config --get` returns the *last* value where the fetch
+   * URL is always the first. `git remote get-url` exits non-zero both when
+   * the remote does not exist and, per its own semantics, when the resolved
+   * URL is empty, which GitCLI surfaces as a rejection; a repository with no
+   * such remote is an ordinary state here, not a failure, so both are folded
+   * into undefined.
+   */
+  public async getRemoteUrl(remote = 'origin'): Promise<string | undefined> {
+    try {
+      const url = await this.cli.exec(['remote', 'get-url', remote]);
+      return url.trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   public async reset(mode: 'soft' | 'mixed' | 'hard', ref: string): Promise<void> {
     await this.cli.exec(['reset', `--${mode}`, ref]);
   }
