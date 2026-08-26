@@ -17,6 +17,17 @@ export interface ForgeStatus {
   capabilities?: ForgeCapabilities;
 }
 
+/**
+ * `forge.signOut`'s result. `guidance` is present only when `success` is
+ * `false` — the provider has no `signOut()` (see `ForgeProvider.signOut`),
+ * so nothing was signed out and the caller must surface `guidance` itself
+ * rather than treat the call as having done nothing.
+ */
+export interface ForgeSignOutResult {
+  success: boolean;
+  guidance?: string;
+}
+
 export interface ForgeHandlerDeps {
   registry: ForgeRegistry;
   store: ForgeStore;
@@ -108,15 +119,16 @@ export function createForgeHandler(deps: ForgeHandlerDeps) {
         // `github` provider) has no API to remove one. Answer with
         // guidance instead of throwing or silently doing nothing.
         if (!resolved.provider.signOut) {
-          return {
+          const result: ForgeSignOutResult = {
             success: false,
             guidance: `Sign out of ${resolved.provider.name} from the VS Code Accounts menu.`,
           };
+          return result;
         }
         await resolved.provider.signOut();
         deps.store.invalidate(resolved.prefix);
         deps.broadcast('forge.changed', {});
-        return { success: true };
+        return { success: true } satisfies ForgeSignOutResult;
       }
 
       case 'forge.refresh': {

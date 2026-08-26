@@ -7,7 +7,7 @@ import { GitService } from './services/git.service';
 import { openCompareDiff, type CompareDiffDeps } from './services/compare-diff';
 import type { ReviewRunner } from './services/review-runner';
 import type { WebviewHost } from './types/webview-host.types';
-import { createForgeHandler } from './controllers/forge-method-handler';
+import { createForgeHandler, type ForgeSignOutResult } from './controllers/forge-method-handler';
 import { ForgeRegistry } from './services/forge/forge-registry';
 import { ForgeStore } from './services/forge/forge-store';
 import { isAllowedExternalUrl } from './services/forge/url-safety';
@@ -612,7 +612,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // forge.signOut can no longer just discard its result: a provider with
       // no signOut() (see forge.types.ts) answers with guidance instead of
       // performing a sign-out, and that guidance must reach the user.
-      const result = await forgeHandler('forge.signOut', {}) as { success: boolean; guidance?: string };
+      const result = await forgeHandler('forge.signOut', {}) as ForgeSignOutResult;
       if (!result.success && result.guidance) {
         void vscode.window.showInformationMessage(result.guidance);
       }

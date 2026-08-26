@@ -16,6 +16,8 @@ const hostMocks = vi.hoisted(() => ({
   getConfiguration: vi.fn(() => ({ get: () => undefined })),
   showFile: vi.fn(),
   showWarningMessage: vi.fn(),
+  showInformationMessage: vi.fn(),
+  getRemoteUrl: vi.fn(),
   push: vi.fn().mockResolvedValue(undefined),
   globalState: new Map<string, unknown>(),
   workspaceFolders: [] as Array<{ name: string; uri: { fsPath: string } }>,
@@ -80,6 +82,7 @@ vi.mock('vscode', () => ({
     showInputBox: vi.fn(),
     showQuickPick: vi.fn(),
     showWarningMessage: hostMocks.showWarningMessage,
+    showInformationMessage: hostMocks.showInformationMessage,
   },
   workspace: {
     get workspaceFolders() {
@@ -130,6 +133,10 @@ vi.mock('../../src/extension/services/git.service', () => ({
     push(remote?: string, branch?: string, options?: unknown): Promise<void> {
       return hostMocks.push(this.repoPath, remote, branch, options);
     }
+
+    getRemoteUrl(remote: string): Promise<string | undefined> {
+      return hostMocks.getRemoteUrl(this.repoPath, remote);
+    }
   },
 }));
 
@@ -137,6 +144,28 @@ vi.mock('../../src/extension/services/ai-review.service', () => ({
   AIReviewService: class {
     detectProviders = vi.fn();
     review = vi.fn();
+  },
+}));
+
+// Stands in for the real BitbucketCloudProvider so the sign-out command test
+// below can exercise the case where the registered provider has no
+// signOut() — the real provider always has one, so this is the only way to
+// reach that branch. `hasSignOut` is read at construction time (activate()
+// builds the provider once), so a test flips it before calling activate().
+const forgeProviderMocks = vi.hoisted(() => ({ hasSignOut: true }));
+
+vi.mock('../../src/extension/services/forge/bitbucket/bitbucket-cloud.provider', () => ({
+  BitbucketCloudProvider: class {
+    id = 'bitbucket-cloud';
+    name = 'Bitbucket';
+    capabilities = {
+      createPullRequest: false, approve: false, requestChanges: false, merge: false, mergeStrategies: [],
+    };
+    canHandle(): boolean { return true; }
+    getSession(): Promise<{ providerId: string; accountLabel: string }> {
+      return Promise.resolve({ providerId: 'bitbucket-cloud', accountLabel: 'Test User' });
+    }
+    signOut = forgeProviderMocks.hasSignOut ? vi.fn().mockResolvedValue(undefined) : undefined;
   },
 }));
 
@@ -314,6 +343,8 @@ describe('extension view sessions', () => {
     hostMocks.registerTextDocumentContentProvider.mockImplementation((_scheme, provider) => {
       return { dispose: vi.fn(), provider };
     });
+    hostMocks.getRemoteUrl.mockResolvedValue('git@bitbucket.org:acme/mpos.git');
+    forgeProviderMocks.hasSignOut = true;
   });
 
   afterEach(() => {
@@ -553,6 +584,24 @@ describe('extension view sessions', () => {
     openCommand();
 
     expect(hostMocks.executeCommand).toHaveBeenCalledWith('gitGraphPro.graph.focus');
+  });
+
+  // Phase 3.7, requirement 1: signOut() is optional on ForgeProvider — a
+  // provider consuming a session it does not own (e.g. one built on VS
+  // Code's built-in `github` provider) has no API to remove one. The
+  // gitGraphPro.forge.signOut command is the only user-visible surface for
+  // that case, so it must not go silent: it has to show the Accounts-menu
+  // guidance the handler returns rather than discard the result.
+  it('shows Accounts-menu guidance from the sign-out command when the provider has no signOut', async () => {
+    forgeProviderMocks.hasSignOut = false;
+
+    await activateAndResolveView();
+
+    const signOutCommand = hostMocks.registerCommand.mock.calls
+      .find(([command]) => command === 'gitGraphPro.forge.signOut')?.[1] as () => Promise<void>;
+    await signOutCommand();
+
+    expect(hostMocks.showInformationMessage).toHaveBeenCalledWith(expect.stringMatching(/accounts menu/i));
   });
 
   it('shares one ReviewRunner across sessions and cancels its in-flight runs on deactivate', async () => {
