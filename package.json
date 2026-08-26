@@ -1,5 +1,6 @@
 {
   "name": "git-graph-pro",
+  "publisher": "tuyennguyen",
   "displayName": "Git Graph Pro",
   "description": "Interactive Git graph with full workflow and AI code review",
   "version": "0.1.0",
