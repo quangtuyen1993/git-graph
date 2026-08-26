@@ -7,8 +7,9 @@
   import Combobox from './components/Combobox.svelte';
   import LoadingSpinner from './components/common/LoadingSpinner.svelte';
 
-  type Mode = 'commit' | 'range' | 'branch';
+  type Mode = 'commit' | 'range' | 'branch' | 'pr';
   type ReviewStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
+  type PrReviewerStatus = 'approved' | 'changes_requested' | 'pending' | 'commented';
 
   interface Repo { path: string; name: string; active: boolean }
   interface Branch { name: string; current?: boolean }
@@ -18,13 +19,26 @@
     path: string; oldPath: string | null; status: string;
     additions: number; deletions: number; binary: boolean;
   }
+  interface ForgeUser { displayName: string; accountId: string }
+  interface PullRequestSummary {
+    id: string; number: number; title: string; state: string;
+    sourceBranch: string; targetBranch: string;
+    reviewers: { user: ForgeUser; status: PrReviewerStatus }[];
+    commentCount: number; webUrl: string; updatedAt: string;
+  }
   interface ReviewEntry {
     id: string; kind: Mode;
     baseRef: string; baseSha: string; headRef: string; headSha: string;
-    subject?: string; provider: string; model: string; status: ReviewStatus;
+    subject?: string;
+    /** Present only for kind 'pr'. */
+    prId?: string; prNumber?: number; providerId?: string;
+    provider: string; model: string; status: ReviewStatus;
     startedAt: string; finishedAt?: string; error?: string;
   }
   interface ComboItem { label: string; value: string; detail?: string }
+  interface StoredTarget {
+    kind: Mode; baseRef: string; headRef: string; subject?: string; prId?: string;
+  }
 
   // --- State ---
   let repos: Repo[] = [];
@@ -41,6 +55,12 @@
   let headCommitValue = '';
   let baseBranchValue = '';
   let headBranchValue = '';
+
+  // Pull Request mode
+  let forgeAvailable = false;
+  let pullRequests: PullRequestSummary[] = [];
+  let selectedPrId = '';
+  let selectedPr: PullRequestSummary | null = null;
 
   // Action bar
   let selectedProvider = '';
@@ -74,11 +94,18 @@
     detail: relativeDate(c.authorDate),
   }));
 
+  $: prItems = pullRequests.map((pr): ComboItem => ({
+    label: `#${pr.number} ${pr.title}`,
+    value: pr.id,
+    detail: pr.sourceBranch,
+  }));
+
   $: canCompare = (() => {
     switch (mode) {
       case 'commit': return !!commitValue;
       case 'range': return !!baseCommitValue && !!headCommitValue;
       case 'branch': return !!baseBranchValue && !!headBranchValue;
+      case 'pr': return !!selectedPrId;
     }
   })();
 
@@ -104,12 +131,12 @@
     unsubscribers.push(bridge.on('review.changed', () => { void refreshReviews(); }));
     unsubscribers.push(bridge.on('review.target', (data) => {
       targetOverridden = true;
-      const t = data as { kind: Mode; baseRef: string; headRef: string; subject?: string };
+      const t = data as StoredTarget;
       mode = t.kind;
       applyTarget(t);
       files = null;
       error = '';
-      void compare();
+      refreshFiles();
     }));
     unsubscribers.push(bridge.on('repo.changed', () => {
       targetOverridden = false;
@@ -128,16 +155,21 @@
   // --- Init ---
   async function init(): Promise<void> {
     try {
-      const [repoList, branchList, commitList, providerList, savedProvider, savedModel, storedTarget, savedViewMode, savedMode] = await Promise.all([
+      const [repoList, branchList, commitList, providerList, savedProvider, savedModel, storedTarget, savedViewMode, savedMode, forgeStatus] = await Promise.all([
         bridge.send('review.getRepos') as Promise<Repo[]>,
         bridge.send('git.branches') as Promise<Branch[]>,
         bridge.send('review.getCommits') as Promise<Commit[]>,
         bridge.send('ai.providers') as Promise<Provider[]>,
         bridge.send('ui.getState', { key: 'aiReview.provider' }) as Promise<string | null>,
         bridge.send('ui.getState', { key: 'aiReview.model' }) as Promise<string | null>,
-        bridge.send('review.getTarget') as Promise<{ kind: Mode; baseRef: string; headRef: string; subject?: string } | null>,
+        bridge.send('review.getTarget') as Promise<StoredTarget | null>,
         bridge.send('ui.getState', { key: 'detail.viewMode' }) as Promise<string | null>,
         bridge.send('ui.getState', { key: 'review.mode' }) as Promise<string | null>,
+        // forge.status never prompts and is safe on every panel load, the
+        // same as the sidebar section — a repository with no forge remote
+        // must produce no error and no console noise, so a rejection here
+        // is swallowed rather than failing the rest of init.
+        (bridge.send('forge.status') as Promise<{ available: boolean }>).catch(() => ({ available: false })),
       ]);
 
       repos = repoList ?? [];
@@ -156,11 +188,26 @@
         : (available[0]?.id ?? '');
       modelInput = savedModel ?? '';
 
+      forgeAvailable = Boolean(forgeStatus?.available);
+      if (forgeAvailable) {
+        void loadPullRequestList();
+      } else {
+        pullRequests = [];
+        selectedPrId = '';
+        selectedPr = null;
+      }
+
       if (!targetOverridden) {
-        if (savedMode && ['commit', 'range', 'branch'].includes(savedMode)) {
+        const validModes: Mode[] = forgeAvailable
+          ? ['commit', 'range', 'branch', 'pr']
+          : ['commit', 'range', 'branch'];
+        if (savedMode && validModes.includes(savedMode as Mode)) {
           mode = savedMode as Mode;
         }
-        if (storedTarget) {
+        // A stored target of kind 'pr' is restored only when the repository
+        // still has a forge provider — the mode it belongs to is absent
+        // otherwise, so falling back to defaults is the only sound choice.
+        if (storedTarget && (storedTarget.kind !== 'pr' || forgeAvailable)) {
           mode = storedTarget.kind;
           applyTarget(storedTarget);
         } else {
@@ -169,13 +216,17 @@
       }
 
       await refreshReviews();
-      void compare();
+      if (mode === 'pr') {
+        if (selectedPrId) void loadPullRequestContext(selectedPrId);
+      } else {
+        void compare();
+      }
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
   }
 
-  function applyTarget(t: { kind: Mode; baseRef: string; headRef: string; subject?: string }): void {
+  function applyTarget(t: StoredTarget): void {
     switch (t.kind) {
       case 'commit':
         commitValue = t.headRef;
@@ -188,6 +239,19 @@
         baseBranchValue = t.baseRef;
         headBranchValue = t.headRef;
         break;
+      case 'pr':
+        selectedPrId = t.prId ?? '';
+        break;
+    }
+  }
+
+  /** Dispatches to the git-based compare or the pull request file fetch, whichever the current mode needs. */
+  function refreshFiles(): void {
+    if (mode === 'pr') {
+      if (selectedPrId) void loadPullRequestFiles(selectedPrId);
+      else files = null;
+    } else {
+      void compare();
     }
   }
 
@@ -203,7 +267,9 @@
   function setMode(newMode: Mode): void {
     if (newMode === mode) return;
     mode = newMode;
-    // Clear inputs and files on mode switch
+    // Clear the git-based inputs and files on mode switch. The pull request
+    // selection is deliberately not cleared here — switching away from
+    // Pull Request mode and back must not lose it.
     commitValue = '';
     baseCommitValue = '';
     headCommitValue = '';
@@ -214,8 +280,8 @@
     // Apply defaults for branch mode
     if (mode === 'branch') {
       applyDefaults();
-      void compare();
     }
+    refreshFiles();
     void bridge.send('ui.setState', { key: 'review.mode', value: mode }).catch(() => {});
   }
 
@@ -230,15 +296,29 @@
 
   async function reloadForRepo(): Promise<void> {
     try {
-      const [branchList, commitList] = await Promise.all([
+      const [branchList, commitList, forgeStatus] = await Promise.all([
         bridge.send('git.branches') as Promise<Branch[]>,
         bridge.send('review.getCommits') as Promise<Commit[]>,
+        (bridge.send('forge.status') as Promise<{ available: boolean }>).catch(() => ({ available: false })),
       ]);
       branches = branchList ?? [];
       commits = commitList ?? [];
+
+      // A pull request id belongs to the repository it came from — it must
+      // not carry over to a different repository selected from the picker.
+      forgeAvailable = Boolean(forgeStatus?.available);
+      selectedPrId = '';
+      selectedPr = null;
+      pullRequests = [];
+      if (forgeAvailable) {
+        void loadPullRequestList();
+      } else if (mode === 'pr') {
+        mode = 'branch';
+      }
+
       applyDefaults();
       files = null;
-      void compare();
+      refreshFiles();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
@@ -262,11 +342,15 @@
     }
   }
 
-  function getCompareParams(): { kind: Mode; baseRef: string; headRef: string } {
+  function getCompareParams(): { kind: Mode; baseRef: string; headRef: string; prId?: string; subject?: string } {
     switch (mode) {
       case 'commit': return { kind: 'commit', baseRef: `${commitValue}~1`, headRef: commitValue };
       case 'range': return { kind: 'range', baseRef: baseCommitValue, headRef: headCommitValue };
       case 'branch': return { kind: 'branch', baseRef: baseBranchValue, headRef: headBranchValue };
+      case 'pr': return {
+        kind: 'pr', baseRef: '', headRef: '', prId: selectedPrId,
+        ...(selectedPr?.title ? { subject: selectedPr.title } : {}),
+      };
     }
   }
 
@@ -306,6 +390,73 @@
     files = null;
     saveTarget();
     void compare();
+  }
+
+  // --- Pull Request mode ---
+
+  /** Populates the combobox's candidates. Never called when there is no provider. */
+  async function loadPullRequestList(): Promise<void> {
+    try {
+      const result = await bridge.send('forge.pr.list') as { pullRequests: PullRequestSummary[] };
+      pullRequests = result.pullRequests ?? [];
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  /**
+   * Changed files for the selected pull request, from `forge.pr.files` —
+   * never `review.compare` or a git diff. Routed through the same gate as
+   * the git-based `compare()` so a stale response from a fetch superseded by
+   * a newer selection can never win.
+   */
+  async function loadPullRequestFiles(prId: string): Promise<void> {
+    compareLoading = true;
+    try {
+      await runLatestRequest(
+        compareGate,
+        () => bridge.send('forge.pr.files', { id: prId }) as Promise<{ files: FileChange[] }>,
+        (result) => { files = result.files; error = ''; },
+      );
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      compareLoading = false;
+    }
+  }
+
+  /**
+   * Resolves the full summary (title, reviewers) for a pull request id that
+   * did not come from the freshly-selected combobox item — the restore path
+   * after a reload, where the list may not have loaded yet or the pull
+   * request may have left the "open" list since it was reviewed.
+   */
+  async function loadPullRequestContext(prId: string): Promise<void> {
+    selectedPr = pullRequests.find(pr => pr.id === prId) ?? null;
+    if (!selectedPr) {
+      try {
+        selectedPr = await bridge.send('forge.pr.get', { id: prId }) as PullRequestSummary;
+      } catch {
+        // Leave selectedPr null — the reviewer chips just won't show; the
+        // combobox still carries the id and the Review button still works.
+      }
+    }
+    void loadPullRequestFiles(prId);
+  }
+
+  function handlePrSelect(): void {
+    if (!selectedPrId) {
+      selectedPr = null;
+      files = null;
+      return;
+    }
+    selectedPr = pullRequests.find(pr => pr.id === selectedPrId) ?? null;
+    saveTarget();
+    void loadPullRequestFiles(selectedPrId);
+  }
+
+  function reviewerCount(pr: PullRequestSummary, status: PrReviewerStatus): number {
+    return pr.reviewers.filter(r => r.status === status).length;
   }
 
   // --- Reviews ---
@@ -351,6 +502,10 @@
   }
 
   async function openFile(file: FileChange): Promise<void> {
+    // A pull request's head commit is usually not fetched locally, so there
+    // is no diff editor this can safely open yet — see PullRequestDetail.svelte
+    // for the same reasoning. The file rows stay display-only in this mode.
+    if (mode === 'pr') return;
     const params = getCompareParams();
     try {
       await bridge.send('ui.compareDiff', {
@@ -376,6 +531,10 @@
   }
 
   function entryLabel(entry: ReviewEntry): string {
+    if (entry.kind === 'pr') {
+      const number = entry.prNumber !== undefined ? `#${entry.prNumber}` : '#?';
+      return `PR ${number}${entry.subject ? ` ${entry.subject}` : ''}`;
+    }
     if (entry.kind === 'commit') {
       return `${entry.headSha.slice(0, 7)}${entry.subject ? ` "${entry.subject}"` : ''}`;
     }
@@ -446,6 +605,13 @@
       aria-selected={mode === 'branch'}
       on:click={() => setMode('branch')}
     >2 Branches</button>
+    {#if forgeAvailable}
+      <button
+        role="tab"
+        aria-selected={mode === 'pr'}
+        on:click={() => setMode('pr')}
+      >Pull Request</button>
+    {/if}
   </div>
 
   <!-- Input area -->
@@ -482,7 +648,7 @@
           on:blur={handleRangeSelect}
         />
       </div>
-    {:else}
+    {:else if mode === 'branch'}
       <div class="input-row dual">
         <Combobox
           items={branchItems}
@@ -503,6 +669,38 @@
           on:blur={handleBranchSelect}
         />
       </div>
+    {:else}
+      <div class="input-row">
+        <Combobox
+          items={prItems}
+          bind:value={selectedPrId}
+          placeholder="Select pull request…"
+          aria-label="Pull request"
+          on:select={handlePrSelect}
+          on:blur={handlePrSelect}
+        />
+      </div>
+      {#if selectedPr}
+        <div class="pr-target-summary">
+          <span class="pr-number">#{selectedPr.number}</span>
+          <span class="pr-title">{selectedPr.title}</span>
+          {#if reviewerCount(selectedPr, 'approved') > 0}
+            <span class="pr-chip approved" aria-label="{reviewerCount(selectedPr, 'approved')} approved">
+              ✓{reviewerCount(selectedPr, 'approved')}
+            </span>
+          {/if}
+          {#if reviewerCount(selectedPr, 'changes_requested') > 0}
+            <span class="pr-chip changes" aria-label="{reviewerCount(selectedPr, 'changes_requested')} requested changes">
+              ✗{reviewerCount(selectedPr, 'changes_requested')}
+            </span>
+          {/if}
+          {#if reviewerCount(selectedPr, 'pending') > 0}
+            <span class="pr-chip pending" aria-label="{reviewerCount(selectedPr, 'pending')} pending">
+              …{reviewerCount(selectedPr, 'pending')}
+            </span>
+          {/if}
+        </div>
+      {/if}
     {/if}
   </section>
 
@@ -558,7 +756,7 @@
         <ul>
           {#each files as file (file.path)}
             <li>
-              <button class="file-row" on:click={() => openFile(file)}>
+              <button class="file-row" disabled={mode === 'pr'} on:click={() => openFile(file)}>
                 <span class="path">{file.path}</span>
                 {#if !file.binary}
                   <span class="add">+{file.additions}</span>
@@ -662,6 +860,19 @@
   .input-row { display: flex; align-items: center; gap: 6px; }
   .input-row.dual { display: flex; }
   .swap-btn { flex: none; }
+  .pr-target-summary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    font-size: 11px;
+  }
+  .pr-target-summary .pr-number { color: var(--vscode-descriptionForeground); flex-shrink: 0; }
+  .pr-target-summary .pr-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pr-chip { flex-shrink: 0; }
+  .pr-chip.approved { color: var(--vscode-testing-iconPassed); }
+  .pr-chip.changes { color: var(--vscode-testing-iconFailed); }
+  .pr-chip.pending { opacity: 0.7; }
   .action-bar {
     display: flex;
     align-items: center;
@@ -740,7 +951,8 @@
     border-radius: 3px;
     text-align: left;
   }
-  .file-row:hover, .review-row .open:hover { background: var(--vscode-list-hoverBackground); }
+  .file-row:hover:not(:disabled), .review-row .open:hover { background: var(--vscode-list-hoverBackground); }
+  .file-row:disabled { cursor: default; }
   .file-row .path {
     flex: 1;
     min-width: 0;

@@ -21,6 +21,17 @@ const repos = [
   { path: '/repo/one', name: 'one', active: true },
   { path: '/repo/two', name: 'two', active: false },
 ];
+const pullRequests = [
+  {
+    id: 'pr-1', number: 42, title: 'Add widgets', state: 'open',
+    sourceBranch: 'feat/widgets', targetBranch: 'main',
+    reviewers: [
+      { user: { displayName: 'Ada', accountId: 'ada' }, status: 'approved' },
+      { user: { displayName: 'Bo', accountId: 'bo' }, status: 'changes_requested' },
+    ],
+    commentCount: 2, webUrl: 'https://example.test/pr/42', updatedAt: '2026-08-24T00:00:00Z',
+  },
+];
 
 function stub(overrides: Record<string, unknown> = {}) {
   send.mockImplementation(async (method: string) => {
@@ -39,6 +50,13 @@ function stub(overrides: Record<string, unknown> = {}) {
       ] };
       case 'review.start': return { id: 'new-id', cached: false };
       case 'review.saveTarget': return { success: true };
+      // No forge remote is the default fixture repo shape: absent provider,
+      // no pull requests. Individual tests override to exercise PR mode.
+      case 'forge.status': return { available: false };
+      case 'forge.pr.list': return { pullRequests: [] };
+      case 'forge.pr.files': return { files: [
+        { path: 'src/widget.ts', oldPath: null, status: 'added', additions: 10, deletions: 0, binary: false },
+      ] };
       default: return null;
     }
   });
@@ -203,6 +221,86 @@ describe('ReviewApp redesign', () => {
       const btn = getByRole('button', { name: 'Review' });
       // base=main, head='' → incomplete
       expect(btn).toBeDisabled();
+    });
+  });
+
+  describe('Pull Request mode', () => {
+    it('does not render the mode tab when the repository has no forge provider', async () => {
+      stub({ 'forge.status': { available: false } });
+      const { getByRole, queryByRole } = render(ReviewApp);
+      await waitFor(() => expect(getByRole('tab', { name: '2 Branches' })).toBeInTheDocument());
+      expect(queryByRole('tab', { name: 'Pull Request' })).toBeNull();
+    });
+
+    it('renders the mode tab and lists pull requests via forge.pr.list when a provider is present', async () => {
+      stub({ 'forge.status': { available: true }, 'forge.pr.list': { pullRequests } });
+      const { getByRole } = render(ReviewApp);
+      await waitFor(() => expect(getByRole('tab', { name: 'Pull Request' })).toBeInTheDocument());
+      await fireEvent.click(getByRole('tab', { name: 'Pull Request' }));
+      await waitFor(() => expect(send).toHaveBeenCalledWith('forge.pr.list'));
+      const combobox = getByRole('combobox', { name: 'Pull request' });
+      await fireEvent.focus(combobox);
+      await waitFor(() => expect(getByRole('option', { name: /Add widgets/ })).toBeInTheDocument());
+    });
+
+    it('selecting a pull request populates the file list and reviewer chips from forge methods, not git', async () => {
+      stub({ 'forge.status': { available: true }, 'forge.pr.list': { pullRequests } });
+      const { getByRole, getByText } = render(ReviewApp);
+      await waitFor(() => expect(getByRole('tab', { name: 'Pull Request' })).toBeInTheDocument());
+      await fireEvent.click(getByRole('tab', { name: 'Pull Request' }));
+      const combobox = await waitFor(() => getByRole('combobox', { name: 'Pull request' }));
+      await fireEvent.focus(combobox);
+      const option = await waitFor(() => getByRole('option', { name: /Add widgets/ }));
+      send.mockClear();
+      await fireEvent.click(option);
+
+      await waitFor(() => expect(send).toHaveBeenCalledWith('forge.pr.files', { id: 'pr-1' }));
+      expect(send).not.toHaveBeenCalledWith('review.compare', expect.anything());
+      expect(send).not.toHaveBeenCalledWith('git.diff', expect.anything());
+
+      await waitFor(() => expect(getByText('src/widget.ts')).toBeInTheDocument());
+      await waitFor(() => {
+        expect(getByText('✓1')).toBeInTheDocument();
+        expect(getByText('✗1')).toBeInTheDocument();
+      });
+    });
+
+    it('renders a pr history entry by its number and title, not a sha pair', async () => {
+      stub({
+        'forge.status': { available: true },
+        'review.list': [{
+          id: 'r-pr', kind: 'pr',
+          baseRef: 'main', baseSha: 'a'.repeat(40), headRef: 'feat/widgets', headSha: 'b'.repeat(40),
+          subject: 'Add widgets', prId: 'pr-1', prNumber: 42, providerId: 'bitbucket',
+          provider: 'claude', model: 'default', status: 'done',
+          startedAt: '2026-08-24T00:00:00Z', finishedAt: '2026-08-24T00:01:00Z',
+        }],
+      });
+      const { getByText, queryByText } = render(ReviewApp);
+      await waitFor(() => expect(getByText(/PR #42/)).toBeInTheDocument());
+      expect(getByText(/Add widgets/)).toBeInTheDocument();
+      expect(queryByText(/aaaaaaa/)).toBeNull();
+    });
+
+    it('switching away from and back to Pull Request mode keeps the selection', async () => {
+      stub({ 'forge.status': { available: true }, 'forge.pr.list': { pullRequests } });
+      const { getByRole } = render(ReviewApp);
+      await waitFor(() => expect(getByRole('tab', { name: 'Pull Request' })).toBeInTheDocument());
+      await fireEvent.click(getByRole('tab', { name: 'Pull Request' }));
+      const combobox = await waitFor(() => getByRole('combobox', { name: 'Pull request' }));
+      await fireEvent.focus(combobox);
+      const option = await waitFor(() => getByRole('option', { name: /Add widgets/ }));
+      await fireEvent.click(option);
+      await waitFor(() => expect((getByRole('combobox', { name: 'Pull request' }) as HTMLInputElement).value).toBe('pr-1'));
+
+      await fireEvent.click(getByRole('tab', { name: '2 Branches' }));
+      await waitFor(() => expect(getByRole('tab', { name: '2 Branches' })).toHaveAttribute('aria-selected', 'true'));
+
+      await fireEvent.click(getByRole('tab', { name: 'Pull Request' }));
+      await waitFor(() => {
+        const restored = getByRole('combobox', { name: 'Pull request' }) as HTMLInputElement;
+        expect(restored.value).toBe('pr-1');
+      });
     });
   });
 });
