@@ -142,16 +142,18 @@ export class BitbucketApi {
 
     let retryAfterSeconds: number | undefined;
     if (response.status === 429) {
-      retryAfterSeconds = this.parseRetryAfter(response.headers.get('retry-after'));
+      const rawRetryAfterSeconds = this.parseRetryAfter(response.headers.get('retry-after'));
+      const clampedPauseMs = Math.min(rawRetryAfterSeconds * 1000, MAX_PAUSE_MS);
       // Hold every queued request, not just this one: they would all hit the
       // same limit and turn one breach into a wall of identical failures.
       // Extend rather than overwrite: under the concurrency cap, several
       // requests can each land a 429 around the same time, and a later one
       // with a *shorter* Retry-After must not cut a longer pause short.
-      this.pausedUntil = Math.max(
-        this.pausedUntil,
-        Date.now() + Math.min(retryAfterSeconds * 1000, MAX_PAUSE_MS),
-      );
+      this.pausedUntil = Math.max(this.pausedUntil, Date.now() + clampedPauseMs);
+      // Report the clamped wait, not the raw header value: a Retry-After of
+      // 86400 must not produce "Retrying in 86400s" when the actual pause is
+      // capped to MAX_PAUSE_MS.
+      retryAfterSeconds = clampedPauseMs / 1000;
     }
 
     return new ForgeError(this.classify(response.status), response.status, hostMessage, retryAfterSeconds);

@@ -204,11 +204,27 @@ export function createForgeHandler(deps: ForgeHandlerDeps) {
         // the credential is still in SecretStorage and `forge.status` would
         // keep reporting signedIn: true otherwise, leaving the section stuck
         // on a stale list with no way back except the sign-out command. A
-        // 401 clears the session itself and tells every open panel to
-        // refresh, the same way an explicit sign-out does.
+        // 401 clears the session itself, drops its cache (the same as an
+        // explicit forge.signOut — otherwise a sign-out/sign-in cycle inside
+        // the list TTL would serve the dead session's cached list) and tells
+        // every open panel to refresh.
         if (error.kind === 'unauthorized' && resolved) {
-          await resolved.provider.signOut();
-          deps.broadcast('forge.changed', {});
+          // Wrapped in its own try/catch so the translated ForgeError below
+          // always wins. `broadcast` reaches into a webview's `.webview`,
+          // which throws synchronously once the panel is disposed (the same
+          // hazard extension.ts's MUTATING_REMOTE_METHODS handler already
+          // guards against) — reachable here when a second panel gets this
+          // 401 in the window between VS Code disposing another panel and
+          // its onDidDispose running detachRouter(). A rejecting signOut()
+          // (a SecretStorage failure) must not swallow the message either.
+          try {
+            await resolved.provider.signOut();
+            deps.store.invalidate(resolved.prefix);
+            deps.broadcast('forge.changed', {});
+          } catch (cleanupError) {
+            const message = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+            console.error(`[forge] session cleanup after a 401 failed: ${message}`);
+          }
         }
         throw new Error(forgeErrorMessage(error, resolved?.provider));
       }

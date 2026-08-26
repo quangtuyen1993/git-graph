@@ -231,6 +231,72 @@ describe('forge namespace', () => {
       expect(await provider.getSession()).toBeDefined();
       expect(broadcast).not.toHaveBeenCalledWith('forge.changed', {});
     });
+
+    // A2: sign out on a 401 and back in inside the 60s list TTL must not
+    // serve the dead session's cached list — the 401 cleanup has to drop the
+    // cache the same way an explicit forge.signOut does.
+    it('invalidates the pull request list cache, not just the session', async () => {
+      const provider = new FakeForgeProvider({ host: 'bitbucket.org' });
+      const { handle } = build({ provider });
+
+      // Cache a list under the still-good session.
+      await handle('forge.pr.list', { state: 'open' });
+
+      // A 401 on an unrelated call clears the session (and, with the fix,
+      // the cache) via the same cleanup path.
+      provider.getPullRequest = () => Promise.reject(new ForgeError('unauthorized', 401, 'Unauthorized'));
+      await expect(handle('forge.pr.get', { id: '123' })).rejects.toThrow(/expired or (has been )?revoked/i);
+
+      // Sign back in and list again, still inside the 60s TTL.
+      await handle('forge.signIn', {});
+      await handle('forge.pr.list', { state: 'open' });
+
+      expect(provider.calls.filter((c) => c.method === 'listPullRequests')).toHaveLength(2);
+    });
+
+    // A1: a disposed webview must not swallow the translated ForgeError. The
+    // signOut/broadcast pair used to run unguarded in the same catch that
+    // builds the "session expired" message — a broadcast reaching a disposed
+    // WebviewPanel throws synchronously (`.webview` throws once disposed),
+    // which used to replace that message with "Webview is disposed".
+    it('still surfaces the translated message when the cleanup broadcast throws', async () => {
+      const provider = new FakeForgeProvider({ host: 'bitbucket.org' });
+      provider.listPullRequests = () => Promise.reject(new ForgeError('unauthorized', 401, 'Unauthorized'));
+      const registry = new ForgeRegistry();
+      registry.register(provider);
+      const store = new ForgeStore();
+      const broadcast = vi.fn(() => { throw new Error('Webview is disposed'); });
+      const handle = createForgeHandler({
+        registry,
+        store,
+        getRemoteUrl: async () => 'git@bitbucket.org:acme/mpos.git',
+        broadcast,
+        openExternal: vi.fn().mockResolvedValue(undefined),
+      });
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await expect(handle('forge.pr.list', {})).rejects.toThrow(/expired or (has been )?revoked/i);
+      // The session is still cleared despite the broadcast throwing.
+      expect(await provider.getSession()).toBeUndefined();
+
+      errorSpy.mockRestore();
+    });
+
+    // A1, the other half: a rejecting signOut() (e.g. a SecretStorage
+    // failure) must not cost the caller the translated message either.
+    it('still surfaces the translated message when signOut itself rejects', async () => {
+      const provider = new FakeForgeProvider({ host: 'bitbucket.org' });
+      provider.listPullRequests = () => Promise.reject(new ForgeError('unauthorized', 401, 'Unauthorized'));
+      provider.signOut = () => Promise.reject(new Error('SecretStorage unavailable'));
+      const { handle, broadcast } = build({ provider });
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await expect(handle('forge.pr.list', {})).rejects.toThrow(/expired or (has been )?revoked/i);
+      // Never reached: signOut rejected before the broadcast could run.
+      expect(broadcast).not.toHaveBeenCalledWith('forge.changed', {});
+
+      errorSpy.mockRestore();
+    });
   });
 
   it('does not let one repository\'s cache invalidation clear a sibling whose name shares its prefix', async () => {

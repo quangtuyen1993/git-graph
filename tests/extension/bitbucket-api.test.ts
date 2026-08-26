@@ -220,4 +220,15 @@ describe('BitbucketApi', () => {
     const waitedMs = sleep.mock.calls[0][0] as number;
     expect(waitedMs).toBeLessThanOrEqual(5 * 60 * 1000);
   });
+
+  // A3: the ForgeError must report the clamped wait, not the raw header —
+  // a Retry-After: 86400 must not produce "Retrying in 86400s" when the
+  // actual pause is capped to five minutes.
+  it('reports the clamped retry delay on the error, not the raw header value', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({ error: { message: 'Rate limit' } }, { status: 429, headers: { 'retry-after': '86400' } }));
+    const { api } = build(fetchImpl as never);
+
+    await expect(api.getJson('/a')).rejects.toMatchObject({ retryAfterSeconds: 5 * 60 });
+  });
 });
