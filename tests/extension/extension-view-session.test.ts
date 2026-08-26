@@ -16,6 +16,7 @@ const hostMocks = vi.hoisted(() => ({
   getConfiguration: vi.fn(() => ({ get: () => undefined })),
   showFile: vi.fn(),
   showWarningMessage: vi.fn(),
+  push: vi.fn().mockResolvedValue(undefined),
   globalState: new Map<string, unknown>(),
   workspaceFolders: [] as Array<{ name: string; uri: { fsPath: string } }>,
 }));
@@ -117,6 +118,10 @@ vi.mock('../../src/extension/services/git.service', () => ({
 
     branches(): Promise<Array<{ name: string }>> {
       return Promise.resolve([{ name: this.repoPath }]);
+    }
+
+    push(remote?: string, branch?: string, options?: unknown): Promise<void> {
+      return hostMocks.push(this.repoPath, remote, branch, options);
     }
   },
 }));
@@ -613,5 +618,29 @@ describe('extension view sessions', () => {
       data: { id: 'review-3' },
     });
     expect(view1.webview.postMessage).not.toHaveBeenCalled();
+  });
+
+  // Finding 5: a forge side effect must never be able to fail a git call
+  // that already succeeded. router.register('git', ...) clears the forge
+  // cache and broadcasts forge.changed after a mutating remote method —
+  // RouterRegistry.broadcast has no error handling of its own, and
+  // sendEvent reaches into `this.host.webview`, which throws synchronously
+  // once a panel is disposed. Without the try/catch, a throwing broadcast
+  // discards a git.push's own successful result.
+  it('does not fail a successful git.push when broadcasting forge.changed throws', async () => {
+    const view = await activateAndResolveView();
+    await vi.waitFor(() => expect(hostMocks.createFileSystemWatcher).toHaveBeenCalledTimes(1));
+    view.webview.postMessage.mockImplementation((message: Record<string, unknown>) => {
+      if (message.type === 'event' && message.event === 'forge.changed') {
+        throw new Error('webview is disposed');
+      }
+    });
+
+    view.receive({ id: 'push-1', type: 'request', method: 'git.push', params: {} });
+
+    const response = await responseFor(view, 'push-1');
+    expect(response.error).toBeUndefined();
+    expect(response.result).toEqual({ success: true });
+    expect(hostMocks.push).toHaveBeenCalledTimes(1);
   });
 });

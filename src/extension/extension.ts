@@ -10,43 +10,17 @@ import type { WebviewHost } from './types/webview-host.types';
 import { createForgeHandler } from './controllers/forge-method-handler';
 import { ForgeRegistry } from './services/forge/forge-registry';
 import { ForgeStore } from './services/forge/forge-store';
+import { isAllowedExternalUrl } from './services/forge/url-safety';
 import { BitbucketApi } from './services/forge/bitbucket/bitbucket-api';
-import { BitbucketAuthProvider, BITBUCKET_TOKEN_SCOPES, type BitbucketCredentials } from './services/forge/bitbucket/bitbucket-auth';
+import { BitbucketAuthProvider } from './services/forge/bitbucket/bitbucket-auth';
 import { BitbucketCloudProvider } from './services/forge/bitbucket/bitbucket-cloud.provider';
+import { promptForBitbucketCredentials, verifyBitbucketCredentials } from './services/forge/bitbucket/bitbucket-sign-in';
 
 // The single ReviewRunner constructed in activate() below. Held here so
 // deactivate() can kill every in-flight CLI process — without this, a
 // detached review process keeps running (and keeps spending) after the
 // window closes.
 let activeRunner: ReviewRunner | undefined;
-
-/**
- * Two input boxes rather than a browser flow. Bitbucket Cloud removed app
- * passwords in July 2026 and has no PKCE, so an OAuth consumer would need both
- * a client secret an extension cannot hide and workspace admin rights to
- * create. The scopes are listed verbatim because Bitbucket grants them to the
- * token, not to the request.
- */
-async function promptForBitbucketCredentials(): Promise<BitbucketCredentials | undefined> {
-  const email = await vscode.window.showInputBox({
-    title: 'Sign in to Bitbucket (1 of 2)',
-    prompt: 'Your Atlassian account email',
-    ignoreFocusOut: true,
-    validateInput: (value) => (value.includes('@') ? undefined : 'Enter the email address of your Atlassian account'),
-  });
-  if (!email) return undefined;
-
-  const token = await vscode.window.showInputBox({
-    title: 'Sign in to Bitbucket (2 of 2)',
-    prompt: `API token with scopes: ${BITBUCKET_TOKEN_SCOPES.join(', ')}`,
-    password: true,
-    ignoreFocusOut: true,
-    validateInput: (value) => (value.trim() ? undefined : 'Paste the API token'),
-  });
-  if (!token) return undefined;
-
-  return { email: email.trim(), token: token.trim() };
-}
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -130,13 +104,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const bitbucketAuth = new BitbucketAuthProvider({
     secrets: context.secrets,
     prompt: promptForBitbucketCredentials,
-    verify: async (credentials) => {
-      // A throwaway client bound to the credentials being verified — the real
-      // one reads from the auth provider, which has not stored them yet.
-      const probe = new BitbucketApi({ getCredentials: async () => credentials });
-      const user = await probe.getJson<{ display_name?: string }>('/user');
-      return user.display_name ?? credentials.email;
-    },
+    verify: verifyBitbucketCredentials,
   });
   context.subscriptions.push({ dispose: () => bitbucketAuth.dispose() });
 
@@ -155,7 +123,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return gitService.getRemoteUrl(remote);
     },
     broadcast: (event, data) => routers.broadcast(event, data),
-    openExternal: async (url) => { await vscode.env.openExternal(vscode.Uri.parse(url)); },
+    openExternal: async (url) => {
+      // `url` is PullRequestDetail.webUrl, which comes straight from the
+      // host's raw response (`links.html.href`) with no validation between
+      // fetch and here. `openExternal` dispatches to the OS URI handler —
+      // including `vscode://<publisher>.<extension>/...`, which activates
+      // and invokes another extension's UriHandler — so a malformed or
+      // hostile response must not drive an arbitrary scheme.
+      if (!isAllowedExternalUrl(url)) {
+        throw new Error('Refusing to open a non-http(s) URL');
+      }
+      await vscode.env.openExternal(vscode.Uri.parse(url));
+    },
   });
 
   // One runner for the whole extension, not one per session: its in-flight
@@ -340,8 +319,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const result = await session.handleGit(method, params);
       if (MUTATING_REMOTE_METHODS.has(method)) {
         // Cheap: drops cache entries, does not fetch. The next panel read pays.
-        forgeStore.clear();
-        routers.broadcast('forge.changed', {});
+        //
+        // Wrapped: this is a side effect of a git call that already
+        // succeeded, not the thing the caller asked for. RouterRegistry has
+        // no error handling of its own, and sendEvent reaches into a
+        // webview's `.webview` — which throws synchronously once the panel
+        // is disposed. Without this try/catch, a push landing at exactly
+        // that moment would report failure and drop `result`, even though
+        // the push itself succeeded — a forge side effect must never be
+        // able to fail a graph operation.
+        try {
+          forgeStore.clear();
+          routers.broadcast('forge.changed', {});
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(`[extension] forge cache invalidation after ${method} failed: ${message}`);
+        }
       }
       return result;
     });

@@ -41,6 +41,7 @@ export default defineConfig({
         'src/extension/services/forge/bitbucket/bitbucket-api.ts',
         'src/extension/services/forge/bitbucket/bitbucket-mapper.ts',
         'src/extension/services/forge/bitbucket/bitbucket-cloud.provider.ts',
+        'src/extension/services/forge/bitbucket/bitbucket-sign-in.ts',
         'src/extension/controllers/forge-method-handler.ts',
         'src/webview/components/sidebar/PullRequestList.svelte',
         'src/webview/components/detail/PullRequestDetail.svelte'
