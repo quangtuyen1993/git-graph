@@ -4,6 +4,16 @@ import type { BitbucketCredentials } from './bitbucket-auth';
 
 export const BITBUCKET_API_BASE = 'https://api.bitbucket.org/2.0';
 
+const BITBUCKET_API_ORIGIN = new URL(BITBUCKET_API_BASE).origin;
+
+/**
+ * Ceiling on how long a 429 can pause every queued request. A well-behaved
+ * server sends a Retry-After of a few seconds; a misconfigured or malicious
+ * one sending a day-long value must not be allowed to wedge the extension for
+ * that long — cap the pause rather than trust the header outright.
+ */
+const MAX_PAUSE_MS = 5 * 60 * 1000;
+
 /**
  * Opening the pull request section fires a list, a detail and a diffstat at
  * once, across every open repository. Bitbucket allows roughly 1000 requests
@@ -93,6 +103,15 @@ export class BitbucketApi {
     if (!credentials) throw new ForgeError('unauthorized', 401, 'Not signed in to Bitbucket');
 
     const url = path.startsWith('http') ? path : `${BITBUCKET_API_BASE}${path}`;
+    // `path` here can be a server-supplied `next` pagination link (getPaged)
+    // rather than one this module built. Accepting it unchecked would let a
+    // hijacked or malicious response redirect the Basic auth header — the
+    // credential — to an arbitrary origin. Anything absolute must land back
+    // on the API's own origin; this also closes off a plaintext `http://`
+    // link, since `startsWith('http')` alone accepts that too.
+    if (path.startsWith('http') && new URL(url).origin !== BITBUCKET_API_ORIGIN) {
+      throw new ForgeError('other', 0, `Refusing to follow a link to a different origin: ${url}`);
+    }
     const authorization = `Basic ${Buffer.from(`${credentials.email}:${credentials.token}`).toString('base64')}`;
 
     await this.acquire();
@@ -129,7 +148,10 @@ export class BitbucketApi {
       // Extend rather than overwrite: under the concurrency cap, several
       // requests can each land a 429 around the same time, and a later one
       // with a *shorter* Retry-After must not cut a longer pause short.
-      this.pausedUntil = Math.max(this.pausedUntil, Date.now() + retryAfterSeconds * 1000);
+      this.pausedUntil = Math.max(
+        this.pausedUntil,
+        Date.now() + Math.min(retryAfterSeconds * 1000, MAX_PAUSE_MS),
+      );
     }
 
     return new ForgeError(this.classify(response.status), response.status, hostMessage, retryAfterSeconds);
@@ -160,6 +182,12 @@ export class BitbucketApi {
    * with a status this one uses for permission failures, and reports a
    * duplicate with a different code again. Everything above the provider
    * switches on the resulting kind and never on the number.
+   *
+   * 400 is deliberately 'other', not 'duplicate': Bitbucket returns 400 for
+   * every malformed request body, unknown merge strategy or invalid reviewer
+   * id, not only for the thing being created already existing. Phase 5's
+   * duplicate-pull-request handling will branch on 'duplicate', and reporting
+   * "already exists" for, say, a typo'd reviewer id would be wrong.
    */
   private classify(status: number): ForgeErrorKind {
     switch (status) {
@@ -167,7 +195,6 @@ export class BitbucketApi {
       case 403: return 'forbidden';
       case 404: return 'not-found';
       case 429: return 'rate-limited';
-      case 400: return 'duplicate';
       default:  return 'other';
     }
   }

@@ -150,7 +150,7 @@ describe('BitbucketApi', () => {
     [403, 'forbidden'],
     [404, 'not-found'],
     [429, 'rate-limited'],
-    [400, 'duplicate'],
+    [400, 'other'],
     [500, 'other'],
   ] as const)('classifies HTTP %i as %s', async (status, kind) => {
     const fetchImpl = vi.fn().mockResolvedValue(
@@ -161,5 +161,63 @@ describe('BitbucketApi', () => {
     const { api } = build(fetchImpl as never);
 
     await expect(api.getJson('/x')).rejects.toMatchObject({ kind, status });
+  });
+
+  // Finding 9: every Bitbucket 400 is not a duplicate — a malformed body, an
+  // unknown merge strategy or an invalid reviewer id all come back as 400
+  // too, and Phase 5's "a duplicate attempt reports the existing pull
+  // request" acceptance criterion will branch on `kind`.
+  it('never classifies a 400 as duplicate', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({ error: { message: 'Invalid reviewer' } }, { status: 400 }));
+    const { api } = build(fetchImpl as never);
+    await expect(api.getJson('/x')).rejects.toMatchObject({ kind: 'other', status: 400 });
+  });
+
+  // Finding 2: a server-supplied absolute link (getPaged's `next`, or any
+  // caller passing a full URL) must resolve back to the API's own origin —
+  // otherwise it would carry the Basic auth header to an arbitrary host.
+  it('follows an absolute link on the API origin', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
+    const { api } = build(fetchImpl as never);
+    await api.getJson('https://api.bitbucket.org/2.0/repositories/acme/mpos/pullrequests?page=2');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an absolute link on a different origin', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
+    const { api } = build(fetchImpl as never);
+    await expect(api.getJson('https://evil.example/steal')).rejects.toBeInstanceOf(ForgeError);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('refuses getPaged following a next link to a different origin', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({ values: [{ id: 1 }], next: 'https://evil.example/2.0/x?page=2' }));
+    const { api } = build(fetchImpl as never);
+    await expect(api.getPaged('/x')).rejects.toBeInstanceOf(ForgeError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a plaintext http:// link even to the right host', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
+    const { api } = build(fetchImpl as never);
+    await expect(api.getJson('http://api.bitbucket.org/2.0/user')).rejects.toBeInstanceOf(ForgeError);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  // Finding 12: a Retry-After of a day must not wedge every queued request
+  // for that long.
+  it('clamps an excessive Retry-After to a ceiling', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { message: 'Rate limit' } }, { status: 429, headers: { 'retry-after': '86400' } }))
+      .mockResolvedValue(jsonResponse({ ok: true }));
+    const { api, sleep } = build(fetchImpl as never);
+
+    await api.getJson('/a').catch(() => {});
+    await api.getJson('/b');
+    const waitedMs = sleep.mock.calls[0][0] as number;
+    expect(waitedMs).toBeLessThanOrEqual(5 * 60 * 1000);
   });
 });
