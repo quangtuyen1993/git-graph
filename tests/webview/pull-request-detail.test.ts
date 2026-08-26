@@ -61,6 +61,13 @@ describe('PullRequestDetail', () => {
     expect(screen.getByTestId('comment-2')).toHaveAttribute('data-parent', '1');
   });
 
+  // data-parent is invisible to assistive tech; the relationship must also be
+  // conveyed as real text so a screen reader can follow the thread.
+  it('names who a reply answers, as visible text a screen reader can read', () => {
+    render(PullRequestDetail, props);
+    expect(screen.getByText(/in reply to minh le/i)).toBeInTheDocument();
+  });
+
   it('emits reviewWithAi', async () => {
     const { component } = render(PullRequestDetail, props);
     let fired = false;

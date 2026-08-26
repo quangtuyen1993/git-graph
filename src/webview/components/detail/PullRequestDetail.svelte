@@ -68,6 +68,18 @@
     changes_requested: '✗',
     pending: '⧗',
   };
+
+  /*
+   * The indentation that shows a reply belongs to its thread is purely visual —
+   * data-parent is invisible to assistive tech and CSS padding conveys nothing
+   * to a screen reader. Naming who a reply answers, in real text, is what makes
+   * the relationship available to someone who cannot see the indentation.
+   */
+  function replyTargetName(comment: ForgeComment): string | null {
+    if (!comment.parentId) return null;
+    const parent = comments.find((candidate) => candidate.id === comment.parentId);
+    return parent ? parent.author.displayName : 'a previous comment';
+  }
 </script>
 
 {#if pullRequest}
@@ -129,6 +141,9 @@
           data-parent={comment.parentId ?? ''}
         >
           <span class="comment-author">{comment.author.displayName}</span>
+          {#if comment.parentId}
+            <span class="comment-reply-to">in reply to {replyTargetName(comment)}</span>
+          {/if}
           {#if comment.path}
             <span class="comment-anchor">{comment.path}{comment.line ? `:${comment.line}` : ''}</span>
           {/if}
@@ -255,6 +270,13 @@
 
   .comment-author {
     font-weight: 600;
+  }
+
+  .comment-reply-to {
+    margin-left: 6px;
+    color: var(--vscode-descriptionForeground, #888);
+    font-style: italic;
+    font-size: 11px;
   }
 
   .comment-anchor {
