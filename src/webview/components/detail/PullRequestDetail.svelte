@@ -64,7 +64,14 @@
     openFile: ChangedFile;
     approve: void;
     requestChanges: void;
-    merge: { strategy: string };
+    /*
+     * No strategy in the payload: unlike approve/requestChanges, merging
+     * cannot be undone, so the parent confirms first — naming the pull
+     * request, the target branch and (one button per option) the strategy —
+     * and only then calls forge.pr.merge with whichever the user picked.
+     * This panel has no opinion on which strategy that is.
+     */
+    merge: void;
     close: void;
   }>();
 
@@ -197,10 +204,7 @@
         <button type="button" on:click={() => dispatch('requestChanges')}>Request changes</button>
       {/if}
       {#if capabilities.merge}
-        <button
-          type="button"
-          on:click={() => dispatch('merge', { strategy: capabilities.mergeStrategies[0] })}
-        >
+        <button type="button" on:click={() => dispatch('merge')}>
           Merge
         </button>
       {/if}

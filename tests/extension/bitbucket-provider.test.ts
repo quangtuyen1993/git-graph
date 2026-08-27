@@ -21,11 +21,13 @@ beforeEach(() => {
   authenticationMocks.getSession.mockReset();
 });
 
-function build(api: Partial<Record<'getJson' | 'getText' | 'getPaged', unknown>> = {}) {
+function build(api: Partial<Record<'getJson' | 'getText' | 'getPaged' | 'post' | 'postEmpty', unknown>> = {}) {
   const stub = {
     getJson: vi.fn().mockResolvedValue(detailFixture),
     getText: vi.fn().mockResolvedValue('diff --git a/a b/a\n'),
     getPaged: vi.fn().mockResolvedValue((listFixture as { values: unknown[] }).values),
+    post: vi.fn().mockResolvedValue({}),
+    postEmpty: vi.fn().mockResolvedValue(undefined),
     ...api,
   };
   const auth = {
@@ -101,9 +103,76 @@ describe('BitbucketCloudProvider', () => {
     expect(comments.map((c) => c.id)).toEqual(['9001', '9002', '9004']);
   });
 
-  it('reports write methods as not implemented in this phase', async () => {
-    const { provider } = build();
-    await expect(provider.merge(repo, '1', { strategy: 'squash' })).rejects.toMatchObject({ status: 501 });
+  // Requirement 3: mergeable is real now — getPullRequest also fetches the
+  // diffstat (the same endpoint getPullRequestFiles already uses) and folds
+  // its conflict status into the detail. No fixture PR here has a conflict,
+  // so this is the 'clean' case; the 'conflicted' case is below.
+  it('fetches the diffstat alongside the detail to compute mergeable', async () => {
+    const { provider, stub } = build({
+      getPaged: vi.fn().mockResolvedValue((diffstatFixture as { values: unknown[] }).values),
+    });
+    const pr = await provider.getPullRequest(repo, '123');
+    expect(stub.getPaged).toHaveBeenCalledWith('/repositories/acme/mpos/pullrequests/123/diffstat?pagelen=50');
+    expect(pr.mergeable).toBe('clean');
+  });
+
+  it("reports mergeable: 'conflicted' for a pull request with a conflicting diffstat", async () => {
+    const { provider } = build({
+      getPaged: vi.fn().mockResolvedValue([{ status: 'merge conflict', new: { path: 'a' }, old: { path: 'a' } }]),
+    });
+    const pr = await provider.getPullRequest(repo, '123');
+    expect(pr.mergeable).toBe('conflicted');
+  });
+
+  it('approves a pull request via POST to the approve endpoint', async () => {
+    const { provider, stub } = build();
+    await provider.setReviewStatus(repo, '123', 'approved');
+    expect(stub.post).toHaveBeenCalledWith('/repositories/acme/mpos/pullrequests/123/approve', {});
+  });
+
+  // Requirement 2: the interface carries an optional body for a provider
+  // (e.g. GitHub) that needs one; Bitbucket's request-changes endpoint takes
+  // none, so this provider accepts the param without forwarding it.
+  it('requests changes via POST to the request-changes endpoint, without forwarding the body', async () => {
+    const { provider, stub } = build();
+    await provider.setReviewStatus(repo, '123', 'changes_requested', { body: 'Please add a test' });
+    expect(stub.post).toHaveBeenCalledWith('/repositories/acme/mpos/pullrequests/123/request-changes', {});
+  });
+
+  it('merges with the mapped strategy and the close-source-branch flag', async () => {
+    const { provider, stub } = build();
+    await provider.merge(repo, '123', { strategy: 'fast-forward', closeSourceBranch: true });
+    expect(stub.post).toHaveBeenCalledWith('/repositories/acme/mpos/pullrequests/123/merge', {
+      merge_strategy: 'fast_forward', close_source_branch: true,
+    });
+  });
+
+  it('merges with a squash strategy and omits close_source_branch when not given', async () => {
+    const { provider, stub } = build();
+    await provider.merge(repo, '123', { strategy: 'squash' });
+    expect(stub.post).toHaveBeenCalledWith('/repositories/acme/mpos/pullrequests/123/merge', {
+      merge_strategy: 'squash',
+    });
+  });
+
+  // A capability this provider never declares (Bitbucket's mergeStrategies
+  // is ['merge-commit', 'squash', 'fast-forward']) must not silently become
+  // some arbitrary Bitbucket default if a caller passes it anyway.
+  it('refuses to merge with a strategy this provider does not support', async () => {
+    const { provider, stub } = build();
+    await expect(provider.merge(repo, '123', { strategy: 'rebase' })).rejects.toBeInstanceOf(ForgeError);
+    expect(stub.post).not.toHaveBeenCalled();
+  });
+
+  // Requirement 5: a blocked merge (e.g. real conflicts) must surface
+  // Bitbucket's own message verbatim, not a generic failure — toForgeError
+  // already extracts body.error.message, so this pins that the provider
+  // doesn't swallow or rewrite it.
+  it("surfaces a blocked merge's host message verbatim", async () => {
+    const blocked = new ForgeError('other', 409, 'This pull request has conflicts and cannot be merged.');
+    const { provider } = build({ post: vi.fn().mockRejectedValue(blocked) });
+    await expect(provider.merge(repo, '123', { strategy: 'squash' }))
+      .rejects.toMatchObject({ hostMessage: 'This pull request has conflicts and cannot be merged.' });
   });
 
   // Requirement 4: 'not-found' is now Bitbucket's own wording, reached

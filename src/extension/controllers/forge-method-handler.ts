@@ -4,7 +4,7 @@ import type { ForgeStore } from '../services/forge/forge-store';
 import type { ForgeRegistry } from '../services/forge/forge-registry';
 import { ForgeError } from '../services/forge/forge.types';
 import type {
-  ForgeCapabilities, ForgeProvider, ForgeRepoRef, PullRequestListState,
+  ForgeCapabilities, ForgeProvider, ForgeRepoRef, MergeStrategy, PullRequestDetail, PullRequestListState, ReviewStatus,
 } from '../services/forge/forge.types';
 
 export interface ForgeStatus {
@@ -207,6 +207,49 @@ export function createForgeHandler(deps: ForgeHandlerDeps) {
         return { success: true };
       }
 
+      case 'forge.pr.approve':
+      case 'forge.pr.requestChanges': {
+        const { provider, repo, prefix } = await requireForge();
+        const id = String(p.id ?? '');
+        const status: 'approved' | 'changes_requested' =
+          method === 'forge.pr.approve' ? 'approved' : 'changes_requested';
+        const body = typeof p.body === 'string' && p.body.length > 0 ? p.body : undefined;
+
+        // Read-after-write: Bitbucket's participant list can still lag a
+        // fresh GET for a moment right after the approve/request-changes
+        // POST resolves (see the phase 6 plan's requirement 4). This never
+        // re-reads to build its response — it patches the reviewer entry
+        // for the signed-in account onto whatever detail is already cached
+        // (fetching it once if nothing is), and returns that. `prefix` is
+        // then invalidated so the *next* natural read — the sidebar's list
+        // refresh below, a manual refresh, or reopening the panel — goes to
+        // the host, which by then has almost always caught up.
+        const before = await deps.store.fetch(
+          `${prefix}pr:${id}`, PR_DETAIL_TTL_MS, () => provider.getPullRequest(repo, id));
+        await provider.setReviewStatus(repo, id, status, body !== undefined ? { body } : undefined);
+        const session = await provider.getSession();
+        const patched = applyOptimisticReviewStatus(before.value, session?.accountLabel, status);
+
+        deps.store.invalidate(prefix);
+        deps.broadcast('forge.changed', {});
+        return patched;
+      }
+
+      case 'forge.pr.merge': {
+        const { provider, repo, prefix } = await requireForge();
+        const id = String(p.id ?? '');
+        const strategy = p.strategy as MergeStrategy;
+        const closeSourceBranch = typeof p.closeSourceBranch === 'boolean' ? p.closeSourceBranch : undefined;
+
+        await provider.merge(repo, id, {
+          strategy,
+          ...(closeSourceBranch !== undefined ? { closeSourceBranch } : {}),
+        });
+        deps.store.invalidate(prefix);
+        deps.broadcast('forge.changed', {});
+        return { success: true };
+      }
+
       default:
         throw new Error(`Unknown method: ${method}`);
     }
@@ -260,6 +303,30 @@ export function createForgeHandler(deps: ForgeHandlerDeps) {
   }
 
   return handle;
+}
+
+/**
+ * The read-after-write patch for `forge.pr.approve`/`forge.pr.requestChanges`
+ * (requirement 4 of the phase 6 plan): finds the reviewer entry belonging to
+ * the signed-in account — matched by display name, the only identity a
+ * `ForgeSession` carries — and sets its status, adding one if the acting
+ * account wasn't already a reviewer (approving a pull request you weren't
+ * requested on is allowed). With no session (should not happen; the write
+ * itself would already have failed with 'unauthorized') the detail is
+ * returned unchanged rather than guessed at.
+ */
+function applyOptimisticReviewStatus(
+  detail: PullRequestDetail, accountLabel: string | undefined, status: ReviewStatus,
+): PullRequestDetail {
+  if (!accountLabel) return detail;
+  const idx = detail.reviewers.findIndex((reviewer) => reviewer.user.displayName === accountLabel);
+  if (idx === -1) {
+    return { ...detail, reviewers: [...detail.reviewers, { user: { displayName: accountLabel, accountId: '' }, status }] };
+  }
+  return {
+    ...detail,
+    reviewers: detail.reviewers.map((reviewer, i) => (i === idx ? { ...reviewer, status } : reviewer)),
+  };
 }
 
 /**

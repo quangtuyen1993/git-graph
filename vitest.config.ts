@@ -25,6 +25,8 @@ export default defineConfig({
         'src/extension/services/review-key.ts',
         'src/extension/services/review-store.ts',
         'src/extension/services/review-runner.ts',
+        'src/extension/services/review-target.ts',
+        'src/extension/services/review-payload.ts',
         'src/extension/controllers/review-method-handler.ts',
         'src/extension/providers/review-tree-provider.ts',
         'src/webview/lib/**/*.ts',

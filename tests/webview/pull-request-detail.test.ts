@@ -83,6 +83,22 @@ describe('PullRequestDetail', () => {
     expect(fired).toBe(true);
   });
 
+  // Phase 6, task 2: merging cannot be undone, so this panel does not
+  // confirm or pick a strategy itself — it only signals intent, with no
+  // payload, and leaves App.svelte to confirm (naming the pull request, the
+  // target branch and the strategy) before calling forge.pr.merge.
+  it('emits merge with no payload — confirmation and strategy choice belong to the parent', async () => {
+    const { component } = render(PullRequestDetail, props);
+    let fired = false;
+    let detail: unknown;
+    component.$on('merge', (event) => { fired = true; detail = event.detail; });
+
+    await fireEvent.click(screen.getByRole('button', { name: /^merge$/i }));
+
+    expect(fired).toBe(true);
+    expect(detail).toBeNull();
+  });
+
   it('emits openExternal', async () => {
     const { component } = render(PullRequestDetail, props);
     let fired = false;

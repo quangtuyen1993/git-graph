@@ -521,6 +521,77 @@
   }
 
   /**
+   * The shared tail of approve/request-changes: both return the same
+   * already-patched `PullRequestDetailData` (see forge-method-handler.ts's
+   * read-after-write handling), which this applies to both surfaces that
+   * show reviewer state — the open detail panel and the matching sidebar
+   * row — from that one response, not from a follow-up fetch.
+   */
+  function applyPullRequestDetailUpdate(updated: PullRequestDetailData): void {
+    if (selectedPullRequestId === updated.id) pullRequestDetail = updated;
+    pullRequests = pullRequests.map((pr) => (pr.id === updated.id ? { ...pr, reviewers: updated.reviewers } : pr));
+  }
+
+  async function handlePullRequestApprove(): Promise<void> {
+    if (!pullRequestDetail) return;
+    try {
+      const updated = await bridge.send('forge.pr.approve', { id: pullRequestDetail.id }) as PullRequestDetailData;
+      applyPullRequestDetailUpdate(updated);
+    } catch (e) {
+      showTransientMessage(messageOf(e));
+    }
+  }
+
+  async function handlePullRequestRequestChanges(): Promise<void> {
+    if (!pullRequestDetail) return;
+    try {
+      const updated = await bridge.send('forge.pr.requestChanges', { id: pullRequestDetail.id }) as PullRequestDetailData;
+      applyPullRequestDetailUpdate(updated);
+    } catch (e) {
+      showTransientMessage(messageOf(e));
+    }
+  }
+
+  const MERGE_STRATEGY_LABEL: Record<string, string> = {
+    'merge-commit': 'Merge commit', squash: 'Squash', 'fast-forward': 'Fast-forward', rebase: 'Rebase',
+  };
+
+  /**
+   * Merging cannot be undone the way approving can, so — unlike approve and
+   * request changes above — this confirms first, through the same
+   * `ui.confirm` idiom every other destructive action in this file uses
+   * (see the branch/tag/stash/worktree deletions below). The confirmation
+   * names the pull request, the target branch, and — one strategy per
+   * button, offered only from `capabilities.mergeStrategies` — the
+   * strategy: picking a button both chooses and confirms it. Dismissing the
+   * dialog (Escape, or clicking outside) resolves `null` and sends nothing.
+   */
+  async function handlePullRequestMerge(): Promise<void> {
+    if (!pullRequestDetail) return;
+    const pr = pullRequestDetail;
+    const strategies = forgeCapabilities.mergeStrategies;
+    if (strategies.length === 0) return;
+    const choices = strategies.map((strategy) => MERGE_STRATEGY_LABEL[strategy] ?? strategy);
+
+    try {
+      const answer = await bridge.send('ui.confirm', {
+        message: `Merge pull request #${pr.number} "${pr.title}" into ${pr.targetBranch}?`,
+        choices,
+      }) as string | null;
+      if (!answer) return;
+      const strategy = strategies[choices.indexOf(answer)];
+
+      await bridge.send('forge.pr.merge', { id: pr.id, strategy });
+      if (selectedPullRequestId === pr.id) {
+        pullRequestDetail = await bridge.send('forge.pr.get', { id: pr.id }) as PullRequestDetailData;
+      }
+      await loadPullRequests();
+    } catch (e) {
+      showTransientMessage(messageOf(e));
+    }
+  }
+
+  /**
    * Hands the selected pull request to the review panel. Sends only the pull
    * request's own id and title — never a baseRef/headRef the webview
    * resolved itself — so the host resolves the sha pair through
@@ -2392,6 +2463,9 @@
               on:openExternal={handlePullRequestOpenExternal}
               on:reviewWithAi={handlePullRequestReviewWithAi}
               on:openFile={handlePullRequestOpenFile}
+              on:approve={handlePullRequestApprove}
+              on:requestChanges={handlePullRequestRequestChanges}
+              on:merge={handlePullRequestMerge}
               on:close={closeRightPanel}
             />
           {/if}

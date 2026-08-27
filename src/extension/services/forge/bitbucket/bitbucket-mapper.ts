@@ -1,5 +1,6 @@
 import type {
-  ForgeComment, ForgeUser, PullRequestDetail, PullRequestFile, PullRequestState, PullRequestSummary, ReviewStatus,
+  ForgeComment, ForgeUser, MergeableState, PullRequestDetail, PullRequestFile, PullRequestState,
+  PullRequestSummary, ReviewStatus,
 } from '../forge.types';
 
 interface RawUser {
@@ -85,15 +86,37 @@ export function mapPullRequestSummary(raw: RawPullRequest): PullRequestSummary {
   };
 }
 
-export function mapPullRequestDetail(raw: RawPullRequest): PullRequestDetail {
+/**
+ * Bitbucket's diffstat entries report one of these statuses when the pull
+ * request cannot currently be merged cleanly. 'merge conflict' is the common
+ * case; the other three cover a rename or a subrepo pointer that conflicts
+ * with the target branch. Atlassian has signalled 'merge conflict' may move
+ * to a dedicated endpoint eventually — until then, this is the cheapest
+ * signal the host exposes, and it is already fetched for `getPullRequestFiles`.
+ */
+const CONFLICT_DIFFSTAT_STATUSES: ReadonlySet<string> = new Set([
+  'merge conflict', 'rename conflict', 'rename/delete conflict', 'subrepo conflict',
+]);
+
+/**
+ * `undefined` (no diffstat given) means 'unknown' — the caller didn't ask.
+ * An empty or conflict-free diffstat means 'clean': Bitbucket's list/detail
+ * endpoints carry no mergeability field of their own, so the diffstat is the
+ * only signal this provider has, and the absence of a conflict entry in it is
+ * exactly what "clean" means here.
+ */
+function mapMergeable(diffstat: RawDiffstatEntry[] | undefined): MergeableState {
+  if (!diffstat) return 'unknown';
+  return diffstat.some((entry) => CONFLICT_DIFFSTAT_STATUSES.has(entry.status ?? '')) ? 'conflicted' : 'clean';
+}
+
+export function mapPullRequestDetail(raw: RawPullRequest, diffstat?: RawDiffstatEntry[]): PullRequestDetail {
   return {
     ...mapPullRequestSummary(raw),
     description: raw.description ?? '',
     sourceCommit: raw.source?.commit?.hash ?? '',
     targetCommit: raw.destination?.commit?.hash ?? '',
-    // The list and detail endpoints do not report mergeability; it comes from
-    // a separate call this phase does not make.
-    mergeable: 'unknown',
+    mergeable: mapMergeable(diffstat),
   };
 }
 

@@ -354,6 +354,116 @@ describe('forge namespace', () => {
     });
   });
 
+  // Phase 6 — approve, request changes, merge.
+  describe('forge.pr.approve / forge.pr.requestChanges', () => {
+    it('approving patches the reviewer and reflects it both in the response and a fresh sidebar list', async () => {
+      const provider = new FakeForgeProvider({
+        host: 'bitbucket.org',
+        pullRequests: [fakePullRequest({ id: '1', reviewers: [{ user: FAKE_USER, status: 'pending' }] })],
+      });
+      const { handle, broadcast } = build({ provider });
+
+      const approveResult = await handle('forge.pr.approve', { id: '1' }) as { reviewers: { user: unknown; status: string }[] };
+      expect(approveResult.reviewers).toEqual([{ user: FAKE_USER, status: 'approved' }]);
+      expect(broadcast).toHaveBeenCalledWith('forge.changed', {});
+
+      // Sidebar: the list cache was invalidated by the write, so the next
+      // list fetch goes to the (now-mutated) provider and shows the same
+      // status — Requirement 1's "the sidebar reflects it".
+      const listResult = await handle('forge.pr.list', { state: 'open' }) as { pullRequests: { reviewers: { status: string }[] }[] };
+      expect(listResult.pullRequests[0].reviewers[0].status).toBe('approved');
+    });
+
+    it('adds the signed-in account as a reviewer if it was not already one', async () => {
+      const provider = new FakeForgeProvider({
+        host: 'bitbucket.org',
+        pullRequests: [fakePullRequest({ id: '1', reviewers: [] })],
+      });
+      const { handle } = build({ provider });
+
+      const result = await handle('forge.pr.approve', { id: '1' }) as { reviewers: { user: unknown; status: string }[] };
+      expect(result.reviewers).toEqual([{ user: FAKE_USER, status: 'approved' }]);
+    });
+
+    // Requirement 4: never re-reads the host to build its response — the
+    // patched value comes from what was already known plus the write just
+    // performed, so a lagging read-after-write on the host's side (a stale
+    // participant list for a moment after the POST resolves) cannot make
+    // this response show the pre-approval state.
+    it('does not depend on a fresh read to build its response (read-after-write lag)', async () => {
+      const provider = new FakeForgeProvider({
+        host: 'bitbucket.org',
+        pullRequests: [fakePullRequest({ id: '1', reviewers: [{ user: FAKE_USER, status: 'pending' }] })],
+      });
+      const { handle } = build({ provider });
+      // Warm the cache the way an already-open detail panel would have.
+      await handle('forge.pr.get', { id: '1' });
+
+      let readAfterWriteCalls = 0;
+      provider.getPullRequest = async () => {
+        readAfterWriteCalls += 1;
+        // Simulates the host's read side still lagging behind the write.
+        return fakePullRequest({ id: '1', reviewers: [{ user: FAKE_USER, status: 'pending' }] });
+      };
+
+      const result = await handle('forge.pr.approve', { id: '1' }) as { reviewers: { user: unknown; status: string }[] };
+
+      expect(readAfterWriteCalls).toBe(0);
+      expect(result.reviewers).toEqual([{ user: FAKE_USER, status: 'approved' }]);
+    });
+
+    it('requesting changes carries a body through to the provider when one is supplied', async () => {
+      const provider = new FakeForgeProvider({ host: 'bitbucket.org' });
+      const { handle } = build({ provider });
+
+      await handle('forge.pr.requestChanges', { id: '123', body: 'Please add a test' });
+
+      const call = provider.calls.find((c) => c.method === 'setReviewStatus');
+      expect(call?.args[3]).toEqual({ body: 'Please add a test' });
+    });
+
+    it('omits opts when no body is supplied', async () => {
+      const provider = new FakeForgeProvider({ host: 'bitbucket.org' });
+      const { handle } = build({ provider });
+
+      await handle('forge.pr.requestChanges', { id: '123' });
+
+      const call = provider.calls.find((c) => c.method === 'setReviewStatus');
+      expect(call?.args[3]).toBeUndefined();
+    });
+  });
+
+  describe('forge.pr.merge', () => {
+    it('merges with the given strategy, invalidates the cache and broadcasts', async () => {
+      const provider = new FakeForgeProvider({ host: 'bitbucket.org' });
+      const { handle, broadcast } = build({ provider });
+      await handle('forge.pr.list', { state: 'open' }); // warm the list cache
+
+      const result = await handle('forge.pr.merge', { id: '123', strategy: 'squash', closeSourceBranch: true }) as { success: boolean };
+
+      expect(result).toEqual({ success: true });
+      const call = provider.calls.find((c) => c.method === 'merge');
+      expect(call?.args[2]).toEqual({ strategy: 'squash', closeSourceBranch: true });
+      expect(broadcast).toHaveBeenCalledWith('forge.changed', {});
+
+      // The list cache was dropped by the write.
+      await handle('forge.pr.list', { state: 'open' });
+      expect(provider.calls.filter((c) => c.method === 'listPullRequests')).toHaveLength(2);
+    });
+
+    // Requirement 5: the host's own reason must reach the caller verbatim,
+    // not collapse into a generic failure — this is the 'other'-kind path
+    // forgeErrorMessage already passes through unmodified.
+    it("surfaces a blocked merge's host reason verbatim rather than a generic failure", async () => {
+      const provider = new FakeForgeProvider({ host: 'bitbucket.org' });
+      provider.merge = () => Promise.reject(new ForgeError('other', 409, 'This pull request has conflicts and cannot be merged.'));
+      const { handle } = build({ provider });
+
+      await expect(handle('forge.pr.merge', { id: '123', strategy: 'squash' }))
+        .rejects.toThrow('This pull request has conflicts and cannot be merged.');
+    });
+  });
+
   it('does not let one repository\'s cache invalidation clear a sibling whose name shares its prefix', async () => {
     // Two repositories in the same workspace whose names share a prefix
     // ('mpos' and 'mpos2') must not invalidate each other's cache: the

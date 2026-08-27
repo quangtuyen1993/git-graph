@@ -140,6 +140,15 @@ export class FakeForgeProvider implements ForgeProvider {
     return fakePullRequest({ title: input.title, sourceBranch: input.sourceBranch, targetBranch: input.targetBranch });
   }
 
+  /**
+   * Mutates the matching pull request's reviewers so a subsequent
+   * getPullRequest/listPullRequests call (in the common, lag-free case)
+   * reflects the write — the same way a real host does most of the time.
+   * The reviewer patched is whoever this fake's current session claims to
+   * be, matched by display name; a test that wants to simulate the host's
+   * read side lagging behind the write overrides getPullRequest/
+   * listPullRequests directly afterwards (see forge-method-handler.test.ts).
+   */
   public async setReviewStatus(
     repo: ForgeRepoRef,
     id: string,
@@ -147,10 +156,20 @@ export class FakeForgeProvider implements ForgeProvider {
     opts?: { body?: string },
   ): Promise<void> {
     this.record('setReviewStatus', repo, id, status, opts);
+    const pr = this.pullRequests.find((candidate) => candidate.id === id);
+    if (!pr) return;
+    const label = this.session?.accountLabel;
+    const idx = pr.reviewers.findIndex((reviewer) => reviewer.user.displayName === label);
+    const user = idx === -1 ? { ...FAKE_USER, displayName: label ?? FAKE_USER.displayName } : pr.reviewers[idx].user;
+    pr.reviewers = idx === -1
+      ? [...pr.reviewers, { user, status }]
+      : pr.reviewers.map((reviewer, i) => (i === idx ? { ...reviewer, status } : reviewer));
   }
 
   public async merge(repo: ForgeRepoRef, id: string, opts: { strategy: MergeStrategy; closeSourceBranch?: boolean }): Promise<void> {
     this.record('merge', repo, id, opts);
+    const idx = this.pullRequests.findIndex((candidate) => candidate.id === id);
+    if (idx !== -1) this.pullRequests[idx] = { ...this.pullRequests[idx], state: 'merged' };
   }
 
   public describeError(error: ForgeError): string {

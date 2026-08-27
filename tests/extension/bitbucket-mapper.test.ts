@@ -22,6 +22,30 @@ describe('bitbucket-mapper', () => {
     expect(pr.author).toEqual({ displayName: 'An Tran', accountId: 'acc-an', avatarUrl: 'https://avatar.example/an.png' });
   });
 
+  // Requirement 3 (phase 6): mergeable is real now. Bitbucket's diffstat
+  // conflict status ('merge conflict', 'rename conflict', 'rename/delete
+  // conflict', 'subrepo conflict') is the cheapest signal the host exposes —
+  // no diffstat argument at all still means "we didn't ask", not "clean".
+  describe('mergeable, from the diffstat conflict status', () => {
+    it('reports clean when the diffstat has no conflicts', () => {
+      const pr = mapPullRequestDetail(detailFixture as never, (diffstatFixture as { values: unknown[] }).values as never);
+      expect(pr.mergeable).toBe('clean');
+    });
+
+    it.each(['merge conflict', 'rename conflict', 'rename/delete conflict', 'subrepo conflict'])(
+      'reports conflicted when a diffstat entry has status %s',
+      (status) => {
+        const pr = mapPullRequestDetail(detailFixture as never, [{ status } as never]);
+        expect(pr.mergeable).toBe('conflicted');
+      },
+    );
+
+    it('reports unknown when no diffstat was supplied at all', () => {
+      const pr = mapPullRequestDetail(detailFixture as never);
+      expect(pr.mergeable).toBe('unknown');
+    });
+  });
+
   // Only reviewers count; a plain participant is not a reviewer.
   it('keeps reviewers only, with their status', () => {
     const pr = mapPullRequestDetail(detailFixture as never);

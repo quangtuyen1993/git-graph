@@ -18,6 +18,26 @@ const STATE_QUERY: Record<PullRequestListState, string> = {
   closed: 'DECLINED',
 };
 
+const REVIEW_ENDPOINT: Record<'approved' | 'changes_requested', string> = {
+  approved: 'approve',
+  changes_requested: 'request-changes',
+};
+
+/**
+ * Bitbucket's merge endpoint expects snake_case strategy names — this
+ * provider's own `capabilities.mergeStrategies` only ever offers the three
+ * keys below, so `Partial` (rather than `Record<MergeStrategy, string>`)
+ * turns a strategy Bitbucket was never declared to support (namely
+ * `'rebase'`, which only makes sense for a future provider) into a lookup
+ * miss `merge()` rejects explicitly, instead of forwarding an unmapped value
+ * on to the host.
+ */
+const MERGE_STRATEGY_PARAM: Partial<Record<MergeStrategy, string>> = {
+  'merge-commit': 'merge_commit',
+  squash: 'squash',
+  'fast-forward': 'fast_forward',
+};
+
 export interface BitbucketProviderDeps {
   api: BitbucketApi;
   auth: BitbucketAuthProvider;
@@ -28,18 +48,18 @@ export class BitbucketCloudProvider implements ForgeProvider {
   public readonly name = BITBUCKET_AUTH_LABEL;
 
   /*
-   * All four still `false`: the methods below reject every one of them with a
-   * 501 ("arrives in a later phase"). A capability advertises what actually
-   * works, not what the type eventually will — the webview gates its buttons
-   * on this object precisely so it never has to know the difference. Flip
-   * each back to `true` in the same change that implements it; the UI needs
-   * no other update to pick that up.
+   * `createPullRequest` stays `false`: it still rejects with a 501 ("arrives
+   * in phase 5"). approve/requestChanges/merge are real now (phase 6) — a
+   * capability advertises what actually works, not what the type eventually
+   * will, and the webview gates its buttons on this object precisely so it
+   * never has to know the difference. No other change was needed for those
+   * three buttons to appear; that is what the capability mechanism is for.
    */
   public readonly capabilities: ForgeCapabilities = {
     createPullRequest: false,
-    approve: false,
-    requestChanges: false,
-    merge: false,
+    approve: true,
+    requestChanges: true,
+    merge: true,
     mergeStrategies: ['merge-commit', 'squash', 'fast-forward'],
   };
 
@@ -84,10 +104,25 @@ export class BitbucketCloudProvider implements ForgeProvider {
     return raw.map(mapPullRequestSummary);
   }
 
+  /**
+   * Also fetches the diffstat, the same endpoint `getPullRequestFiles` uses,
+   * so `mapPullRequestDetail` can turn its conflict status into a real
+   * `mergeable` — the list/detail endpoints report no mergeability field of
+   * their own, and the diffstat is the cheapest signal Bitbucket exposes for
+   * it. Fetched alongside the detail rather than reused from a separate
+   * cached call: this method has no access to the extension-side ForgeStore
+   * that backs `forge.pr.files`, and the two are fetched concurrently by the
+   * webview besides (see `handlePullRequestSelect` in App.svelte).
+   */
   public async getPullRequest(repo: ForgeRepoRef, id: string): Promise<PullRequestDetail> {
-    const raw = await this.deps.api.getJson<Parameters<typeof mapPullRequestDetail>[0]>(
-      `${this.base(repo)}/pullrequests/${encodeURIComponent(id)}`);
-    return mapPullRequestDetail(raw);
+    const base = this.base(repo);
+    const [raw, diffstat] = await Promise.all([
+      this.deps.api.getJson<Parameters<typeof mapPullRequestDetail>[0]>(
+        `${base}/pullrequests/${encodeURIComponent(id)}`),
+      this.deps.api.getPaged<Parameters<typeof mapDiffstat>[0][number]>(
+        `${base}/pullrequests/${encodeURIComponent(id)}/diffstat?pagelen=${PAGE_LENGTH}`),
+    ]);
+    return mapPullRequestDetail(raw, diffstat);
   }
 
   public async getPullRequestDiff(repo: ForgeRepoRef, id: string): Promise<string> {
@@ -116,17 +151,33 @@ export class BitbucketCloudProvider implements ForgeProvider {
     return Promise.reject(new ForgeError('other', 501, 'Creating pull requests arrives in phase 5'));
   }
 
-  public setReviewStatus(
-    _repo: ForgeRepoRef,
-    _id: string,
-    _status: 'approved' | 'changes_requested',
+  /**
+   * `opts.body` is declared on the shared interface for a provider that
+   * needs it (GitHub requires one on a "request changes" review) but
+   * Bitbucket's approve/request-changes endpoints take no body of their own
+   * — this accepts the parameter to satisfy `ForgeProvider` and never reads
+   * it.
+   */
+  public async setReviewStatus(
+    repo: ForgeRepoRef,
+    id: string,
+    status: 'approved' | 'changes_requested',
     _opts?: { body?: string },
   ): Promise<void> {
-    return Promise.reject(new ForgeError('other', 501, 'Approving pull requests arrives in phase 6'));
+    await this.deps.api.post(`${this.base(repo)}/pullrequests/${encodeURIComponent(id)}/${REVIEW_ENDPOINT[status]}`, {});
   }
 
-  public merge(_repo: ForgeRepoRef, _id: string, _opts: { strategy: MergeStrategy; closeSourceBranch?: boolean }): Promise<void> {
-    return Promise.reject(new ForgeError('other', 501, 'Merging pull requests arrives in phase 6'));
+  public async merge(
+    repo: ForgeRepoRef, id: string, opts: { strategy: MergeStrategy; closeSourceBranch?: boolean },
+  ): Promise<void> {
+    const mergeStrategy = MERGE_STRATEGY_PARAM[opts.strategy];
+    if (!mergeStrategy) {
+      throw new ForgeError('other', 0, `Bitbucket does not support the '${opts.strategy}' merge strategy`);
+    }
+    await this.deps.api.post(`${this.base(repo)}/pullrequests/${encodeURIComponent(id)}/merge`, {
+      merge_strategy: mergeStrategy,
+      ...(opts.closeSourceBranch !== undefined ? { close_source_branch: opts.closeSourceBranch } : {}),
+    });
   }
 
   /**
