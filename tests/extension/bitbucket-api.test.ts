@@ -342,7 +342,7 @@ describe('BitbucketApi', () => {
       if (sleepCallCount === 1) {
         // Simulate a concurrent 429 landing mid-sleep and extending the
         // shared deadline well past what this call started waiting for.
-        (api as unknown as { pausedUntil: number }).pausedUntil = Date.now() + 60_000;
+        (api as unknown as { queue: { pausedUntil: number } }).queue.pausedUntil = Date.now() + 60_000;
       }
     });
 

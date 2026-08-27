@@ -1,5 +1,6 @@
 import { ForgeError } from '../forge.types';
 import type { ForgeErrorKind } from '../forge.types';
+import { parseRetryAfterHeader, RequestQueue } from '../request-queue';
 import type { BitbucketCredentials } from './bitbucket-auth';
 
 export const BITBUCKET_API_BASE = 'https://api.bitbucket.org/2.0';
@@ -59,19 +60,15 @@ const DUPLICATE_PULL_REQUEST_PATTERN = /already.*(open )?pull request|pull reque
  */
 const MAX_PAGINATION_PAGES = 200;
 
-const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
 export class BitbucketApi {
   private readonly fetchImpl: typeof fetch;
-  private readonly sleep: (ms: number) => Promise<void>;
-  private active = 0;
-  private readonly waiting: (() => void)[] = [];
-  /** Epoch ms before which no request may start, set by a 429. */
-  private pausedUntil = 0;
+  private readonly queue: RequestQueue;
 
   constructor(private readonly deps: BitbucketApiDeps) {
     this.fetchImpl = deps.fetchImpl ?? globalThis.fetch;
-    this.sleep = deps.sleep ?? defaultSleep;
+    this.queue = new RequestQueue({
+      maxConcurrent: MAX_CONCURRENT_REQUESTS, maxPauseMs: MAX_PAUSE_MS, sleep: deps.sleep,
+    });
   }
 
   public async getJson<T>(path: string): Promise<T> {
@@ -136,10 +133,7 @@ export class BitbucketApi {
     }
     const authorization = `Basic ${Buffer.from(`${credentials.email}:${credentials.token}`).toString('base64')}`;
 
-    await this.acquire();
-    try {
-      await this.waitForPause();
-
+    return this.queue.run(async () => {
       const response = await this.fetchImpl(url, {
         ...init,
         headers: { Accept: 'application/json', ...(init.headers ?? {}), Authorization: authorization },
@@ -148,9 +142,7 @@ export class BitbucketApi {
       if (!response.ok) throw await this.toForgeError(response, opts);
       if (parse === 'none') return undefined as T;
       return (parse === 'text' ? await response.text() : await response.json()) as T;
-    } finally {
-      this.release();
-    }
+    });
   }
 
   private async toForgeError(response: Response, opts?: RequestClassifyOpts): Promise<ForgeError> {
@@ -164,43 +156,18 @@ export class BitbucketApi {
 
     let retryAfterSeconds: number | undefined;
     if (response.status === 429) {
-      const rawRetryAfterSeconds = this.parseRetryAfter(response.headers.get('retry-after'));
-      const clampedPauseMs = Math.min(rawRetryAfterSeconds * 1000, MAX_PAUSE_MS);
       // Hold every queued request, not just this one: they would all hit the
       // same limit and turn one breach into a wall of identical failures.
-      // Extend rather than overwrite: under the concurrency cap, several
-      // requests can each land a 429 around the same time, and a later one
-      // with a *shorter* Retry-After must not cut a longer pause short.
-      this.pausedUntil = Math.max(this.pausedUntil, Date.now() + clampedPauseMs);
-      // Report the clamped wait, not the raw header value: a Retry-After of
-      // 86400 must not produce "Retrying in 86400s" when the actual pause is
-      // capped to MAX_PAUSE_MS.
-      retryAfterSeconds = clampedPauseMs / 1000;
+      // applyPause clamps to MAX_PAUSE_MS and extends (never shortens) the
+      // shared deadline — see request-queue.ts.
+      const rawRetryAfterSeconds = parseRetryAfterHeader(response.headers.get('retry-after'));
+      retryAfterSeconds = this.queue.applyPause(rawRetryAfterSeconds);
     }
 
     return new ForgeError(
       this.classify(response.status, hostMessage, opts?.detectDuplicate ?? false),
       response.status, hostMessage, retryAfterSeconds,
     );
-  }
-
-  /**
-   * Retry-After is delta-seconds or an HTTP-date (RFC 9110 §10.2.3); Bitbucket
-   * has been seen to send either. Anything that parses as neither falls back
-   * to 60s rather than firing again immediately.
-   */
-  private parseRetryAfter(header: string | null): number {
-    if (header) {
-      const deltaSeconds = Number(header);
-      if (Number.isFinite(deltaSeconds) && deltaSeconds > 0) return deltaSeconds;
-
-      const dateMs = Date.parse(header);
-      if (!Number.isNaN(dateMs)) {
-        const untilDate = Math.ceil((dateMs - Date.now()) / 1000);
-        if (untilDate > 0) return untilDate;
-      }
-    }
-    return 60;
   }
 
   /**
@@ -229,40 +196,5 @@ export class BitbucketApi {
       case 429: return 'rate-limited';
       default:  return 'other';
     }
-  }
-
-  /**
-   * Waits out `pausedUntil`, then re-checks it: a concurrent request can
-   * extend the deadline (see `toForgeError`) while this one was asleep, and
-   * firing on the earlier, shorter deadline it started with would defeat the
-   * point of a queue-wide pause. Loops only while the deadline itself has
-   * moved further out since the last sleep — not against the raw clock —
-   * so it still resolves in one pass under a mocked, instantly-resolving
-   * `sleep` when nothing extended it.
-   */
-  private async waitForPause(): Promise<void> {
-    let deadline = this.pausedUntil;
-    for (;;) {
-      const wait = deadline - Date.now();
-      if (wait <= 0) return;
-      await this.sleep(wait);
-      if (this.pausedUntil <= deadline) return;
-      deadline = this.pausedUntil;
-    }
-  }
-
-  private acquire(): Promise<void> {
-    if (this.active < MAX_CONCURRENT_REQUESTS) {
-      this.active += 1;
-      return Promise.resolve();
-    }
-    return new Promise<void>((resolve) => {
-      this.waiting.push(() => { this.active += 1; resolve(); });
-    });
-  }
-
-  private release(): void {
-    this.active -= 1;
-    this.waiting.shift()?.();
   }
 }

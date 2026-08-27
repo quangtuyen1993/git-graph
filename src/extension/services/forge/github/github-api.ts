@@ -1,5 +1,6 @@
 import { ForgeError } from '../forge.types';
 import type { ForgeErrorKind } from '../forge.types';
+import { parseRetryAfterHeader, RequestQueue } from '../request-queue';
 import { GITHUB_API_BASE } from './github-constants';
 
 const GITHUB_API_ORIGIN = new URL(GITHUB_API_BASE).origin;
@@ -57,8 +58,6 @@ interface RequestClassifyOpts {
   detectDuplicate?: boolean;
 }
 
-const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
 function parseNextLink(header: string | null): string | undefined {
   if (!header) return undefined;
   for (const part of header.split(',')) {
@@ -70,15 +69,13 @@ function parseNextLink(header: string | null): string | undefined {
 
 export class GitHubApi {
   private readonly fetchImpl: typeof fetch;
-  private readonly sleep: (ms: number) => Promise<void>;
-  private active = 0;
-  private readonly waiting: (() => void)[] = [];
-  /** Epoch ms before which no request may start, set by a rate-limited 403. */
-  private pausedUntil = 0;
+  private readonly queue: RequestQueue;
 
   constructor(private readonly deps: GitHubApiDeps) {
     this.fetchImpl = deps.fetchImpl ?? globalThis.fetch;
-    this.sleep = deps.sleep ?? defaultSleep;
+    this.queue = new RequestQueue({
+      maxConcurrent: MAX_CONCURRENT_REQUESTS, maxPauseMs: MAX_PAUSE_MS, sleep: deps.sleep,
+    });
   }
 
   public async getJson<T>(path: string, extraHeaders?: Record<string, string>): Promise<T> {
@@ -153,10 +150,7 @@ export class GitHubApi {
       throw new ForgeError('other', 0, `Refusing to follow a link to a different origin: ${url}`);
     }
 
-    await this.acquire();
-    try {
-      await this.waitForPause();
-
+    return this.queue.run(async () => {
       const response = await this.fetchImpl(url, {
         ...init,
         headers: {
@@ -172,9 +166,7 @@ export class GitHubApi {
       if (parse === 'none') return { body: undefined as T, link };
       const body = (parse === 'text' ? await response.text() : await response.json()) as T;
       return { body, link };
-    } finally {
-      this.release();
-    }
+    });
   }
 
   private async toForgeError(response: Response, opts?: RequestClassifyOpts): Promise<ForgeError> {
@@ -218,8 +210,8 @@ export class GitHubApi {
       if (retryAfterHeader) {
         // Secondary rate limit: hold every queued request, extending
         // (never shortening) the pause — identical reasoning to Bitbucket's
-        // 429 handling, see waitForPause.
-        return { kind: 'rate-limited', retryAfterSeconds: this.applyPause(this.parseRetryAfter(retryAfterHeader)) };
+        // 429 handling, see request-queue.ts's RequestQueue.applyPause.
+        return { kind: 'rate-limited', retryAfterSeconds: this.queue.applyPause(parseRetryAfterHeader(retryAfterHeader)) };
       }
       if (response.headers.get('x-ratelimit-remaining') === '0') {
         const resetHeader = response.headers.get('x-ratelimit-reset');
@@ -227,7 +219,7 @@ export class GitHubApi {
         const rawSeconds = Number.isFinite(resetEpochSeconds)
           ? Math.max(1, Math.ceil(resetEpochSeconds - Date.now() / 1000))
           : 60;
-        return { kind: 'rate-limited', retryAfterSeconds: this.applyPause(rawSeconds) };
+        return { kind: 'rate-limited', retryAfterSeconds: this.queue.applyPause(rawSeconds) };
       }
       return { kind: 'forbidden' };
     }
@@ -239,64 +231,5 @@ export class GitHubApi {
       case 404: return { kind: 'not-found' };
       default:  return { kind: 'other' };
     }
-  }
-
-  /**
-   * Clamps a rate-limit wait to MAX_PAUSE_MS and extends (never shortens)
-   * the queue-wide pause, then returns the clamped seconds to report on the
-   * ForgeError — identical reasoning to bitbucket-api.ts's toForgeError.
-   */
-  private applyPause(rawSeconds: number): number {
-    const clampedPauseMs = Math.min(rawSeconds * 1000, MAX_PAUSE_MS);
-    this.pausedUntil = Math.max(this.pausedUntil, Date.now() + clampedPauseMs);
-    return clampedPauseMs / 1000;
-  }
-
-  /**
-   * Retry-After is delta-seconds or an HTTP-date (RFC 9110 §10.2.3), the
-   * same as Bitbucket's 429. Anything that parses as neither falls back to
-   * 60s rather than firing again immediately.
-   */
-  private parseRetryAfter(header: string): number {
-    const deltaSeconds = Number(header);
-    if (Number.isFinite(deltaSeconds) && deltaSeconds > 0) return deltaSeconds;
-
-    const dateMs = Date.parse(header);
-    if (!Number.isNaN(dateMs)) {
-      const untilDate = Math.ceil((dateMs - Date.now()) / 1000);
-      if (untilDate > 0) return untilDate;
-    }
-    return 60;
-  }
-
-  /**
-   * Waits out `pausedUntil`, then re-checks it — identical reasoning to
-   * bitbucket-api.ts's `waitForPause`: a concurrent request can extend the
-   * deadline while this one was asleep.
-   */
-  private async waitForPause(): Promise<void> {
-    let deadline = this.pausedUntil;
-    for (;;) {
-      const wait = deadline - Date.now();
-      if (wait <= 0) return;
-      await this.sleep(wait);
-      if (this.pausedUntil <= deadline) return;
-      deadline = this.pausedUntil;
-    }
-  }
-
-  private acquire(): Promise<void> {
-    if (this.active < MAX_CONCURRENT_REQUESTS) {
-      this.active += 1;
-      return Promise.resolve();
-    }
-    return new Promise<void>((resolve) => {
-      this.waiting.push(() => { this.active += 1; resolve(); });
-    });
-  }
-
-  private release(): void {
-    this.active -= 1;
-    this.waiting.shift()?.();
   }
 }

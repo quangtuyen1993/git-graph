@@ -38,6 +38,7 @@ export default defineConfig({
         'src/extension/services/forge/forge-store.ts',
         'src/extension/services/forge/forge.types.ts',
         'src/extension/services/forge/url-safety.ts',
+        'src/extension/services/forge/request-queue.ts',
         'src/extension/services/forge/bitbucket/bitbucket-constants.ts',
         'src/extension/services/forge/bitbucket/bitbucket-auth.ts',
         'src/extension/services/forge/bitbucket/bitbucket-api.ts',
