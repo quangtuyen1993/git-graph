@@ -60,6 +60,25 @@ const DUPLICATE_PULL_REQUEST_PATTERN = /already.*(open )?pull request|pull reque
  */
 const MAX_PAGINATION_PAGES = 200;
 
+/**
+ * The `/repositories/{owner}/{name...}` path shared by `BitbucketCloudProvider.base`
+ * and the sign-in verification probe (bitbucket-sign-in.ts) — one implementation of
+ * the traversal guard rather than two, so a future change to it cannot fix one call
+ * site and silently leave the other exploitable. `.`, `..` and empty segments are
+ * refused for the same reason `BitbucketCloudProvider.base`'s original doc comment
+ * gave: `encodeURIComponent` does not escape `.` (RFC 3986 unreserved), so a `..`
+ * segment left unchecked here would reach `/repositories/../x` and let the WHATWG
+ * URL parser inside `fetch` collapse it into a path outside `/repositories`,
+ * carrying this client's Authorization header with it.
+ */
+export function bitbucketRepoPath(repo: { owner: string; name: string }): string {
+  const segments = [repo.owner, ...repo.name.split('/')];
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    throw new ForgeError('other', 0, `Invalid repository reference: ${repo.owner}/${repo.name}`);
+  }
+  return `/repositories/${segments.map(encodeURIComponent).join('/')}`;
+}
+
 export class BitbucketApi {
   private readonly fetchImpl: typeof fetch;
   private readonly queue: RequestQueue;
@@ -131,7 +150,21 @@ export class BitbucketApi {
     if (path.startsWith('http') && new URL(url).origin !== BITBUCKET_API_ORIGIN) {
       throw new ForgeError('other', 0, `Refusing to follow a link to a different origin: ${url}`);
     }
-    const authorization = `Basic ${Buffer.from(`${credentials.email}:${credentials.token}`).toString('base64')}`;
+    // Bearer, not Basic — and this is the only scheme this client ever sends.
+    // Atlassian's own docs (support.atlassian.com/bitbucket-cloud/docs/using-api-tokens,
+    // .../using-access-tokens) establish two distinct token families for Bitbucket
+    // Cloud: an Atlassian-account API token (id.atlassian.com), which accepts
+    // *either* HTTP Basic (email:token) *or* Bearer, and a repository/project/
+    // workspace access token (created in Bitbucket's own settings, not tied to
+    // any account), which accepts *only* Bearer — Basic on an access token is
+    // what produced the 403-on-every-scoped-endpoint this fix responds to.
+    // Bearer is the intersection of what both families accept, so sending it
+    // unconditionally serves either kind without this client ever having to
+    // know, ask, or remember which one a credential is — no per-credential
+    // scheme flag, no probing request. `credentials.email` is therefore never
+    // read here; it survives only as an optional display label the sign-in
+    // flow may collect (see bitbucket-sign-in.ts).
+    const authorization = `Bearer ${credentials.token}`;
 
     return this.queue.run(async () => {
       const response = await this.fetchImpl(url, {

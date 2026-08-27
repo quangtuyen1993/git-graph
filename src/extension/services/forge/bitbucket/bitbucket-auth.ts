@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { createHash } from 'crypto';
 import { ForgeError } from '../forge.types';
+import type { ForgeRepoRef } from '../forge.types';
 import { BITBUCKET_AUTH_ID, BITBUCKET_AUTH_LABEL, BITBUCKET_TOKEN_SCOPES } from './bitbucket-constants';
 import { describeBitbucketError } from './bitbucket-error-messages';
 
@@ -54,6 +55,14 @@ export function isSignInCancelled(error: unknown): boolean {
   return error instanceof Error && error.name === SIGN_IN_CANCELLED_NAME;
 }
 
+/**
+ * `email` is display-only — see bitbucket-api.ts's `request()` for why
+ * authentication never reads it (Bearer, sent unconditionally, needs no
+ * username for either Bitbucket token family). It may be `''`: a repository,
+ * project or workspace access token has no associated Atlassian account, so
+ * there is no email to give, and `promptForBitbucketCredentials` accepts a
+ * blank answer rather than forcing one.
+ */
 export interface BitbucketCredentials {
   email: string;
   token: string;
@@ -71,8 +80,26 @@ export type CredentialPrompt = () => Promise<BitbucketCredentials | undefined>;
 export interface BitbucketAuthDeps {
   secrets: SecretStorageLike;
   prompt: CredentialPrompt;
-  /** Resolves to the account display name, or rejects. Injected so this file never imports the API client. */
-  verify: (credentials: BitbucketCredentials) => Promise<string>;
+  /**
+   * Resolves to the account display name, or rejects. Injected so this file
+   * never imports the API client. Takes the repository being verified
+   * against — see `resolveRepo` below for where that comes from and why
+   * verification needs one at all.
+   */
+  verify: (credentials: BitbucketCredentials, repo: ForgeRepoRef) => Promise<string>;
+  /**
+   * The repository the user currently has open, resolved the same way
+   * forge-method-handler.ts's own `resolve()` does (parse the configured
+   * remote, match it to this host) — but independently, because `createSession`
+   * is reached through `vscode.authentication.getSession`, an out-of-process
+   * round trip that carries only the requested scopes, not the repo that
+   * triggered it. Verification (bitbucket-sign-in.ts) reads this repository
+   * rather than `/2.0/user`, so a token that can read it is proven able to do
+   * the job before it is ever stored. `undefined` means no Bitbucket
+   * repository is open right now — `doCreateSession` turns that into a
+   * rejection instead of calling `verify` with nothing to check.
+   */
+  resolveRepo: () => Promise<ForgeRepoRef | undefined>;
 }
 
 interface StoredCredentials extends BitbucketCredentials {
@@ -85,9 +112,14 @@ interface StoredCredentials extends BitbucketCredentials {
  * so the token itself must never appear in one — a one-way hash keeps the id
  * deterministic for the same credential (so `removeSession` and a window
  * reload agree on it) without making it reversible to the token.
+ *
+ * Hashes the token alone, not `email:token`: `email` is a display label a
+ * user may leave blank (an access token has none to give), so it must not
+ * factor into identity — two sign-ins with the same token and a different
+ * label typed in must still collide on one stored credential.
  */
 function sessionId(credentials: BitbucketCredentials): string {
-  return createHash('sha256').update(`${credentials.email}:${credentials.token}`).digest('hex');
+  return createHash('sha256').update(credentials.token).digest('hex');
 }
 
 /**
@@ -160,6 +192,24 @@ export class BitbucketAuthProvider implements vscode.AuthenticationProvider {
     // isSignInCancelled(error) rather than instanceof or .message.
     if (!entered) throw new BitbucketSignInCancelledError();
 
+    // Verification reads the repository the user has open (see `resolveRepo`
+    // on BitbucketAuthDeps), not a user endpoint — so it needs one resolved
+    // before it can call `verify` at all. Reaching here with none normally
+    // cannot happen: the only two callers of createSession() (the
+    // `gitGraphPro.forge.signIn` command and the webview's `forge.signIn`)
+    // both go through forge-method-handler's `requireForge()` first, which
+    // already refuses to run without a resolved repository. This is the
+    // fallback for the gap between that check and this line — a workspace
+    // closed mid-prompt, say — answered with a readable message rather than
+    // a crash or a call to `verify` with nothing to check.
+    const repo = await this.deps.resolveRepo();
+    if (!repo) {
+      throw new Error(
+        'No Bitbucket repository is open to verify the token against. '
+        + 'Open a repository with a Bitbucket remote, then sign in again.',
+      );
+    }
+
     // Verify before storing: a token that is mistyped or missing a scope must
     // fail at the moment it is entered, not on the first pull request request.
     //
@@ -177,7 +227,7 @@ export class BitbucketAuthProvider implements vscode.AuthenticationProvider {
     // one place, not two, that knows what a Bitbucket 'forbidden' means.
     let accountLabel: string;
     try {
-      accountLabel = await this.deps.verify(entered);
+      accountLabel = await this.deps.verify(entered, repo);
     } catch (error) {
       if (error instanceof ForgeError) throw new Error(describeBitbucketError(error));
       throw error;
@@ -217,10 +267,16 @@ export class BitbucketAuthProvider implements vscode.AuthenticationProvider {
   }
 
   private toSession(stored: StoredCredentials): vscode.AuthenticationSession {
+    const id = sessionId(stored);
+    // account.id falls back to the same token hash used for the session id
+    // when there is no email to give it — an access token has no Atlassian
+    // account behind it, so `stored.email` is `''` in that case (see
+    // BitbucketCredentials's doc comment), and an empty id is a worse
+    // identifier than a stable, already-computed one.
     return {
-      id: sessionId(stored),
+      id,
       accessToken: stored.token,
-      account: { id: stored.email, label: stored.accountLabel },
+      account: { id: stored.email || id, label: stored.accountLabel },
       scopes: [...BITBUCKET_TOKEN_SCOPES],
     };
   }

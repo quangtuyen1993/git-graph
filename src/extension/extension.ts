@@ -12,11 +12,13 @@ import type { ReviewForgeDeps } from './controllers/review-method-handler';
 import type { ForgeComment, PullRequestDetail, PullRequestFile } from './services/forge/forge.types';
 import { ForgeRegistry } from './services/forge/forge-registry';
 import { ForgeStore } from './services/forge/forge-store';
+import { parseRemoteUrl } from './services/forge/remote-url';
 import { isAllowedExternalUrl } from './services/forge/url-safety';
 import { BitbucketApi } from './services/forge/bitbucket/bitbucket-api';
 import {
   BitbucketAuthProvider, BITBUCKET_AUTH_ID, BITBUCKET_AUTH_LABEL, isSignInCancelled,
 } from './services/forge/bitbucket/bitbucket-auth';
+import { BITBUCKET_CLOUD_HOST } from './services/forge/bitbucket/bitbucket-constants';
 import { BitbucketCloudProvider } from './services/forge/bitbucket/bitbucket-cloud.provider';
 import { promptForBitbucketCredentials, verifyBitbucketCredentials } from './services/forge/bitbucket/bitbucket-sign-in';
 import { GitHubApi } from './services/forge/github/github-api';
@@ -108,10 +110,37 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const forgeRegistry = new ForgeRegistry();
   const forgeStore = new ForgeStore();
 
+  // Shared by forgeHandler's own repo resolution below and by
+  // resolveBitbucketRepo just below that — both need "what does the active
+  // repository's configured remote point at", and duplicating the read would
+  // let the two drift.
+  const getActiveRemoteUrl = async (): Promise<string | undefined> => {
+    const gitService = activeRepo.getGitService();
+    if (!gitService) return undefined;
+    const remote = vscode.workspace.getConfiguration().get<string>('gitGraphPro.forge.remote') ?? 'origin';
+    return gitService.getRemoteUrl(remote);
+  };
+
+  // The repository sign-in verification checks a token against, instead of
+  // `/2.0/user` (see bitbucket-sign-in.ts's `verifyBitbucketCredentials`).
+  // Resolved independently of forgeHandler's own repo resolution below:
+  // `BitbucketAuthProvider.createSession` is reached through
+  // `vscode.authentication.getSession`, an out-of-process round trip that
+  // carries only the requested scopes, not the repository that triggered it
+  // — see `BitbucketAuthDeps.resolveRepo`'s doc comment.
+  const resolveBitbucketRepo = async () => {
+    const url = await getActiveRemoteUrl();
+    if (!url) return undefined;
+    const remote = parseRemoteUrl(url);
+    if (!remote || remote.host !== BITBUCKET_CLOUD_HOST) return undefined;
+    return { host: remote.host, owner: remote.owner, name: remote.name };
+  };
+
   const bitbucketAuth = new BitbucketAuthProvider({
     secrets: context.secrets,
     prompt: promptForBitbucketCredentials,
     verify: verifyBitbucketCredentials,
+    resolveRepo: resolveBitbucketRepo,
   });
   context.subscriptions.push({ dispose: () => bitbucketAuth.dispose() });
 
@@ -142,12 +171,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const forgeHandler = createForgeHandler({
     registry: forgeRegistry,
     store: forgeStore,
-    getRemoteUrl: async () => {
-      const gitService = activeRepo.getGitService();
-      if (!gitService) return undefined;
-      const remote = vscode.workspace.getConfiguration().get<string>('gitGraphPro.forge.remote') ?? 'origin';
-      return gitService.getRemoteUrl(remote);
-    },
+    getRemoteUrl: getActiveRemoteUrl,
     broadcast: (event, data) => routers.broadcast(event, data),
     openExternal: async (url) => {
       // `url` is PullRequestDetail.webUrl, which comes straight from the

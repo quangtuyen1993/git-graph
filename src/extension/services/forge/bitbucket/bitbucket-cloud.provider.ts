@@ -5,9 +5,9 @@ import {
   type ForgeRepoInfo, type ForgeRepoRef, type ForgeSession, type ForgeUser, type MergeStrategy, type ParsedRemote,
   type PullRequestDetail, type PullRequestFile, type PullRequestListState, type PullRequestSummary,
 } from '../forge.types';
-import type { BitbucketApi } from './bitbucket-api';
+import { bitbucketRepoPath, type BitbucketApi } from './bitbucket-api';
 import type { BitbucketAuthProvider } from './bitbucket-auth';
-import { BITBUCKET_AUTH_ID, BITBUCKET_AUTH_LABEL, BITBUCKET_TOKEN_SCOPES } from './bitbucket-constants';
+import { BITBUCKET_AUTH_ID, BITBUCKET_AUTH_LABEL, BITBUCKET_CLOUD_HOST, BITBUCKET_TOKEN_SCOPES } from './bitbucket-constants';
 import { describeBitbucketError } from './bitbucket-error-messages';
 import {
   mapComments, mapDiffstat, mapPullRequestDetail, mapPullRequestSummary, mapUser, type RawUser,
@@ -69,7 +69,7 @@ export class BitbucketCloudProvider implements ForgeProvider {
   constructor(private readonly deps: BitbucketProviderDeps) {}
 
   public canHandle(remote: ParsedRemote): boolean {
-    return remote.host === 'bitbucket.org';
+    return remote.host === BITBUCKET_CLOUD_HOST;
   }
 
   /**
@@ -233,16 +233,11 @@ export class BitbucketCloudProvider implements ForgeProvider {
    * Defence in depth. `remote-url.ts` is the real boundary — it already
    * refuses to produce a `ParsedRemote` with a `.`/`..`/empty segment — but
    * this guards the case where a caller builds a `ForgeRepoRef` some other
-   * way. `encodeURIComponent` does not escape `.` (RFC 3986 unreserved), so
-   * a `..` segment left unchecked here would reach `/repositories/../x` and
-   * let the WHATWG URL parser inside `fetch` collapse it into a path outside
-   * `/repositories`, carrying this provider's Basic auth header with it.
+   * way. The traversal guard itself lives in `bitbucketRepoPath` (bitbucket-api.ts),
+   * shared with the sign-in verification probe, so there is one implementation
+   * of it, not two.
    */
   private base(repo: ForgeRepoRef): string {
-    const segments = [repo.owner, ...repo.name.split('/')];
-    if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
-      throw new ForgeError('other', 0, `Invalid repository reference: ${repo.owner}/${repo.name}`);
-    }
-    return `/repositories/${segments.map(encodeURIComponent).join('/')}`;
+    return bitbucketRepoPath(repo);
   }
 }

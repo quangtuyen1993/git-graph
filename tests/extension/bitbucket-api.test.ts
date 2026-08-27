@@ -17,15 +17,32 @@ function build(fetchImpl: typeof fetch, sleep = vi.fn().mockResolvedValue(undefi
 }
 
 describe('BitbucketApi', () => {
-  it('sends HTTP Basic with the email and token', async () => {
+  // Bearer, unconditionally — see the comment in bitbucket-api.ts's request()
+  // for why: it is the one scheme Atlassian's docs confirm both Bitbucket
+  // token families (Atlassian-account API tokens and repository/project/
+  // workspace access tokens) accept, so this client never has to know, ask,
+  // or probe which kind a stored credential is. `credentials.email` — still
+  // present on the fixture, since real stored credentials may carry one for
+  // display — must not appear in the header at all.
+  it('sends HTTP Bearer with the token, never Basic, regardless of email', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
     const { api } = build(fetchImpl as never);
     await api.getJson('/user');
 
     const [url, init] = fetchImpl.mock.calls[0];
     expect(url).toBe('https://api.bitbucket.org/2.0/user');
-    expect((init.headers as Record<string, string>).Authorization)
-      .toBe(`Basic ${Buffer.from(`${credentials.email}:${credentials.token}`).toString('base64')}`);
+    expect((init.headers as Record<string, string>).Authorization).toBe(`Bearer ${credentials.token}`);
+  });
+
+  it('sends the same Bearer header when there is no email at all (an access token)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
+    const api = new BitbucketApi({
+      getCredentials: async () => ({ email: '', token: credentials.token }), fetchImpl: fetchImpl as never,
+    });
+    await api.getJson('/user');
+
+    const [, init] = fetchImpl.mock.calls[0];
+    expect((init.headers as Record<string, string>).Authorization).toBe(`Bearer ${credentials.token}`);
   });
 
   it('throws a signed-out ForgeError when there is no credential', async () => {
@@ -231,7 +248,7 @@ describe('BitbucketApi', () => {
 
   // Finding 2: a server-supplied absolute link (getPaged's `next`, or any
   // caller passing a full URL) must resolve back to the API's own origin —
-  // otherwise it would carry the Basic auth header to an arbitrary host.
+  // otherwise it would carry the Bearer auth header to an arbitrary host.
   it('follows an absolute link on the API origin', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
     const { api } = build(fetchImpl as never);

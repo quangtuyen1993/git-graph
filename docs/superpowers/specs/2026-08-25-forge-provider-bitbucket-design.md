@@ -201,11 +201,34 @@ fork-based workflows.
 
 ## Part 2: Authentication
 
-### Decision: API tokens, not OAuth
+> **Corrected 2026-08-27.** This section originally stated the scheme as settled fact —
+> HTTP Basic, `/2.0/user` as the verify probe, a `read:user:bitbucket` scope — and all
+> three were wrong for at least one real user. A newly created, correctly scoped token
+> got a blanket 403 on every endpoint. What follows replaces that account; see
+> `.superpowers/sdd/signin-ux-fix-report.md` in the `fix-signin` worktree for the incident
+> this correction responds to and the documentation research behind it.
 
-Bitbucket Cloud **removed app passwords on 28 July 2026**; the replacement is an Atlassian
-API token with scopes, authenticated with HTTP Basic — username is the Atlassian account
-email, password is the token.
+### Decision: API tokens or access tokens, not OAuth — sent as Bearer, unconditionally
+
+Bitbucket Cloud **removed app passwords on 28 July 2026**. Its replacements are two
+distinct token families, and this extension accepts either:
+
+- **API tokens**, created at id.atlassian.com, tied to an Atlassian account.
+- **Access tokens** (repository, project or workspace), created in Bitbucket's own
+  settings, tied to a resource rather than an account.
+
+Atlassian's own documentation (`support.atlassian.com/bitbucket-cloud/docs/using-api-tokens`,
+`.../using-access-tokens`) establishes the schemes each accepts: an API token can be sent
+either as HTTP Basic (`email:token`) or as a Bearer token — the docs call Bearer
+"recommended" and note it "removes the need to provide the Atlassian email tied to the
+API token." An access token accepts **only** Bearer; it has no email or username at all.
+
+Bearer is therefore the intersection of what both families accept, and `bitbucket-api.ts`
+sends it unconditionally on every request. This is deliberately *not* a scheme-detection
+or scheme-memory mechanism — there is only one scheme, so nothing needs detecting or
+remembering, and a user signs in with either kind of token without this extension ever
+asking which one it is. The email the sign-in prompt collects (see below) plays no part
+in authentication; it is a display label only, and it is optional.
 
 OAuth 2.0 remains available but is rejected for v1 on three grounds:
 
@@ -234,19 +257,32 @@ valid session.
 
 ```
 createSession():
-  1. input box — Atlassian account email
-  2. input box — API token (password: true)
-  3. GET /2.0/user  → validate immediately
-  4. SecretStorage['forge:bitbucket-cloud:token'] = { email, token }
-     session.account.label = the display name returned by step 3
+  1. input box — Atlassian account email (optional; leave blank for an access token)
+  2. input box — API token or access token (password: true)
+  3. resolve the repository the user currently has open (the configured remote,
+     parsed and matched to this host — independent of forge-method-handler's own
+     resolution, since createSession is reached through vscode.authentication's
+     out-of-process round trip, which carries only the requested scopes)
+  4. GET /2.0/repositories/{workspace}/{repo_slug} on that repository → validate immediately
+  5. SecretStorage['forge:bitbucket-cloud:token'] = { email, token }
+     session.account.label = email, else the repository's workspace name, else its
+     full name, else the repository owner — whichever is first available
 ```
 
-Step 3 exists so a mistyped or under-scoped token fails at the moment of entry, naming the
-account that was authenticated, rather than surfacing later as an unexplained empty PR list.
+Step 4 exists so a mistyped or under-scoped token fails at the moment of entry, rather
+than surfacing later as an unexplained empty PR list. It checks the repository the user
+already has open, not `/2.0/user`: nothing in this extension reads user data for any
+other reason, and asking for permission to do so anyway is what let a token correctly
+scoped for every real feature still fail sign-in with a 403. A repository with no
+Bitbucket remote open cannot reach step 1 at all — `gitGraphPro.forge.signIn` and the
+webview's `forge.signIn` both resolve the repository through `requireForge()` before
+`createSession` is ever invoked, so the ordinary "no forge repo" case is already handled
+above this flow, not inside it. Step 3 fails sensibly (a readable rejection, not a crash)
+in the narrow race where that resolution is lost between the two.
 
 Required token scopes, which the sign-in prompt must list verbatim:
-`read:user:bitbucket`, `read:repository:bitbucket`, `read:pullrequest:bitbucket`,
-`write:pullrequest:bitbucket`.
+`read:repository:bitbucket`, `read:pullrequest:bitbucket`, `write:pullrequest:bitbucket`.
+No user-read scope: nothing calls a user endpoint.
 
 There is no refresh and no expiry tracking. A 401 clears the session, fires
 `onDidChangeSessions`, and returns the sidebar to its signed-out row.
@@ -258,7 +294,10 @@ stored.
 
 ### `bitbucket-api.ts`
 
-A thin typed HTTP layer over REST API 2.0 with `Authorization: Basic base64(email:token)`.
+A thin typed HTTP layer over REST API 2.0 with `Authorization: Bearer {token}`, sent
+unconditionally — see Part 2 above for why this is the one scheme that serves both
+Bitbucket token families without this layer needing to know which kind a stored
+credential is.
 
 It owns two protections:
 

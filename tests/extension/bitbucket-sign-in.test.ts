@@ -20,6 +20,7 @@ vi.mock('../../src/extension/services/forge/bitbucket/bitbucket-api', () => ({
   BitbucketApi: class {
     getJson(...args: unknown[]) { return apiMocks.getJson(...args); }
   },
+  bitbucketRepoPath: (repo: { owner: string; name: string }) => `/repositories/${repo.owner}/${repo.name}`,
 }));
 
 const { promptForBitbucketCredentials, verifyBitbucketCredentials } =
@@ -50,10 +51,20 @@ describe('promptForBitbucketCredentials', () => {
     expect(tokenPromptOptions.prompt).toContain('write:pullrequest:bitbucket');
   });
 
-  it('stops without asking for a token when the email step is cancelled', async () => {
+  it('stops without asking for a token when the email step is cancelled (Escape)', async () => {
     inputBoxMocks.showInputBox.mockResolvedValueOnce(undefined);
     expect(await promptForBitbucketCredentials()).toBeUndefined();
     expect(inputBoxMocks.showInputBox).toHaveBeenCalledTimes(1);
+  });
+
+  // The email step is optional — a repository/project/workspace access token
+  // has no Atlassian account, and so no email to give. Pressing Enter on a
+  // blank box (a deliberate answer) must not be treated the same as Escape
+  // (a cancel): it has to proceed to the token step.
+  it('proceeds to the token step when the email is left blank', async () => {
+    inputBoxMocks.showInputBox.mockResolvedValueOnce('').mockResolvedValueOnce('access-token-value');
+    expect(await promptForBitbucketCredentials()).toEqual({ email: '', token: 'access-token-value' });
+    expect(inputBoxMocks.showInputBox).toHaveBeenCalledTimes(2);
   });
 
   it('returns undefined when the token step is cancelled', async () => {
@@ -61,33 +72,48 @@ describe('promptForBitbucketCredentials', () => {
     expect(await promptForBitbucketCredentials()).toBeUndefined();
   });
 
-  it('rejects an email with no @', async () => {
+  it('accepts a blank email and rejects an email with no @', async () => {
     inputBoxMocks.showInputBox.mockResolvedValueOnce('a@b.com');
     await promptForBitbucketCredentials();
     const emailOptions = inputBoxMocks.showInputBox.mock.calls[0][0] as { validateInput(v: string): string | undefined };
     expect(emailOptions.validateInput('not-an-email')).toBeTypeOf('string');
     expect(emailOptions.validateInput('a@b.com')).toBeUndefined();
+    expect(emailOptions.validateInput('')).toBeUndefined();
   });
 });
 
 describe('verifyBitbucketCredentials', () => {
   const credentials = { email: 'tuyen@example.com', token: 'ATATT-secret' };
+  const repo = { host: 'bitbucket.org', owner: 'tuyen', name: 'repo' };
 
-  it('returns the display name from /user', async () => {
-    apiMocks.getJson.mockResolvedValueOnce({ display_name: 'Tuyen Nguyen' });
-    expect(await verifyBitbucketCredentials(credentials)).toBe('Tuyen Nguyen');
-    expect(apiMocks.getJson).toHaveBeenCalledWith('/user');
+  // The whole point of the fix: this must probe the repository, never
+  // /2.0/user — nothing else in this extension reads user data, and that
+  // single call was what forced a user-read scope into every sign-in prompt.
+  it('probes the repository the user has open, not a user endpoint', async () => {
+    apiMocks.getJson.mockResolvedValueOnce({ full_name: 'tuyen/repo', workspace: { name: 'Tuyen Workspace' } });
+    expect(await verifyBitbucketCredentials(credentials, repo)).toBe('tuyen@example.com');
+    expect(apiMocks.getJson).toHaveBeenCalledWith('/repositories/tuyen/repo');
   });
 
-  it('falls back to the email when /user has no display name', async () => {
+  it('falls back to the workspace name when there is no email to show', async () => {
+    apiMocks.getJson.mockResolvedValueOnce({ full_name: 'tuyen/repo', workspace: { name: 'Tuyen Workspace' } });
+    expect(await verifyBitbucketCredentials({ email: '', token: 't' }, repo)).toBe('Tuyen Workspace');
+  });
+
+  it('falls back to the repository full name when there is no workspace name either', async () => {
+    apiMocks.getJson.mockResolvedValueOnce({ full_name: 'tuyen/repo' });
+    expect(await verifyBitbucketCredentials({ email: '', token: 't' }, repo)).toBe('tuyen/repo');
+  });
+
+  it('falls back to the repository owner as a last, always-honest resort', async () => {
     apiMocks.getJson.mockResolvedValueOnce({});
-    expect(await verifyBitbucketCredentials(credentials)).toBe('tuyen@example.com');
+    expect(await verifyBitbucketCredentials({ email: '', token: 't' }, repo)).toBe('tuyen');
   });
 
   // A mistyped or under-scoped token must fail where it was typed, not on
   // the first pull request request — this is what makes that possible.
   it('propagates a rejection', async () => {
-    apiMocks.getJson.mockRejectedValueOnce(new Error('401 Unauthorized'));
-    await expect(verifyBitbucketCredentials(credentials)).rejects.toThrow('401');
+    apiMocks.getJson.mockRejectedValueOnce(new Error('403 Forbidden'));
+    await expect(verifyBitbucketCredentials(credentials, repo)).rejects.toThrow('403');
   });
 });

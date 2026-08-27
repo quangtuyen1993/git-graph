@@ -26,13 +26,15 @@ class MemorySecrets {
 }
 
 const credentials = { email: 'tuyen@example.com', token: 'ATATT-secret-token' };
+const repo = { host: 'bitbucket.org', owner: 'tuyen', name: 'repo' };
 
-function build(overrides: Partial<{ prompt: unknown; verify: unknown }> = {}) {
+function build(overrides: Partial<{ prompt: unknown; verify: unknown; resolveRepo: unknown }> = {}) {
   const secrets = new MemorySecrets();
   const prompt = overrides.prompt ?? vi.fn().mockResolvedValue(credentials);
   const verify = overrides.verify ?? vi.fn().mockResolvedValue('Tuyen Nguyen');
-  const provider = new BitbucketAuthProvider({ secrets, prompt, verify } as never);
-  return { provider, secrets, prompt, verify };
+  const resolveRepo = overrides.resolveRepo ?? vi.fn().mockResolvedValue(repo);
+  const provider = new BitbucketAuthProvider({ secrets, prompt, verify, resolveRepo } as never);
+  return { provider, secrets, prompt, verify, resolveRepo };
 }
 
 describe('BitbucketAuthProvider', () => {
@@ -41,13 +43,25 @@ describe('BitbucketAuthProvider', () => {
     expect(await provider.getSessions()).toEqual([]);
   });
 
-  it('prompts, verifies, and stores on createSession', async () => {
+  it('prompts, verifies against the resolved repository, and stores on createSession', async () => {
     const { provider, prompt, verify } = build();
     const session = await provider.createSession(SCOPES);
     expect(prompt).toHaveBeenCalledOnce();
-    expect(verify).toHaveBeenCalledWith(credentials);
+    expect(verify).toHaveBeenCalledWith(credentials, repo);
     expect(session.account).toEqual({ id: credentials.email, label: 'Tuyen Nguyen' });
     expect(session.scopes).toEqual(SCOPES);
+  });
+
+  // Verification now needs a repository to check the token against (see
+  // BitbucketAuthDeps.resolveRepo) instead of /2.0/user. This is the sensible
+  // fallback for the gap between forge-method-handler's requireForge() (which
+  // normally guarantees one is open before createSession is ever reached) and
+  // this line — not a crash, a readable rejection.
+  it('rejects with a readable message, and calls neither verify nor secrets.store, when no repository is open', async () => {
+    const { provider, secrets, verify } = build({ resolveRepo: vi.fn().mockResolvedValue(undefined) });
+    await expect(provider.createSession(SCOPES)).rejects.toThrow(/repository/i);
+    expect(verify).not.toHaveBeenCalled();
+    expect(await secrets.get('forge:bitbucket-cloud:token')).toBeUndefined();
   });
 
   // Ledger item: two overlapping sign-in round-trips. Two panels (the graph
@@ -146,7 +160,7 @@ describe('BitbucketAuthProvider', () => {
       const { provider } = build();
       await provider.createSession(SCOPES);
       expect(await provider.getSessions(SCOPES)).toHaveLength(1);
-      expect(await provider.getSessions(['read:user:bitbucket'])).toHaveLength(1);
+      expect(await provider.getSessions(['read:pullrequest:bitbucket'])).toHaveLength(1);
     });
 
     it('returns no session when a requested scope was never granted', async () => {
@@ -170,11 +184,12 @@ describe('BitbucketAuthProvider', () => {
     const secrets = new MemorySecrets();
     const prompt = vi.fn().mockResolvedValue(credentials);
     const verify = vi.fn().mockResolvedValue('Tuyen Nguyen');
+    const resolveRepo = vi.fn().mockResolvedValue(repo);
 
-    const first = new BitbucketAuthProvider({ secrets, prompt, verify } as never);
+    const first = new BitbucketAuthProvider({ secrets, prompt, verify, resolveRepo } as never);
     const created = await first.createSession(SCOPES);
 
-    const second = new BitbucketAuthProvider({ secrets, prompt, verify } as never);
+    const second = new BitbucketAuthProvider({ secrets, prompt, verify, resolveRepo } as never);
     const [reloaded] = await second.getSessions();
 
     expect(reloaded.id).toBe(created.id);
@@ -216,9 +231,13 @@ describe('BitbucketAuthProvider', () => {
     expect(fired).toEqual([{ added: [session], removed: [], changed: [] }]);
   });
 
-  it('names every required scope', () => {
+  // No read:user:bitbucket: nothing in this extension reads user data any
+  // more — verification checks the currently open repository, not /2.0/user
+  // (see bitbucket-sign-in.ts) — so a user-read scope has no reason to be on
+  // this list. Asking for it anyway was the root cause of a correctly-scoped
+  // token still getting a blanket 403.
+  it('names every required scope, and nothing more than is genuinely required', () => {
     expect(SCOPES).toEqual([
-      'read:user:bitbucket',
       'read:repository:bitbucket',
       'read:pullrequest:bitbucket',
       'write:pullrequest:bitbucket',

@@ -303,7 +303,6 @@ describe('gitGraphPro.forge.signIn command', () => {
     expect(consoleError).not.toHaveBeenCalled();
     expect(hostMocks.showErrorMessage).toHaveBeenCalledTimes(1);
     const [message] = hostMocks.showErrorMessage.mock.calls[0] as [string];
-    expect(message).toContain('read:user:bitbucket');
     expect(message).toContain('read:repository:bitbucket');
     expect(message).toContain('read:pullrequest:bitbucket');
     expect(message).toContain('write:pullrequest:bitbucket');
