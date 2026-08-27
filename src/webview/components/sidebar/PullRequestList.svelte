@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
+  import { matchesPullRequestQuery } from '../../lib/branch-pull-requests';
 
   interface ForgeUser { displayName: string; accountId: string }
   interface Reviewer { user: ForgeUser; status: 'approved' | 'changes_requested' | 'pending' }
@@ -29,10 +30,7 @@
   /* Number, title and source branch are the three things someone searches by. */
   $: needle = query.trim().toLowerCase();
   $: visible = needle
-    ? pullRequests.filter((pr) =>
-        String(pr.number).includes(needle)
-        || pr.title.toLowerCase().includes(needle)
-        || pr.sourceBranch.toLowerCase().includes(needle))
+    ? pullRequests.filter((pr) => matchesPullRequestQuery(pr, needle))
     : pullRequests;
 
   const countBy = (pr: PullRequestRow, status: Reviewer['status']) =>

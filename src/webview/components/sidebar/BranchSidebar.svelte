@@ -5,6 +5,7 @@
   import Icon from '../common/Icon.svelte';
   import type { SidebarPersistedState } from '../../lib/sidebar-state';
   import { activeBranchGroupPaths, buildBranchTree, type BranchTreeNode } from '../../lib/branch-tree';
+  import { matchesPullRequestQuery } from '../../lib/branch-pull-requests';
 
   interface Branch {
     name: string;
@@ -100,10 +101,7 @@
     ? submodules.filter((m) => matches(m.name) || matches(m.path))
     : submodules;
   $: visiblePullRequests = searching
-    ? pullRequests.filter((pr) =>
-        String(pr.number).includes(needle)
-        || matches(pr.title)
-        || matches(pr.sourceBranch))
+    ? pullRequests.filter((pr) => matchesPullRequestQuery(pr, needle))
     : pullRequests;
 
   $: currentBranch = branches.find((b) => b.current) ?? null;
