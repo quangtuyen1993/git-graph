@@ -179,6 +179,21 @@ describe('forge namespace', () => {
     expect(broadcast).not.toHaveBeenCalled();
   });
 
+  // The twin of the no-signOut() case just above: a repository with no
+  // forge remote at all is also an ordinary state, not a caller
+  // misbehaving — forge.signOut is reachable from the Command Palette on
+  // any repository, unlike every other case here, which the webview only
+  // reaches after forge.status has already gated it. Must not throw.
+  it('answers forge.signOut with guidance rather than throwing when the repository has no forge remote', async () => {
+    const { handle, broadcast } = build({ remoteUrl: undefined });
+
+    const result = await handle('forge.signOut', {}) as { success: boolean; guidance?: string };
+
+    expect(result.success).toBe(false);
+    expect(result.guidance).toMatch(/no.*provider|nothing to sign out/i);
+    expect(broadcast).not.toHaveBeenCalled();
+  });
+
   it('opens a pull request in the browser', async () => {
     const { handle, openExternal } = build();
     await handle('forge.pr.openExternal', { id: '123' });

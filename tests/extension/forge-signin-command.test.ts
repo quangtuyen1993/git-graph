@@ -250,6 +250,12 @@ function signInCommand(): () => Promise<void> {
   return call[1] as () => Promise<void>;
 }
 
+function signOutCommand(): () => Promise<void> {
+  const call = hostMocks.registerCommand.mock.calls.find(([command]) => command === 'gitGraphPro.forge.signOut');
+  if (!call) throw new Error('gitGraphPro.forge.signOut was never registered');
+  return call[1] as () => Promise<void>;
+}
+
 describe('gitGraphPro.forge.signIn command', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -314,5 +320,41 @@ describe('gitGraphPro.forge.signIn command', () => {
     await expect(signInCommand()()).resolves.toBeUndefined();
 
     expect(hostMocks.showErrorMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('gitGraphPro.forge.signOut command', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    hostMocks.globalState.clear();
+    hostMocks.registeredAuthProviders.clear();
+    hostMocks.workspaceFolders = [{ name: 'root', uri: { fsPath: '/workspace/root' } }];
+    hostMocks.findRepo.mockImplementation(async (path: string) => path.replace('/workspace', '/repo'));
+  });
+
+  afterEach(() => {
+    deactivate();
+  });
+
+  // The twin of defects 1/2 above: gitGraphPro.forge.signOut had the same
+  // unguarded shape, and a repository with no forge remote — an ordinary,
+  // everyday state, unlike every other forge.* case, which the webview only
+  // reaches after forge.status has already gated it — used to throw
+  // requireForge()'s "No pull request provider for this repository" out of
+  // the command uncaught, reported as a failed command with a stack trace.
+  it('is a quiet informational no-op when the repository has no forge remote', async () => {
+    hostMocks.getRemoteUrl.mockResolvedValue(undefined);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await activateExtension();
+    await expect(signOutCommand()()).resolves.toBeUndefined();
+
+    expect(hostMocks.showErrorMessage).not.toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalled();
+    // Says something useful rather than failing silently or throwing.
+    expect(hostMocks.showInformationMessage).toHaveBeenCalledTimes(1);
+    const [message] = hostMocks.showInformationMessage.mock.calls[0] as [string];
+    expect(message).toMatch(/no.*provider|nothing to sign out/i);
+    consoleError.mockRestore();
   });
 });

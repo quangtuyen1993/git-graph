@@ -695,12 +695,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }),
     vscode.commands.registerCommand('gitGraphPro.forge.signOut', async () => {
-      // forge.signOut can no longer just discard its result: a provider with
-      // no signOut() (see forge.types.ts) answers with guidance instead of
-      // performing a sign-out, and that guidance must reach the user.
-      const result = await forgeHandler('forge.signOut', {}) as ForgeSignOutResult;
-      if (!result.success && result.guidance) {
-        void vscode.window.showInformationMessage(result.guidance);
+      try {
+        // forge.signOut can no longer just discard its result: a provider
+        // with no signOut() (see forge.types.ts), or no provider at all — a
+        // repository with no forge remote, an ordinary state rather than a
+        // failure (see the 'forge.signOut' case in forge-method-handler.ts)
+        // — answers with guidance instead of performing a sign-out, and
+        // that guidance must reach the user.
+        const result = await forgeHandler('forge.signOut', {}) as ForgeSignOutResult;
+        if (!result.success && result.guidance) {
+          void vscode.window.showInformationMessage(result.guidance);
+        }
+      } catch (error) {
+        // Same shape as gitGraphPro.forge.signIn's catch above: anything
+        // else thrown here must not become VS Code's generic "command
+        // resulted in an error" with a stack trace.
+        const message = error instanceof Error ? error.message : String(error);
+        void vscode.window.showErrorMessage(message);
       }
     }),
   );

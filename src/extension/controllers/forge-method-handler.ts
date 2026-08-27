@@ -135,7 +135,23 @@ export function createForgeHandler(deps: ForgeHandlerDeps) {
       }
 
       case 'forge.signOut': {
-        const resolved = await requireForge();
+        // resolve(), not requireForge(): unlike every case above it, this
+        // one is reachable from the Command Palette on any repository, not
+        // only from a webview that already gated on forge.status first (see
+        // requireForge()'s own comment). A repository with no forge remote
+        // is the ordinary case, not a caller misbehaving — requireForge()
+        // throwing here used to escape the gitGraphPro.forge.signOut command
+        // uncaught, reported as a failed command with a stack trace, for a
+        // state that is not a failure. Answered with guidance instead,
+        // the same shape as the no-signOut() case just below.
+        const resolved = await resolve();
+        if (!resolved) {
+          const result: ForgeSignOutResult = {
+            success: false,
+            guidance: 'No pull request provider is configured for this repository — nothing to sign out of.',
+          };
+          return result;
+        }
         // Optional on ForgeProvider: a provider that only consumes a
         // session it does not own (e.g. one built on VS Code's built-in
         // `github` provider) has no API to remove one. Answer with
