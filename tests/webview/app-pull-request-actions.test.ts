@@ -43,7 +43,10 @@ function stubApp(overrides: Partial<Record<string, unknown>> = {}) {
       case 'git.isOnCurrentBranch': return { onBranch: false };
       case 'graph.build': return { totalRows: 0, maxLane: 0, layoutVersion: 1 };
       case 'graph.getWindow': return { nodes: [], edges: [], startRow: 0, endRow: 0, maxLane: 0, layoutVersion: 1 };
-      case 'graph.getRow': return { row: null };
+      // A real row: these tests aren't about the head-commit scroll, and a
+      // `null` row now surfaces the (correct, but here irrelevant) "branch
+      // may not be fetched" notice once the graph build completes.
+      case 'graph.getRow': return { row: 0 };
       case 'forge.status': return {
         available: true, providerName: 'Bitbucket', signedIn: true,
         capabilities: {

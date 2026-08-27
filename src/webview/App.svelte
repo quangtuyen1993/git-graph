@@ -110,6 +110,19 @@
   /** Handle of the timeout that owns the message currently on screen, if any. */
   let transientMessageTimer: ReturnType<typeof setTimeout> | undefined;
 
+  interface TransientMessageAction {
+    label: string;
+    run: () => void;
+  }
+
+  /**
+   * The action offered alongside the banner text, if any. Only a message
+   * shown WITH an action skips the auto-clear timer below — a "Fetch" button
+   * that vanished on its own after five seconds would be worse than not
+   * offering one.
+   */
+  let transientMessageAction: TransientMessageAction | null = null;
+
   function cancelTransientMessage(): void {
     if (transientMessageTimer !== undefined) clearTimeout(transientMessageTimer);
     transientMessageTimer = undefined;
@@ -122,9 +135,11 @@
    * pending timer, and a timer only clears the message it armed for, which it
    * confirms by finding its own handle still current.
    */
-  function showTransientMessage(message: string): void {
+  function showTransientMessage(message: string, action: TransientMessageAction | null = null): void {
     cancelTransientMessage();
     error = message;
+    transientMessageAction = action;
+    if (action) return;
     const handle = setTimeout(() => {
       if (transientMessageTimer !== handle) return;
       transientMessageTimer = undefined;
@@ -133,10 +148,21 @@
     transientMessageTimer = handle;
   }
 
+  /** Runs the banner's offered action, if any, and clears the banner immediately. */
+  function handleTransientMessageAction(): void {
+    const action = transientMessageAction;
+    if (!action) return;
+    cancelTransientMessage();
+    error = '';
+    transientMessageAction = null;
+    action.run();
+  }
+
   /** Startup failed: the banner stays until the view is reloaded. */
   function showFatalError(message: string): void {
     cancelTransientMessage();
     error = message;
+    transientMessageAction = null;
     status = 'Error';
   }
 
@@ -238,6 +264,68 @@
   let maxLane = 0;
   let layoutVersion: number | null = null;
   let graphWindow: GraphWindow | null = null;
+
+  /**
+   * Count of `refreshGraph()` calls currently in flight. The graph builds
+   * progressively and `layoutVersion` only ever moves from null to a real
+   * value on a successful build, so on its own it cannot distinguish "no
+   * build has completed yet because one is running" from "no build has
+   * completed and none is running" (e.g. before the very first call, or
+   * after every attempt so far has failed). This counter is what makes that
+   * distinction — see `isGraphReady`/`waitForGraphReady` below.
+   */
+  let graphRefreshesInFlight = 0;
+  /** Re-registering waiters for the next `graphRefreshesInFlight` transition to 0. */
+  let graphBuildSettleWaiters: Array<() => void> = [];
+
+  function notifyGraphBuildSettled(): void {
+    if (graphRefreshesInFlight > 0) return;
+    const waiters = graphBuildSettleWaiters;
+    graphBuildSettleWaiters = [];
+    waiters.forEach((resolve) => resolve());
+  }
+
+  /** True only once a build has actually completed and nothing else is running. */
+  function isGraphReady(): boolean {
+    return layoutVersion !== null && graphRefreshesInFlight === 0;
+  }
+
+  /**
+   * Bounds how long a caller will wait for `isGraphReady()` to become true.
+   * Without this, a build that never completes — a hung git process, a
+   * persistently failing refresh — would turn a "still loading" state into a
+   * permanent spinner instead of eventually landing on a definite answer.
+   */
+  const GRAPH_READY_WAIT_TIMEOUT_MS = 20_000;
+
+  /**
+   * Resolves the next time the graph reaches a settled, ready state, or after
+   * `GRAPH_READY_WAIT_TIMEOUT_MS`, whichever comes first. Re-checks on every
+   * settle event rather than the first one: a build that fails (leaving
+   * `layoutVersion` null) still counts as "settled" for `graphRefreshesInFlight`,
+   * so this must keep waiting for the next attempt rather than resolving early
+   * on a settle that did not actually finish loading anything.
+   */
+  function waitForGraphReady(): Promise<void> {
+    if (isGraphReady()) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      let settled = false;
+      const timer = setTimeout(finish, GRAPH_READY_WAIT_TIMEOUT_MS);
+      function finish(): void {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      }
+      function check(): void {
+        if (settled) return;
+        if (isGraphReady()) { finish(); return; }
+        graphBuildSettleWaiters.push(check);
+      }
+      graphBuildSettleWaiters.push(check);
+    });
+  }
+
   let selectedBranchFilters: string[] = [];
   let selectedSidebarBranch: string | null = null;
   let focusedBranchHash: string | null = null;
@@ -383,6 +471,8 @@
   $: branchPullRequests = deriveBranchPullRequests(pullRequests);
 
   let selectedPullRequestId: string | null = null;
+  /** True while `scrollToPullRequestHead` is waiting on `waitForGraphReady`. */
+  let pullRequestScrollPending = false;
   let pullRequestDetail: PullRequestDetailData | null = null;
   let pullRequestComments: ForgeComment[] = [];
   /**
@@ -552,28 +642,73 @@
 
   /**
    * Scrolls to a pull request's head commit through the same `graph.getRow`
-   * lookup commit search uses. When the commit isn't in the loaded graph —
-   * the common case for a colleague's pull request whose branch was never
-   * fetched locally — this says so, the same way `revealSearchMatch` explains
-   * a search match the branch filter excludes, rather than moving nothing and
-   * leaving the user to guess why.
+   * lookup commit search uses. A miss has two very different causes: the
+   * branch genuinely isn't fetched locally, or the graph — which builds
+   * progressively — simply hasn't got there yet. Only the first is true
+   * often enough to say out loud; the second is a lookup that should retry
+   * once the build settles, via `isGraphReady`/`waitForGraphReady`, rather
+   * than an explanation that might be wrong. Only once a build has actually
+   * completed and the commit is still missing does the not-fetched message
+   * — now paired with a Fetch action — earn its place, the same way
+   * `revealSearchMatch` explains a search match the branch filter excludes
+   * rather than moving nothing and leaving the user to guess why.
    */
-  async function scrollToPullRequestHead(hash: string): Promise<void> {
+  async function scrollToPullRequestHead(pullRequestId: string, hash: string): Promise<void> {
+    if (!scrollContainer) return;
+
+    if (!isGraphReady()) {
+      pullRequestScrollPending = true;
+      await waitForGraphReady();
+      pullRequestScrollPending = false;
+      // A different pull request took over, or the panel moved on, while
+      // this was waiting — scrolling now would land somewhere nobody asked
+      // for.
+      if (selectedPullRequestId !== pullRequestId || !scrollContainer) return;
+    }
+
     const requestedLayoutVersion = layoutVersion;
-    if (requestedLayoutVersion === null || !scrollContainer) return;
+    if (requestedLayoutVersion === null) {
+      // The wait above timed out, or every build attempt since has failed,
+      // without a single one completing — we genuinely don't know whether
+      // the branch is fetched, so claiming it isn't would be exactly the
+      // kind of guess this fix exists to avoid.
+      showTransientMessage("The graph hasn't finished loading — try again in a moment.");
+      return;
+    }
+
     try {
       const result = await bridge.send('graph.getRow', {
         hash, layoutVersion: requestedLayoutVersion,
       }) as { row: number | null };
-      if (requestedLayoutVersion !== layoutVersion) return;
+      if (requestedLayoutVersion !== layoutVersion || selectedPullRequestId !== pullRequestId) return;
       if (result.row === null) {
-        showTransientMessage("This pull request's head commit isn't in the loaded graph — the branch may not be fetched locally.");
+        showTransientMessage(
+          "This pull request's head commit isn't in the loaded graph — the branch may not be fetched locally.",
+          { label: 'Fetch', run: () => { void fetchAndScrollToPullRequestHead(pullRequestId, hash); } },
+        );
         return;
       }
       await scrollToGraphRow(result.row);
     } catch {
       // The layout moved on mid-lookup; the next selection starts clean.
     }
+  }
+
+  /**
+   * The action offered alongside the not-fetched notice. Fetches `origin` —
+   * the same remote the branch context menu's own Fetch action uses — then
+   * retries the lookup once the resulting rebuild lands.
+   */
+  async function fetchAndScrollToPullRequestHead(pullRequestId: string, hash: string): Promise<void> {
+    try {
+      await runDirectMutation('Fetching…', () => bridge.send('git.fetch', { remote: 'origin' }) as Promise<void>);
+    } catch (e) {
+      if (selectedPullRequestId !== pullRequestId) return;
+      showTransientMessage(messageOf(e));
+      return;
+    }
+    if (selectedPullRequestId !== pullRequestId) return;
+    await scrollToPullRequestHead(pullRequestId, hash);
   }
 
   async function handlePullRequestSelect(event: CustomEvent<{ id: string }>): Promise<void> {
@@ -605,7 +740,7 @@
       pullRequestDetail = detail;
       pullRequestComments = commentsResult.comments;
       pullRequestFiles = filesResult.files;
-      await scrollToPullRequestHead(detail.sourceCommit);
+      await scrollToPullRequestHead(id, detail.sourceCommit);
     } catch (e) {
       if (selectedPullRequestId !== id) return;
       showTransientMessage(messageOf(e));
@@ -1220,6 +1355,7 @@
     const branchFilters = selectedBranchFilters;
     graphWindowRequestGate.issue();
     loading = false;
+    graphRefreshesInFlight += 1;
 
     try {
       const [nextBranches, nextTags, nextStashes, nextWorktrees, nextSubmodules, workingTreeStatus, build] = await Promise.all([
@@ -1294,6 +1430,9 @@
         return;
       }
       throw refreshError;
+    } finally {
+      graphRefreshesInFlight -= 1;
+      notifyGraphBuildSettled();
     }
   }
 
@@ -2429,6 +2568,18 @@
       <span>{mutationProgress}</span>
     </div>
   {/if}
+  {#if pullRequestScrollPending}
+    <!-- A `graph.getRow` miss while the graph is still building is not a
+         failure — it just hasn't got there yet. This says so and retries,
+         rather than the not-fetched banner below, which is only true once a
+         completed build still lacks the commit. -->
+    <div class="mutation-progress" aria-live="polite">
+      <span class="mutation-spinner" aria-hidden="true">
+        <LoadingSpinner label="Waiting for the graph to finish loading…" />
+      </span>
+      <span>Waiting for the graph to finish loading…</span>
+    </div>
+  {/if}
   <header class="toolbar">
     <button
       class="toolbar-icon-btn"
@@ -2516,7 +2667,16 @@
   </header>
 
   {#if error}
-    <div class="error-banner">{error}</div>
+    <div class="error-banner">
+      <span class="error-banner-text">{error}</span>
+      {#if transientMessageAction}
+        <button
+          type="button"
+          class="error-banner-action"
+          on:click={handleTransientMessageAction}
+        >{transientMessageAction.label}</button>
+      {/if}
+    </div>
   {/if}
 
   <div class="content-area">
@@ -2919,12 +3079,36 @@
   }
 
   .error-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
     padding: 6px 12px;
     background: var(--vscode-inputValidation-errorBackground, #5a1d1d);
     color: var(--vscode-errorForeground, #f44747);
     font-size: 12px;
     flex-shrink: 0;
     border-bottom: 1px solid var(--vscode-inputValidation-errorBorder, #be1100);
+  }
+
+  .error-banner-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .error-banner-action {
+    flex-shrink: 0;
+    padding: 2px 10px;
+    border: 1px solid var(--vscode-button-border, transparent);
+    border-radius: 2px;
+    background: var(--vscode-button-background, #0e639c);
+    color: var(--vscode-button-foreground, #fff);
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .error-banner-action:hover {
+    background: var(--vscode-button-hoverBackground, #1177bb);
   }
 
   /* Content area: 3-panel layout */
