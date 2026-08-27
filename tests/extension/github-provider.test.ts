@@ -104,6 +104,22 @@ describe('GitHubCloudProvider', () => {
     expect(stub.getText).toHaveBeenCalledWith('/repos/acme/mpos/pulls/118', { Accept: 'application/vnd.github.v3.diff' });
   });
 
+  // Ledger item: the untested `async` on getPullRequestDiff. `base(repo)`
+  // throws synchronously on a traversal segment; the method only needs to be
+  // `async` (rather than returning `this.deps.api.getText(...)` directly
+  // from a non-async function) so that throw becomes a promise rejection
+  // instead of an uncaught synchronous exception reaching a caller that
+  // expects a Promise. getPullRequest's own traversal guard is covered
+  // above — this method's was not.
+  it('rejects rather than throwing synchronously for a traversal segment', async () => {
+    const { provider } = build();
+    let result!: Promise<string>;
+    expect(() => {
+      result = provider.getPullRequestDiff({ host: 'github.com', owner: '..', name: 'evil' }, '118');
+    }).not.toThrow();
+    await expect(result).rejects.toMatchObject({ name: 'ForgeError' });
+  });
+
   it('lists changed files through the files endpoint', async () => {
     const { provider, stub } = build();
     const files = await provider.getPullRequestFiles(repo, '118');
@@ -278,7 +294,13 @@ describe('GitHubCloudProvider', () => {
     { host: 'github.com', owner: '.', name: 'evil' },
   ])('rejects a ForgeRepoRef with a traversal segment (%j) rather than requesting it', async (unsafeRepo) => {
     const { provider, stub } = build();
-    await expect(provider.getPullRequest(unsafeRepo, '118')).rejects.toBeInstanceOf(Error);
+    // `toBeInstanceOf(Error)` alone would also pass for an unrelated crash
+    // (a broken stub, a typo in `stub` itself) — assert the specific guard
+    // fired, not merely that something rejected.
+    await expect(provider.getPullRequest(unsafeRepo, '118')).rejects.toMatchObject({
+      name: 'ForgeError',
+      hostMessage: `Invalid repository reference: ${unsafeRepo.owner}/${unsafeRepo.name}`,
+    });
     expect(stub.getJson).not.toHaveBeenCalled();
   });
 });
