@@ -245,7 +245,7 @@ Step 3 exists so a mistyped or under-scoped token fails at the moment of entry, 
 account that was authenticated, rather than surfacing later as an unexplained empty PR list.
 
 Required token scopes, which the sign-in prompt must list verbatim:
-`read:account`, `read:repository:bitbucket`, `read:pullrequest:bitbucket`,
+`read:user:bitbucket`, `read:repository:bitbucket`, `read:pullrequest:bitbucket`,
 `write:pullrequest:bitbucket`.
 
 There is no refresh and no expiry tracking. A 401 clears the session, fires

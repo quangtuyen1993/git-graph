@@ -14,7 +14,9 @@ import { ForgeRegistry } from './services/forge/forge-registry';
 import { ForgeStore } from './services/forge/forge-store';
 import { isAllowedExternalUrl } from './services/forge/url-safety';
 import { BitbucketApi } from './services/forge/bitbucket/bitbucket-api';
-import { BitbucketAuthProvider, BITBUCKET_AUTH_ID, BITBUCKET_AUTH_LABEL } from './services/forge/bitbucket/bitbucket-auth';
+import {
+  BitbucketAuthProvider, BITBUCKET_AUTH_ID, BITBUCKET_AUTH_LABEL, isSignInCancelled,
+} from './services/forge/bitbucket/bitbucket-auth';
 import { BitbucketCloudProvider } from './services/forge/bitbucket/bitbucket-cloud.provider';
 import { promptForBitbucketCredentials, verifyBitbucketCredentials } from './services/forge/bitbucket/bitbucket-sign-in';
 import { GitHubApi } from './services/forge/github/github-api';
@@ -672,7 +674,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand('gitGraphPro.forge.signIn', async () => {
-      await forgeHandler('forge.signIn', {});
+      try {
+        await forgeHandler('forge.signIn', {});
+      } catch (error) {
+        // A cancelled prompt (Escape, or dismissing an input box) is not a
+        // failure — see isSignInCancelled's doc comment for why this checks
+        // that rather than instanceof or the error's message. Letting it
+        // escape here would report the command as failed and log a stack
+        // trace in the Extension Host log for a user pressing Escape.
+        if (isSignInCancelled(error)) return;
+        // Anything else is a real failure the user needs to see. Thrown
+        // uncaught, this becomes VS Code's generic "command resulted in an
+        // error" with a stack trace instead of a readable notification — and
+        // for a verify failure, `error.message` here is already the
+        // provider's own translated description (naming the missing scopes),
+        // not the raw host response: see the comment in bitbucket-auth.ts's
+        // doCreateSession for where and why that translation happens.
+        const message = error instanceof Error ? error.message : String(error);
+        void vscode.window.showErrorMessage(message);
+      }
     }),
     vscode.commands.registerCommand('gitGraphPro.forge.signOut', async () => {
       // forge.signOut can no longer just discard its result: a provider with

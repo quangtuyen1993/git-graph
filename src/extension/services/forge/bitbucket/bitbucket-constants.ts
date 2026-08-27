@@ -16,7 +16,7 @@ export const BITBUCKET_AUTH_LABEL = 'Bitbucket';
  * The sign-in prompt lists them verbatim.
  */
 export const BITBUCKET_TOKEN_SCOPES = [
-  'read:account',
+  'read:user:bitbucket',
   'read:repository:bitbucket',
   'read:pullrequest:bitbucket',
   'write:pullrequest:bitbucket',

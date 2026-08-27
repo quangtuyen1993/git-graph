@@ -37,7 +37,7 @@ Interactive Git graph visualization for VS Code with full workflow operations an
 - Reviewer approval state, comment threads and changed files in the detail panel
 - Selecting a pull request jumps the graph to its head commit
 
-Requires an Atlassian API token with scopes `read:account`, `read:repository:bitbucket`,
+Requires an Atlassian API token with scopes `read:user:bitbucket`, `read:repository:bitbucket`,
 `read:pullrequest:bitbucket`, `write:pullrequest:bitbucket`. Run
 **Git Graph Pro: Sign in to Bitbucket** from the Command Palette. The token is stored in
 VS Code's SecretStorage and never leaves the extension host.

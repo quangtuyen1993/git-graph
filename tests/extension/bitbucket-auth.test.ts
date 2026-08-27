@@ -146,7 +146,7 @@ describe('BitbucketAuthProvider', () => {
       const { provider } = build();
       await provider.createSession(SCOPES);
       expect(await provider.getSessions(SCOPES)).toHaveLength(1);
-      expect(await provider.getSessions(['read:account'])).toHaveLength(1);
+      expect(await provider.getSessions(['read:user:bitbucket'])).toHaveLength(1);
     });
 
     it('returns no session when a requested scope was never granted', async () => {
@@ -218,7 +218,7 @@ describe('BitbucketAuthProvider', () => {
 
   it('names every required scope', () => {
     expect(SCOPES).toEqual([
-      'read:account',
+      'read:user:bitbucket',
       'read:repository:bitbucket',
       'read:pullrequest:bitbucket',
       'write:pullrequest:bitbucket',

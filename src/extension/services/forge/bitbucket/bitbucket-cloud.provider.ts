@@ -8,6 +8,7 @@ import {
 import type { BitbucketApi } from './bitbucket-api';
 import type { BitbucketAuthProvider } from './bitbucket-auth';
 import { BITBUCKET_AUTH_ID, BITBUCKET_AUTH_LABEL, BITBUCKET_TOKEN_SCOPES } from './bitbucket-constants';
+import { describeBitbucketError } from './bitbucket-error-messages';
 import {
   mapComments, mapDiffstat, mapPullRequestDetail, mapPullRequestSummary, mapUser, type RawUser,
 } from './bitbucket-mapper';
@@ -225,13 +226,7 @@ export class BitbucketCloudProvider implements ForgeProvider {
    * renders whatever comes back and never composes advice of its own.
    */
   public describeError(error: ForgeError): string {
-    if (error.kind === 'forbidden') {
-      return `Bitbucket refused the request. The API token is missing a scope. Required: ${BITBUCKET_TOKEN_SCOPES.join(', ')}.`;
-    }
-    if (error.kind === 'not-found') {
-      return 'Cannot access this repository or pull request on Bitbucket — it may be private, or the API token is missing a scope.';
-    }
-    return error.hostMessage;
+    return describeBitbucketError(error);
   }
 
   /**

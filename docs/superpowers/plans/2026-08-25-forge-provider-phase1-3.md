@@ -17,7 +17,7 @@
 - **No provider vocabulary above `forge/bitbucket/`.** Everything else speaks the neutral model in `forge.types.ts`.
 - **No background polling.** Bitbucket Cloud allows roughly 1000 requests/hour.
 - **No test contacts a live API.**
-- Required Atlassian API token scopes, quoted verbatim in the sign-in prompt: `read:account`, `read:repository:bitbucket`, `read:pullrequest:bitbucket`, `write:pullrequest:bitbucket`.
+- Required Atlassian API token scopes, quoted verbatim in the sign-in prompt: `read:user:bitbucket`, `read:repository:bitbucket`, `read:pullrequest:bitbucket`, `write:pullrequest:bitbucket`.
 - Every new source file is added to the `coverage.include` list in `vitest.config.ts`; thresholds stay at statements 80 / lines 80 / functions 80 / branches 70.
 - `vscode` is not importable under vitest. Every test touching it starts with `vi.mock('vscode', () => ({ ... }))`, following `tests/extension/review-runner.test.ts`.
 
@@ -856,7 +856,7 @@ describe('BitbucketAuthProvider', () => {
 
   it('names every required scope', () => {
     expect([...BITBUCKET_TOKEN_SCOPES]).toEqual([
-      'read:account',
+      'read:user:bitbucket',
       'read:repository:bitbucket',
       'read:pullrequest:bitbucket',
       'write:pullrequest:bitbucket',
@@ -898,7 +898,7 @@ const SECRET_KEY = `forge:${BITBUCKET_AUTH_ID}:token`;
  * The sign-in prompt lists them verbatim.
  */
 export const BITBUCKET_TOKEN_SCOPES = [
-  'read:account',
+  'read:user:bitbucket',
   'read:repository:bitbucket',
   'read:pullrequest:bitbucket',
   'write:pullrequest:bitbucket',
@@ -3284,7 +3284,7 @@ Add to `README.md` under Features:
 - Reviewer approval state, comment threads and changed files in the detail panel
 - Selecting a pull request jumps the graph to its head commit
 
-Requires an Atlassian API token with scopes `read:account`, `read:repository:bitbucket`,
+Requires an Atlassian API token with scopes `read:user:bitbucket`, `read:repository:bitbucket`,
 `read:pullrequest:bitbucket`, `write:pullrequest:bitbucket`. Run
 **Git Graph Pro: Sign in to Bitbucket** from the Command Palette. The token is stored in
 VS Code's SecretStorage and never leaves the extension host.

@@ -1,12 +1,58 @@
 import * as vscode from 'vscode';
 import { createHash } from 'crypto';
+import { ForgeError } from '../forge.types';
 import { BITBUCKET_AUTH_ID, BITBUCKET_AUTH_LABEL, BITBUCKET_TOKEN_SCOPES } from './bitbucket-constants';
+import { describeBitbucketError } from './bitbucket-error-messages';
 
 // Re-exported so existing importers of this module keep working; the values
 // themselves live in bitbucket-constants.ts, which does not import 'vscode'.
 export { BITBUCKET_AUTH_ID, BITBUCKET_AUTH_LABEL, BITBUCKET_TOKEN_SCOPES };
 
 const SECRET_KEY = `forge:${BITBUCKET_AUTH_ID}:token`;
+
+/**
+ * `.name` a cancelled sign-in is tagged with — see `BitbucketSignInCancelledError`
+ * below for why this, and not `instanceof`, is what a caller must check.
+ */
+const SIGN_IN_CANCELLED_NAME = 'BitbucketSignInCancelledError';
+
+/**
+ * Thrown by `createSession` when the credential prompt is dismissed.
+ * `vscode.AuthenticationProvider.createSession` has no "cancelled" outcome
+ * besides throwing (see the comment on that throw below), so this is how a
+ * cancelled sign-in is expressed — but it must still be distinguishable from
+ * a real failure by whoever calls `vscode.authentication.getSession({
+ * createIfNone: true })`, which is what actually invokes `createSession`.
+ *
+ * That call is not a same-process function call: VS Code's authentication
+ * broker lives outside the extension host, so a rejection from this
+ * provider's `createSession` round-trips through it before reaching the
+ * caller. That round trip reconstructs a plain `Error`, copying `name`,
+ * `message` and `stack` but dropping the subclass — an `instanceof` check
+ * against this class at the call site would silently never match. `.name`
+ * survives the round trip (it is copied, not derived from the prototype),
+ * so `isSignInCancelled` below checks that instead of `instanceof`, and
+ * every caller of this sign-in path must use it rather than matching on
+ * `.message`, which is user-facing prose, not a stable identifier.
+ */
+export class BitbucketSignInCancelledError extends Error {
+  constructor() {
+    super('Sign-in to Bitbucket was cancelled.');
+    this.name = SIGN_IN_CANCELLED_NAME;
+  }
+}
+
+/**
+ * True for a cancelled sign-in, including the plain `Error` a cancelled
+ * `createSession()` call is reconstructed as once it has crossed
+ * `vscode.authentication`'s provider boundary (see `BitbucketSignInCancelledError`
+ * above). Callers on that path — the `gitGraphPro.forge.signIn` command — must
+ * use this rather than `instanceof BitbucketSignInCancelledError`, which only
+ * holds before the round trip.
+ */
+export function isSignInCancelled(error: unknown): boolean {
+  return error instanceof Error && error.name === SIGN_IN_CANCELLED_NAME;
+}
 
 export interface BitbucketCredentials {
   email: string;
@@ -110,11 +156,32 @@ export class BitbucketAuthProvider implements vscode.AuthenticationProvider {
     // createSession must resolve to a session or reject — there is no third
     // option in the interface it implements — so a cancelled prompt becomes
     // a rejection rather than the `undefined` this returned before adoption.
-    if (!entered) throw new Error('Sign-in to Bitbucket was cancelled.');
+    // See BitbucketSignInCancelledError for why callers must check
+    // isSignInCancelled(error) rather than instanceof or .message.
+    if (!entered) throw new BitbucketSignInCancelledError();
 
     // Verify before storing: a token that is mistyped or missing a scope must
     // fail at the moment it is entered, not on the first pull request request.
-    const accountLabel = await this.deps.verify(entered);
+    //
+    // Translated to its final message right here, not left as a ForgeError
+    // for forge-method-handler's catch to translate: that catch only ever
+    // sees this rejection after it has round-tripped through
+    // vscode.authentication's provider boundary (the same one
+    // BitbucketSignInCancelledError's doc comment describes), which
+    // reconstructs a plain Error and drops `kind`/`hostMessage` along with
+    // the subclass — `describeError` can no longer be called meaningfully by
+    // then. This is the only point in the call chain where the ForgeError is
+    // still intact, so it is translated here, reusing the exact wording
+    // `BitbucketCloudProvider.describeError` uses (via `describeBitbucketError`)
+    // rather than composing new text — both call the same function so there is
+    // one place, not two, that knows what a Bitbucket 'forbidden' means.
+    let accountLabel: string;
+    try {
+      accountLabel = await this.deps.verify(entered);
+    } catch (error) {
+      if (error instanceof ForgeError) throw new Error(describeBitbucketError(error));
+      throw error;
+    }
 
     const stored: StoredCredentials = { ...entered, accountLabel };
     await this.deps.secrets.store(SECRET_KEY, JSON.stringify(stored));
