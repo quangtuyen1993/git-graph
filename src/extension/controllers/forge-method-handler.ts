@@ -321,7 +321,15 @@ function applyOptimisticReviewStatus(
   if (!accountLabel) return detail;
   const idx = detail.reviewers.findIndex((reviewer) => reviewer.user.displayName === accountLabel);
   if (idx === -1) {
-    return { ...detail, reviewers: [...detail.reviewers, { user: { displayName: accountLabel, accountId: '' }, status }] };
+    // No real accountId is available here — a ForgeSession carries only a
+    // display label, and a host's account ids are opaque, host-issued
+    // strings this code has no way to fabricate. `optimistic:` is a prefix
+    // no real accountId would ever have, so a caller that starts treating
+    // accountId as a lookup key fails loudly on this entry — rather than
+    // an empty string quietly colliding with any other reviewer whose
+    // accountId is also blank.
+    const user = { displayName: accountLabel, accountId: `optimistic:${accountLabel}` };
+    return { ...detail, reviewers: [...detail.reviewers, { user, status }] };
   }
   return {
     ...detail,

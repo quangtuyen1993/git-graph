@@ -573,22 +573,41 @@
     if (strategies.length === 0) return;
     const choices = strategies.map((strategy) => MERGE_STRATEGY_LABEL[strategy] ?? strategy);
 
+    // Confirming and the merge call itself are the only two things that can
+    // make this fail — and a failure here means the merge genuinely did not
+    // happen, so it is right to report as one. Nothing below this try/catch
+    // can throw: no read-after-write follows a successful merge (see the
+    // comment below), so a hiccup in some later refresh can never surface as
+    // "the merge failed" for an action that actually succeeded and cannot be
+    // undone.
+    let strategy: string;
     try {
       const answer = await bridge.send('ui.confirm', {
         message: `Merge pull request #${pr.number} "${pr.title}" into ${pr.targetBranch}?`,
         choices,
       }) as string | null;
       if (!answer) return;
-      const strategy = strategies[choices.indexOf(answer)];
+      strategy = strategies[choices.indexOf(answer)];
 
       await bridge.send('forge.pr.merge', { id: pr.id, strategy });
-      if (selectedPullRequestId === pr.id) {
-        pullRequestDetail = await bridge.send('forge.pr.get', { id: pr.id }) as PullRequestDetailData;
-      }
-      await loadPullRequests();
     } catch (e) {
       showTransientMessage(messageOf(e));
+      return;
     }
+
+    /*
+     * Read-after-write, deliberately: consistent with approve/request
+     * changes, this does not re-read the host to reflect its own write.
+     * A merge that just succeeded is known to have succeeded — patching
+     * `state` locally and dropping the row from the (open-filtered)
+     * sidebar list costs nothing and cannot show the pull request as
+     * still open the way an immediate forge.pr.get/forge.pr.list would if
+     * Bitbucket's read side is still lagging the merge by a moment. The
+     * handler already invalidated the cache and broadcast forge.changed,
+     * so the next natural refresh still converges on the host's own state.
+     */
+    if (selectedPullRequestId === pr.id) pullRequestDetail = { ...pr, state: 'merged' };
+    pullRequests = pullRequests.filter((candidate) => candidate.id !== pr.id);
   }
 
   /**

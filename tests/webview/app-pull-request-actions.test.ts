@@ -144,4 +144,65 @@ describe('Merging a pull request from the detail panel', () => {
 
     await waitFor(() => expect(mergeCall).toEqual({ id: 'pr-1', strategy: 'squash' }));
   });
+
+  // Read-after-write, deliberately chosen to differ from a naive refetch:
+  // a successful merge is applied locally (panel state, sidebar list) rather
+  // than re-read from the host, so a moment of Bitbucket's read side lagging
+  // the write cannot show the pull request as still open right after it was
+  // merged. This also means there is nothing left to fail after a
+  // successful merge — see the next test for the defect that used to cause.
+  it('applies the merge locally on success — no forge.pr.get/forge.pr.list follows it', async () => {
+    stubApp({ 'ui.confirm': () => 'Squash', 'forge.pr.merge': () => ({ success: true }) });
+    const rendered = render(App);
+    await selectPullRequest(rendered);
+    send.mockClear();
+
+    await fireEvent.click(rendered.getByRole('button', { name: /^merge$/i }));
+
+    await waitFor(() => expect(send).toHaveBeenCalledWith('forge.pr.merge', { id: 'pr-1', strategy: 'squash' }));
+    expect(send).not.toHaveBeenCalledWith('forge.pr.get', expect.anything());
+    expect(send).not.toHaveBeenCalledWith('forge.pr.list', expect.anything());
+    // The panel reflects the merge...
+    await waitFor(() => expect(rendered.getByText('merged')).toBeInTheDocument());
+    // ...and the pull request no longer shows in the (open-filtered) sidebar list.
+    expect(rendered.queryByRole('button', { name: /Add widgets/i })).not.toBeInTheDocument();
+  });
+
+  // Regression: handlePullRequestMerge used to wrap the merge call and a
+  // follow-up forge.pr.get/loadPullRequests in one try/catch, so a hiccup in
+  // that follow-up read reported as "the merge failed" for a merge that had
+  // actually already succeeded — on the one action here that cannot be
+  // undone. Nothing follows a successful merge now (see the test above), so
+  // there is nothing left that could misattribute a later failure to it.
+  it('shows no error banner when the merge itself succeeds', async () => {
+    stubApp({ 'ui.confirm': () => 'Squash', 'forge.pr.merge': () => ({ success: true }) });
+    const rendered = render(App);
+    await selectPullRequest(rendered);
+    send.mockClear();
+
+    await fireEvent.click(rendered.getByRole('button', { name: /^merge$/i }));
+
+    await waitFor(() => expect(rendered.getByText('merged')).toBeInTheDocument());
+    expect(rendered.container.querySelector('.error-banner')?.textContent?.trim() ?? '').toBe('');
+  });
+
+  // The merge call itself failing is the one case that should report as a
+  // merge failure — and the host's own reason should reach the user.
+  it('shows the merge failure and leaves the pull request state unchanged when the merge call rejects', async () => {
+    stubApp({
+      'ui.confirm': () => 'Squash',
+      'forge.pr.merge': () => { throw new Error('This pull request has conflicts and cannot be merged.'); },
+    });
+    const rendered = render(App);
+    await selectPullRequest(rendered);
+    send.mockClear();
+
+    await fireEvent.click(rendered.getByRole('button', { name: /^merge$/i }));
+
+    await waitFor(() => expect(
+      rendered.container.querySelector('.error-banner')?.textContent,
+    ).toContain('This pull request has conflicts and cannot be merged.'));
+    expect(rendered.getByText('open')).toBeInTheDocument();
+    expect(rendered.getByRole('button', { name: /Add widgets/i })).toBeInTheDocument();
+  });
 });

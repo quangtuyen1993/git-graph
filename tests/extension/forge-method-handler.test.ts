@@ -374,15 +374,26 @@ describe('forge namespace', () => {
       expect(listResult.pullRequests[0].reviewers[0].status).toBe('approved');
     });
 
-    it('adds the signed-in account as a reviewer if it was not already one', async () => {
+    it('adds the signed-in account as a reviewer, with a synthetic accountId, when it was not already one', async () => {
       const provider = new FakeForgeProvider({
         host: 'bitbucket.org',
         pullRequests: [fakePullRequest({ id: '1', reviewers: [] })],
       });
       const { handle } = build({ provider });
+      // FakeForgeProvider.setReviewStatus realistically mutates its own
+      // pullRequests (see its doc comment) — the ForgeStore cache holds the
+      // very same object reference, so that mutation would otherwise reach
+      // this response before applyOptimisticReviewStatus's own idx===-1
+      // branch runs, masking exactly the case this test exists to pin: no
+      // real accountId is available for a reviewer this code adds on its
+      // own, so it must be an obviously synthetic one, never ''.
+      provider.setReviewStatus = async () => {};
 
       const result = await handle('forge.pr.approve', { id: '1' }) as { reviewers: { user: unknown; status: string }[] };
-      expect(result.reviewers).toEqual([{ user: FAKE_USER, status: 'approved' }]);
+
+      expect(result.reviewers).toEqual([
+        { user: { displayName: 'An Tran', accountId: 'optimistic:An Tran' }, status: 'approved' },
+      ]);
     });
 
     // Requirement 4: never re-reads the host to build its response — the
