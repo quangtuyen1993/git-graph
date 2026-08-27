@@ -288,6 +288,38 @@ describe('ReviewApp redesign', () => {
       expect(row).toBeDisabled();
     });
 
+    // Gap found in review: the review.target broadcast handler (App.svelte's
+    // "Review with AI" handoff arrives this way) only called applyTarget +
+    // refreshFiles, which populated the file list but never selectedPr — so
+    // the #<number> <title> + reviewer chip summary never rendered, even
+    // though init()'s own restore path populates it via
+    // loadPullRequestContext. The handoff must present its target the same
+    // way the restore path and a manual combobox selection both already do.
+    it('a review.target broadcast for a pull request renders the number, title and reviewer chips', async () => {
+      stub({ 'forge.status': { available: true }, 'forge.pr.list': { pullRequests } });
+      const { getByRole, getByText } = render(ReviewApp);
+      await waitFor(() => expect(getByRole('tab', { name: '2 Branches' })).toBeInTheDocument());
+      // init() itself has a 'pr' restore branch (loadPullRequestContext when
+      // mode/selectedPrId already say 'pr' by the time init() reaches its
+      // tail). Firing the broadcast before init() finishes its own async
+      // chain lets that unrelated code path "rescue" the assertions below
+      // even against the bug this test exists to catch — waiting for
+      // review.compare (init's default-mode tail call) proves init() has
+      // fully settled first.
+      await waitFor(() => expect(send).toHaveBeenCalledWith('review.compare', expect.anything()));
+
+      const targetHandler = eventHandler('review.target');
+      targetHandler({ kind: 'pr', baseRef: '', headRef: '', prId: 'pr-1', subject: 'Add widgets' });
+
+      await waitFor(() => expect(getByRole('tab', { name: 'Pull Request' })).toHaveAttribute('aria-selected', 'true'));
+      await waitFor(() => {
+        expect(getByText('#42')).toBeInTheDocument();
+        expect(getByText('Add widgets')).toBeInTheDocument();
+        expect(getByText('✓1')).toBeInTheDocument();
+        expect(getByText('✗1')).toBeInTheDocument();
+      });
+    });
+
     it('renders a pr history entry by its number and title, not a sha pair', async () => {
       stub({
         'forge.status': { available: true },

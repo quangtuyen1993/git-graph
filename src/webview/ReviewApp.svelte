@@ -245,10 +245,19 @@
     }
   }
 
-  /** Dispatches to the git-based compare or the pull request file fetch, whichever the current mode needs. */
+  /**
+   * Dispatches to the git-based compare or the pull request context fetch,
+   * whichever the current mode needs. Routes through loadPullRequestContext
+   * rather than loadPullRequestFiles directly so every path that lands here —
+   * a mode switch, a repo change, and the review.target broadcast from
+   * App.svelte's "Review with AI" handoff — populates selectedPr (the
+   * #<number> <title> and reviewer chips) exactly like init()'s own restore
+   * path already does. Only the restore path called loadPullRequestContext
+   * before; the divergence was the bug.
+   */
   function refreshFiles(): void {
     if (mode === 'pr') {
-      if (selectedPrId) void loadPullRequestFiles(selectedPrId);
+      if (selectedPrId) void loadPullRequestContext(selectedPrId);
       else files = null;
     } else {
       void compare();

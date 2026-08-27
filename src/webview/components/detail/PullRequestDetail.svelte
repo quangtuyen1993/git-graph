@@ -48,10 +48,13 @@
   export let files: ChangedFile[] = [];
   export let capabilities: ForgeCapabilities;
   /*
-   * No capability backs this yet — the design spec assigns AI review to a
-   * later phase. Defaulting false, with no wiring from App.svelte, keeps the
-   * button honest the same way the four `capabilities.*` gates below do:
-   * absent until the thing it triggers actually exists.
+   * App.svelte now always passes true — the review panel handoff (Phase 4
+   * task 3) exists. Kept as its own prop rather than folded into
+   * `capabilities` because it isn't a provider capability: every pull
+   * request can be reviewed, regardless of what the forge provider supports.
+   * Defaults false only so a caller that forgets to pass it gets the same
+   * honest behaviour the four `capabilities.*` gates below have: absent
+   * unless the thing it triggers actually exists.
    */
   export let reviewWithAiEnabled = false;
 
