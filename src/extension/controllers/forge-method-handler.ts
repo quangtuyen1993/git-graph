@@ -1,10 +1,11 @@
 import { parseRemoteUrl } from '../services/forge/remote-url';
-import { DIFF_TTL_MS, PR_DETAIL_TTL_MS, PR_LIST_TTL_MS } from '../services/forge/forge-store';
+import { DIFF_TTL_MS, PR_DETAIL_TTL_MS, PR_LIST_TTL_MS, REPO_INFO_TTL_MS } from '../services/forge/forge-store';
 import type { ForgeStore } from '../services/forge/forge-store';
 import type { ForgeRegistry } from '../services/forge/forge-registry';
 import { ForgeError } from '../services/forge/forge.types';
 import type {
-  ForgeCapabilities, ForgeProvider, ForgeRepoRef, MergeStrategy, PullRequestDetail, PullRequestListState, ReviewStatus,
+  CreatePullRequestInput, ForgeCapabilities, ForgeProvider, ForgeRepoRef, MergeStrategy, PullRequestDetail,
+  PullRequestListState, PullRequestSummary, ReviewStatus,
 } from '../services/forge/forge.types';
 
 export interface ForgeStatus {
@@ -44,6 +45,27 @@ interface Resolved {
 }
 
 const LIST_STATES: ReadonlySet<string> = new Set(['open', 'merged', 'closed']);
+
+/**
+ * Thrown by `forge.pr.create` when the host reports a duplicate — a pull
+ * request between these branches already exists. Not a `ForgeError`
+ * deliberately: `handle()`'s catch only translates `ForgeError` instances,
+ * and this must reach the webview with its own message (naming the existing
+ * pull request) and `data` intact, not be rewritten into `error.hostMessage`.
+ * `code` rides the same `err.code` → `response.error.kind` channel
+ * `BranchNotFullyMergedError` already uses (see message-router.ts); `data`
+ * rides the sibling `err.data` → `response.error.data` channel this phase adds.
+ */
+export class PullRequestDuplicateError extends Error {
+  public readonly code = 'PR_DUPLICATE';
+  public readonly data: { existing: PullRequestSummary };
+
+  constructor(existing: PullRequestSummary) {
+    super(`PR #${existing.number} already exists for these branches`);
+    this.name = 'PullRequestDuplicateError';
+    this.data = { existing };
+  }
+}
 
 export function createForgeHandler(deps: ForgeHandlerDeps) {
   async function resolve(): Promise<Resolved | undefined> {
@@ -196,6 +218,52 @@ export function createForgeHandler(deps: ForgeHandlerDeps) {
           () => provider.getPullRequestFiles(repo, id),
         );
         return { files: cached.value };
+      }
+
+      case 'forge.repoInfo': {
+        const { provider, repo, prefix } = await requireForge();
+        const cached = await deps.store.fetch(`${prefix}repoInfo`, REPO_INFO_TTL_MS, () => provider.getRepoInfo(repo));
+        return cached.value;
+      }
+
+      case 'forge.pr.reviewerSuggestions': {
+        const { provider, repo, prefix } = await requireForge();
+        const cached = await deps.store.fetch(
+          `${prefix}reviewerSuggestions`, REPO_INFO_TTL_MS, () => provider.listReviewerCandidates(repo));
+        return { reviewers: cached.value };
+      }
+
+      case 'forge.pr.create': {
+        const { provider, repo, prefix } = await requireForge();
+        const input: CreatePullRequestInput = {
+          title: String(p.title ?? ''),
+          description: typeof p.description === 'string' ? p.description : '',
+          sourceBranch: String(p.sourceBranch ?? ''),
+          targetBranch: String(p.targetBranch ?? ''),
+          ...(Array.isArray(p.reviewers) && p.reviewers.length > 0 ? { reviewers: p.reviewers as string[] } : {}),
+          ...(typeof p.closeSourceBranch === 'boolean' ? { closeSourceBranch: p.closeSourceBranch } : {}),
+        };
+
+        try {
+          const created = await provider.createPullRequest(repo, input);
+          deps.store.invalidate(prefix);
+          deps.broadcast('forge.changed', {});
+          return created;
+        } catch (error) {
+          // A duplicate reports the *existing* pull request (spec's error
+          // table: "PR #118 already exists for these branches" + open
+          // button), which needs the open list — reused via the store's own
+          // `list:open` key so this doesn't cost a second uncached fetch on
+          // top of one the sidebar likely already warmed.
+          if (error instanceof ForgeError && error.kind === 'duplicate') {
+            const list = await deps.store.fetch(
+              `${prefix}list:open`, PR_LIST_TTL_MS, () => provider.listPullRequests(repo, { state: 'open' }));
+            const existing = list.value.find((candidate) =>
+              candidate.sourceBranch === input.sourceBranch && candidate.targetBranch === input.targetBranch);
+            if (existing) throw new PullRequestDuplicateError(existing);
+          }
+          throw error;
+        }
       }
 
       case 'forge.pr.openExternal': {

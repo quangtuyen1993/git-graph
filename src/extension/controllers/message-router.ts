@@ -62,10 +62,14 @@ export class MessageRouter {
         const kind = typeof (err as { code?: unknown })?.code === 'string'
           ? (err as { code: string }).code
           : undefined;
+        // A thrown error may also carry structured `data` — e.g.
+        // PullRequestDuplicateError's existing pull request — for a caller
+        // that needs more than a message and a kind to act on the failure.
+        const data = (err as { data?: unknown })?.data;
         response = {
           id: request.id,
           type: 'response',
-          error: { code: -1, message: errorMessage, ...(kind ? { kind } : {}) }
+          error: { code: -1, message: errorMessage, ...(kind ? { kind } : {}), ...(data !== undefined ? { data } : {}) }
         };
       }
     }

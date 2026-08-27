@@ -33,6 +33,26 @@ interface PagedResponse<T> {
 }
 
 /**
+ * Duplicate detection is body-aware (see `classify`) and scoped to callers
+ * that opt in — a bare 400 means something different on every other
+ * endpoint (a malformed body, an invalid reviewer id), so guessing from the
+ * message alone on every request would misclassify those. Only
+ * `createPullRequest` sets this.
+ */
+interface RequestClassifyOpts {
+  detectDuplicate?: boolean;
+}
+
+/**
+ * Bitbucket's wording for "a pull request between these branches is already
+ * open" is prose, not a machine-readable field — this is the pattern
+ * `classify` matches against when `detectDuplicate` is set. Deliberately
+ * loose (case-insensitive, no anchors) so a minor wording change on
+ * Bitbucket's side doesn't silently stop matching.
+ */
+const DUPLICATE_PULL_REQUEST_PATTERN = /already.*(open )?pull request|pull request.*already exists/i;
+
+/**
  * Guards `getPaged` against a malformed or self-referential `next` link
  * spinning forever and burning the request budget. Bitbucket's page sizes
  * make any real pull request list finish in single digits of pages.
@@ -62,12 +82,12 @@ export class BitbucketApi {
     return this.request<string>(path, { method: 'GET' }, 'text');
   }
 
-  public async post<T>(path: string, body: unknown): Promise<T> {
+  public async post<T>(path: string, body: unknown, opts?: RequestClassifyOpts): Promise<T> {
     return this.request<T>(path, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
-    }, 'json');
+    }, 'json', opts);
   }
 
   public async postEmpty(path: string): Promise<void> {
@@ -96,7 +116,9 @@ export class BitbucketApi {
     return collected;
   }
 
-  private async request<T>(path: string, init: RequestInit, parse: 'json' | 'text' | 'none'): Promise<T> {
+  private async request<T>(
+    path: string, init: RequestInit, parse: 'json' | 'text' | 'none', opts?: RequestClassifyOpts,
+  ): Promise<T> {
     const credentials = await this.deps.getCredentials();
     // 401 is the same state the UI shows for an expired token, so a missing
     // credential reuses it rather than inventing a second signed-out path.
@@ -123,7 +145,7 @@ export class BitbucketApi {
         headers: { Accept: 'application/json', ...(init.headers ?? {}), Authorization: authorization },
       });
 
-      if (!response.ok) throw await this.toForgeError(response);
+      if (!response.ok) throw await this.toForgeError(response, opts);
       if (parse === 'none') return undefined as T;
       return (parse === 'text' ? await response.text() : await response.json()) as T;
     } finally {
@@ -131,7 +153,7 @@ export class BitbucketApi {
     }
   }
 
-  private async toForgeError(response: Response): Promise<ForgeError> {
+  private async toForgeError(response: Response, opts?: RequestClassifyOpts): Promise<ForgeError> {
     let hostMessage = response.statusText || `HTTP ${response.status}`;
     try {
       const body = await response.json() as { error?: { message?: string } };
@@ -156,7 +178,10 @@ export class BitbucketApi {
       retryAfterSeconds = clampedPauseMs / 1000;
     }
 
-    return new ForgeError(this.classify(response.status), response.status, hostMessage, retryAfterSeconds);
+    return new ForgeError(
+      this.classify(response.status, hostMessage, opts?.detectDuplicate ?? false),
+      response.status, hostMessage, retryAfterSeconds,
+    );
   }
 
   /**
@@ -185,13 +210,18 @@ export class BitbucketApi {
    * duplicate with a different code again. Everything above the provider
    * switches on the resulting kind and never on the number.
    *
-   * 400 is deliberately 'other', not 'duplicate': Bitbucket returns 400 for
+   * 400 is 'other' by default, not 'duplicate': Bitbucket returns 400 for
    * every malformed request body, unknown merge strategy or invalid reviewer
-   * id, not only for the thing being created already existing. Phase 5's
-   * duplicate-pull-request handling will branch on 'duplicate', and reporting
-   * "already exists" for, say, a typo'd reviewer id would be wrong.
+   * id, not only for the thing being created already existing — classifying
+   * every 400 as a duplicate would misreport a typo'd reviewer id as
+   * "already exists". `detectDuplicate` (set only by `createPullRequest`)
+   * additionally requires the body to actually say so, matched against
+   * `DUPLICATE_PULL_REQUEST_PATTERN`.
    */
-  private classify(status: number): ForgeErrorKind {
+  private classify(status: number, hostMessage: string, detectDuplicate: boolean): ForgeErrorKind {
+    if (detectDuplicate && status === 400 && DUPLICATE_PULL_REQUEST_PATTERN.test(hostMessage)) {
+      return 'duplicate';
+    }
     switch (status) {
       case 401: return 'unauthorized';
       case 403: return 'forbidden';

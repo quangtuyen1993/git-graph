@@ -174,6 +174,46 @@ describe('BitbucketApi', () => {
     await expect(api.getJson('/x')).rejects.toMatchObject({ kind: 'other', status: 400 });
   });
 
+  // Phase 5, task 1, requirement 4: classify() was status-only, so nothing in
+  // the codebase could ever produce ForgeErrorKind 'duplicate' even though a
+  // comment here promised the create path would branch on it. Duplicate
+  // detection must be body-aware, and scoped to callers that opt in
+  // (`detectDuplicate`) — a plain GET (the test above) must never turn a 400
+  // into 'duplicate' just because its message happens to mention one.
+  it("classifies a 400 whose body names an existing pull request as 'duplicate' when the caller opts in", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(
+      { error: { message: 'There is already an open pull request from feature/x to develop.' } },
+      { status: 400 },
+    ));
+    const { api } = build(fetchImpl as never);
+    await expect(api.post('/repositories/acme/mpos/pullrequests', {}, { detectDuplicate: true }))
+      .rejects.toMatchObject({ kind: 'duplicate', status: 400 });
+  });
+
+  // The opt-in must still require the body to actually say so — a 400 for
+  // some other reason (a malformed field, say) on the very same endpoint
+  // must not be misreported as a duplicate just because detectDuplicate was
+  // passed.
+  it('does not classify an unrelated 400 as duplicate even with detectDuplicate set', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({ error: { message: 'Invalid reviewer account id' } }, { status: 400 }));
+    const { api } = build(fetchImpl as never);
+    await expect(api.post('/repositories/acme/mpos/pullrequests', {}, { detectDuplicate: true }))
+      .rejects.toMatchObject({ kind: 'other', status: 400 });
+  });
+
+  // Without the opt-in, even a body that reads like a duplicate must not
+  // become 'duplicate' — detectDuplicate is what scopes this to the create
+  // path, not the message content alone.
+  it('does not classify a duplicate-looking 400 without the caller opting in', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(
+      { error: { message: 'There is already an open pull request from feature/x to develop.' } },
+      { status: 400 },
+    ));
+    const { api } = build(fetchImpl as never);
+    await expect(api.post('/repositories/acme/mpos/pullrequests', {})).rejects.toMatchObject({ kind: 'other' });
+  });
+
   // Finding 2: a server-supplied absolute link (getPaged's `next`, or any
   // caller passing a full URL) must resolve back to the API's own origin —
   // otherwise it would carry the Basic auth header to an arbitrary host.

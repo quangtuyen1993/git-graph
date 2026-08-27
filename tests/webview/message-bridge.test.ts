@@ -26,6 +26,31 @@ describe('MessageBridge', () => {
     await expect(rejected).rejects.toThrow('no');
   });
 
+  // Phase 5: forge.pr.create's duplicate error needs the existing pull
+  // request's data to reach the caller (see message-router.test.ts's
+  // sibling test on the host side), not just a message and a kind.
+  it('attaches error.kind and error.data to the rejection', async () => {
+    const postMessage = vi.fn();
+    vi.stubGlobal('acquireVsCodeApi', () => ({ postMessage, getState: () => ({}), setState: vi.fn() }));
+    const { MessageBridge } = await import('../../src/webview/lib/message-bridge');
+    const bridge = new MessageBridge();
+    const pending = bridge.send('forge.pr.create', {});
+    window.dispatchEvent(new MessageEvent('message', {
+      data: {
+        type: 'response', id: 'req-1',
+        error: {
+          code: -1, message: 'PR #118 already exists for these branches',
+          kind: 'PR_DUPLICATE', data: { existing: { id: '118', number: 118 } },
+        },
+      },
+    }));
+    await expect(pending).rejects.toMatchObject({
+      message: 'PR #118 already exists for these branches',
+      kind: 'PR_DUPLICATE',
+      data: { existing: { id: '118', number: 118 } },
+    });
+  });
+
   it('keeps a 31-second history mutation pending and mutation-gated', async () => {
     vi.useFakeTimers();
     const postMessage = vi.fn();

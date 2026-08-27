@@ -3,7 +3,7 @@ import type {
   PullRequestSummary, ReviewStatus,
 } from '../forge.types';
 
-interface RawUser {
+export interface RawUser {
   display_name?: string;
   account_id?: string;
   links?: { avatar?: { href?: string } };
@@ -41,7 +41,7 @@ interface RawComment {
   inline?: { path?: string; to?: number | null; from?: number | null };
 }
 
-function mapUser(raw: RawUser | undefined): ForgeUser {
+export function mapUser(raw: RawUser | undefined): ForgeUser {
   const user: ForgeUser = {
     displayName: raw?.display_name ?? '',
     accountId: raw?.account_id ?? '',

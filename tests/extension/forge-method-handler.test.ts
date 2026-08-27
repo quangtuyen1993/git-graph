@@ -475,6 +475,118 @@ describe('forge namespace', () => {
     });
   });
 
+  describe('forge.repoInfo', () => {
+    // Task 1, requirement 1: the create-pull-request form's default target
+    // branch comes from the host, not a hardcoded 'main'/'master'.
+    it('returns the default branch and caches within the TTL', async () => {
+      const provider = new FakeForgeProvider({ host: 'bitbucket.org', repoInfo: { defaultBranch: 'develop' } });
+      const { handle } = build({ provider });
+
+      expect(await handle('forge.repoInfo', {})).toEqual({ defaultBranch: 'develop' });
+      await handle('forge.repoInfo', {});
+      expect(provider.calls.filter((c) => c.method === 'getRepoInfo')).toHaveLength(1);
+    });
+  });
+
+  describe('forge.pr.reviewerSuggestions', () => {
+    // Task 1, requirement 2: candidates, not a directory — the handler just
+    // relays whatever the provider returns, unlabelled here; the "this is a
+    // suggestion, not a directory" framing belongs to the UI layer.
+    it('returns reviewer candidates and caches within the TTL', async () => {
+      const candidates = [{ displayName: 'Minh Le', accountId: 'm' }];
+      const provider = new FakeForgeProvider({ host: 'bitbucket.org', reviewerCandidates: candidates });
+      const { handle } = build({ provider });
+
+      expect(await handle('forge.pr.reviewerSuggestions', {})).toEqual({ reviewers: candidates });
+      await handle('forge.pr.reviewerSuggestions', {});
+      expect(provider.calls.filter((c) => c.method === 'listReviewerCandidates')).toHaveLength(1);
+    });
+  });
+
+  describe('forge.pr.create', () => {
+    it('creates a pull request, invalidates the cache and broadcasts', async () => {
+      const { handle, provider, broadcast } = build();
+      await handle('forge.pr.list', { state: 'open' }); // warm the list cache
+
+      const result = await handle('forge.pr.create', {
+        title: 'fix(auth): refresh token race', description: 'body',
+        sourceBranch: 'feature/RMS-1027', targetBranch: 'develop',
+        reviewers: ['acc-1'], closeSourceBranch: true,
+      }) as { title: string };
+
+      expect(result.title).toBe('fix(auth): refresh token race');
+      const call = provider.calls.find((c) => c.method === 'createPullRequest');
+      expect(call?.args[1]).toEqual({
+        title: 'fix(auth): refresh token race', description: 'body',
+        sourceBranch: 'feature/RMS-1027', targetBranch: 'develop',
+        reviewers: ['acc-1'], closeSourceBranch: true,
+      });
+      expect(broadcast).toHaveBeenCalledWith('forge.changed', {});
+
+      // The list cache was dropped by the write.
+      await handle('forge.pr.list', { state: 'open' });
+      expect(provider.calls.filter((c) => c.method === 'listPullRequests')).toHaveLength(2);
+    });
+
+    it('omits reviewers and closeSourceBranch from the provider input when not supplied', async () => {
+      const { handle, provider } = build();
+      await handle('forge.pr.create', {
+        title: 't', description: '', sourceBranch: 'a', targetBranch: 'b',
+      });
+      const call = provider.calls.find((c) => c.method === 'createPullRequest');
+      expect(call?.args[1]).toEqual({ title: 't', description: '', sourceBranch: 'a', targetBranch: 'b' });
+    });
+
+    // Task 1, requirement 4 / Task 2, acceptance 3: a duplicate attempt must
+    // name the existing pull request so the form can offer to open it —
+    // 'duplicate' alone (a string) is not enough for that.
+    it('reports the existing pull request on a duplicate, with a stable error code and structured data', async () => {
+      const existing = fakePullRequest({ id: '118', number: 118, sourceBranch: 'feature/x', targetBranch: 'develop' });
+      const provider = new FakeForgeProvider({ host: 'bitbucket.org', pullRequests: [existing] });
+      provider.createPullRequest = () =>
+        Promise.reject(new ForgeError('duplicate', 400, 'There is already an open pull request from feature/x to develop.'));
+      const { handle } = build({ provider });
+
+      let caught: (Error & { code?: string; data?: unknown }) | undefined;
+      try {
+        await handle('forge.pr.create', {
+          title: 't', description: '', sourceBranch: 'feature/x', targetBranch: 'develop',
+        });
+      } catch (e) {
+        caught = e as Error & { code?: string; data?: unknown };
+      }
+
+      expect(caught).toBeDefined();
+      expect(caught?.code).toBe('PR_DUPLICATE');
+      expect(caught?.message).toContain('118');
+      expect(caught?.data).toEqual({ existing });
+    });
+
+    // If no matching open pull request can be found (should not happen in
+    // practice), the original ForgeError must still surface rather than a
+    // handler crash swallowing it.
+    it('falls back to the raw duplicate error when no matching pull request is found', async () => {
+      const provider = new FakeForgeProvider({ host: 'bitbucket.org', pullRequests: [] });
+      const duplicateError = new ForgeError('duplicate', 400, 'There is already an open pull request from a to b.');
+      provider.createPullRequest = () => Promise.reject(duplicateError);
+      const { handle } = build({ provider });
+
+      await expect(handle('forge.pr.create', {
+        title: 't', description: '', sourceBranch: 'a', targetBranch: 'b',
+      })).rejects.toThrow('There is already an open pull request from a to b.');
+    });
+
+    it('lets a non-duplicate failure surface as the translated forge error message', async () => {
+      const provider = new FakeForgeProvider({ host: 'bitbucket.org' });
+      provider.createPullRequest = () => Promise.reject(new ForgeError('forbidden', 403, 'Forbidden'));
+      const { handle } = build({ provider });
+
+      await expect(handle('forge.pr.create', {
+        title: 't', description: '', sourceBranch: 'a', targetBranch: 'b',
+      })).rejects.toThrow(/bitbucket|forbidden/i);
+    });
+  });
+
   it('does not let one repository\'s cache invalidation clear a sibling whose name shares its prefix', async () => {
     // Two repositories in the same workspace whose names share a prefix
     // ('mpos' and 'mpos2') must not invalidate each other's cache: the

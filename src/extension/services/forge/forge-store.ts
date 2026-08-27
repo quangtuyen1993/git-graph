@@ -1,5 +1,12 @@
 export const PR_LIST_TTL_MS = 60_000;
 export const PR_DETAIL_TTL_MS = 300_000;
+/**
+ * Repository metadata (the default branch) and reviewer suggestions both
+ * change rarely — nowhere near as often as a pull request list — so they
+ * get a longer TTL than PR_DETAIL_TTL_MS rather than being re-fetched on
+ * every create-pull-request form open.
+ */
+export const REPO_INFO_TTL_MS = 600_000;
 /** A diff is keyed by its sha pair, so its content can never change. */
 export const DIFF_TTL_MS = Number.POSITIVE_INFINITY;
 

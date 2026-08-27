@@ -1,6 +1,6 @@
 import type {
-  CreatePullRequestInput, ForgeCapabilities, ForgeComment, ForgeError, ForgeProvider, ForgeRepoRef,
-  ForgeSession, MergeStrategy, ParsedRemote, PullRequestDetail, PullRequestFile, PullRequestListState,
+  CreatePullRequestInput, ForgeCapabilities, ForgeComment, ForgeError, ForgeProvider, ForgeRepoInfo, ForgeRepoRef,
+  ForgeSession, ForgeUser, MergeStrategy, ParsedRemote, PullRequestDetail, PullRequestFile, PullRequestListState,
   PullRequestSummary,
 } from '../../src/extension/services/forge/forge.types';
 
@@ -23,6 +23,8 @@ export interface FakeForgeOptions {
   files?: PullRequestFile[];
   comments?: ForgeComment[];
   capabilities?: Partial<ForgeCapabilities>;
+  repoInfo?: ForgeRepoInfo;
+  reviewerCandidates?: ForgeUser[];
 }
 
 export const FAKE_USER = { displayName: 'An Tran', accountId: 'acc-1' };
@@ -65,6 +67,8 @@ export class FakeForgeProvider implements ForgeProvider {
   private readonly pullRequests: PullRequestDetail[];
   private readonly diff: string;
   private readonly comments: ForgeComment[];
+  private readonly repoInfo: ForgeRepoInfo;
+  private readonly reviewerCandidates: ForgeUser[];
 
   constructor(options: FakeForgeOptions = {}) {
     this.id = options.id ?? 'fake';
@@ -80,6 +84,8 @@ export class FakeForgeProvider implements ForgeProvider {
     this.diff = options.diff ?? 'diff --git a/a.ts b/a.ts\n';
     this.filesResult = options.files ?? FAKE_PR_FILES;
     this.comments = options.comments ?? [];
+    this.repoInfo = options.repoInfo ?? { defaultBranch: 'develop' };
+    this.reviewerCandidates = options.reviewerCandidates ?? [{ displayName: 'Minh Le', accountId: 'm' }];
     this.capabilities = {
       createPullRequest: true, approve: true, requestChanges: true, merge: true,
       mergeStrategies: ['merge-commit', 'squash', 'fast-forward'],
@@ -133,6 +139,16 @@ export class FakeForgeProvider implements ForgeProvider {
   public async listComments(repo: ForgeRepoRef, id: string): Promise<ForgeComment[]> {
     this.record('listComments', repo, id);
     return this.comments;
+  }
+
+  public async getRepoInfo(repo: ForgeRepoRef): Promise<ForgeRepoInfo> {
+    this.record('getRepoInfo', repo);
+    return this.repoInfo;
+  }
+
+  public async listReviewerCandidates(repo: ForgeRepoRef): Promise<ForgeUser[]> {
+    this.record('listReviewerCandidates', repo);
+    return this.reviewerCandidates;
   }
 
   public async createPullRequest(repo: ForgeRepoRef, input: CreatePullRequestInput): Promise<PullRequestDetail> {

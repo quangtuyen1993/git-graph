@@ -2,13 +2,15 @@ import * as vscode from 'vscode';
 import {
   ForgeError,
   type CreatePullRequestInput, type ForgeCapabilities, type ForgeComment, type ForgeProvider,
-  type ForgeRepoRef, type ForgeSession, type MergeStrategy, type ParsedRemote,
+  type ForgeRepoInfo, type ForgeRepoRef, type ForgeSession, type ForgeUser, type MergeStrategy, type ParsedRemote,
   type PullRequestDetail, type PullRequestFile, type PullRequestListState, type PullRequestSummary,
 } from '../forge.types';
 import type { BitbucketApi } from './bitbucket-api';
 import type { BitbucketAuthProvider } from './bitbucket-auth';
 import { BITBUCKET_AUTH_ID, BITBUCKET_AUTH_LABEL, BITBUCKET_TOKEN_SCOPES } from './bitbucket-constants';
-import { mapComments, mapDiffstat, mapPullRequestDetail, mapPullRequestSummary } from './bitbucket-mapper';
+import {
+  mapComments, mapDiffstat, mapPullRequestDetail, mapPullRequestSummary, mapUser, type RawUser,
+} from './bitbucket-mapper';
 
 const PAGE_LENGTH = 50;
 
@@ -48,15 +50,15 @@ export class BitbucketCloudProvider implements ForgeProvider {
   public readonly name = BITBUCKET_AUTH_LABEL;
 
   /*
-   * `createPullRequest` stays `false`: it still rejects with a 501 ("arrives
-   * in phase 5"). approve/requestChanges/merge are real now (phase 6) — a
-   * capability advertises what actually works, not what the type eventually
-   * will, and the webview gates its buttons on this object precisely so it
-   * never has to know the difference. No other change was needed for those
-   * three buttons to appear; that is what the capability mechanism is for.
+   * `createPullRequest` is real now too (phase 5) — a capability advertises
+   * what actually works, not what the type eventually will, and the webview
+   * gates its buttons/menu items on this object precisely so it never has to
+   * know the difference. No other change was needed for the branch context
+   * menu item or the create form's submit to appear; that is what the
+   * capability mechanism is for.
    */
   public readonly capabilities: ForgeCapabilities = {
-    createPullRequest: false,
+    createPullRequest: true,
     approve: true,
     requestChanges: true,
     merge: true,
@@ -147,8 +149,45 @@ export class BitbucketCloudProvider implements ForgeProvider {
     return mapComments(raw);
   }
 
-  public createPullRequest(_repo: ForgeRepoRef, _input: CreatePullRequestInput): Promise<PullRequestDetail> {
-    return Promise.reject(new ForgeError('other', 501, 'Creating pull requests arrives in phase 5'));
+  /** The repository resource itself, for its `mainbranch` — see `ForgeRepoInfo`. */
+  public async getRepoInfo(repo: ForgeRepoRef): Promise<ForgeRepoInfo> {
+    const raw = await this.deps.api.getJson<{ mainbranch?: { name?: string } }>(this.base(repo));
+    return { defaultBranch: raw.mainbranch?.name ?? '' };
+  }
+
+  /**
+   * Bitbucket's default-reviewers endpoint: a host-computed suggestion list
+   * for a repository, not a membership directory — see the doc comment on
+   * `ForgeProvider.listReviewerCandidates`.
+   */
+  public async listReviewerCandidates(repo: ForgeRepoRef): Promise<ForgeUser[]> {
+    const raw = await this.deps.api.getPaged<RawUser>(`${this.base(repo)}/default-reviewers?pagelen=${PAGE_LENGTH}`);
+    return raw.map(mapUser);
+  }
+
+  /**
+   * `detectDuplicate: true` is what lets a 400 whose body names an already-
+   * open pull request come back as `kind: 'duplicate'` instead of the
+   * generic `'other'` every other 400 on this endpoint produces (invalid
+   * reviewer id, malformed branch name, ...) — see bitbucket-api.ts's
+   * `classify`.
+   */
+  public async createPullRequest(repo: ForgeRepoRef, input: CreatePullRequestInput): Promise<PullRequestDetail> {
+    const raw = await this.deps.api.post<Parameters<typeof mapPullRequestDetail>[0]>(
+      `${this.base(repo)}/pullrequests`,
+      {
+        title: input.title,
+        description: input.description,
+        source: { branch: { name: input.sourceBranch } },
+        destination: { branch: { name: input.targetBranch } },
+        ...(input.reviewers && input.reviewers.length > 0
+          ? { reviewers: input.reviewers.map((accountId) => ({ account_id: accountId })) }
+          : {}),
+        close_source_branch: input.closeSourceBranch ?? false,
+      },
+      { detectDuplicate: true },
+    );
+    return mapPullRequestDetail(raw);
   }
 
   /**

@@ -95,6 +95,90 @@ describe('BitbucketCloudProvider', () => {
     expect(files.map((f) => f.status)).toEqual(['added', 'deleted', 'renamed', 'modified']);
   });
 
+  // Phase 5, task 1, requirement 1: the create-pull-request form needs the
+  // repository's default branch and nothing on the interface could obtain
+  // it. One cheap GET; Bitbucket's repository resource carries it as
+  // `mainbranch.name`.
+  it('fetches the default branch from the repository resource', async () => {
+    const { provider, stub } = build({
+      getJson: vi.fn().mockResolvedValue({ mainbranch: { name: 'develop' } }),
+    });
+    const info = await provider.getRepoInfo(repo);
+    expect(stub.getJson).toHaveBeenCalledWith('/repositories/acme/mpos');
+    expect(info).toEqual({ defaultBranch: 'develop' });
+  });
+
+  // Phase 5, task 1, requirement 2: reviewer *candidates*, backed by
+  // Bitbucket's default-reviewers endpoint — a suggestion list, not a
+  // workspace member directory.
+  it('lists reviewer candidates through the default-reviewers endpoint', async () => {
+    const { provider, stub } = build({
+      getPaged: vi.fn().mockResolvedValue([
+        { display_name: 'Minh Le', account_id: 'm', links: { avatar: { href: 'https://a.example/m.png' } } },
+      ]),
+    });
+    const candidates = await provider.listReviewerCandidates(repo);
+    expect(stub.getPaged).toHaveBeenCalledWith('/repositories/acme/mpos/default-reviewers?pagelen=50');
+    expect(candidates).toEqual([{ displayName: 'Minh Le', accountId: 'm', avatarUrl: 'https://a.example/m.png' }]);
+  });
+
+  // Phase 5, task 2: creating a pull request is real now — it no longer
+  // rejects with the phase-3 placeholder 501.
+  it('creates a pull request via POST, mapping branches, reviewers and close-source-branch', async () => {
+    const { provider, stub } = build({
+      post: vi.fn().mockResolvedValue(detailFixture),
+    });
+    await provider.createPullRequest(repo, {
+      title: 'fix(auth): refresh token race',
+      description: 'body',
+      sourceBranch: 'feature/RMS-1027',
+      targetBranch: 'develop',
+      reviewers: ['acc-1', 'acc-2'],
+      closeSourceBranch: true,
+    });
+
+    expect(stub.post).toHaveBeenCalledWith(
+      '/repositories/acme/mpos/pullrequests',
+      {
+        title: 'fix(auth): refresh token race',
+        description: 'body',
+        source: { branch: { name: 'feature/RMS-1027' } },
+        destination: { branch: { name: 'develop' } },
+        reviewers: [{ account_id: 'acc-1' }, { account_id: 'acc-2' }],
+        close_source_branch: true,
+      },
+      { detectDuplicate: true },
+    );
+  });
+
+  it('creates a pull request with no reviewers and defaults close-source-branch to false', async () => {
+    const { provider, stub } = build({ post: vi.fn().mockResolvedValue(detailFixture) });
+    await provider.createPullRequest(repo, {
+      title: 't', description: '', sourceBranch: 'a', targetBranch: 'b',
+    });
+
+    expect(stub.post).toHaveBeenCalledWith(
+      '/repositories/acme/mpos/pullrequests',
+      {
+        title: 't', description: '',
+        source: { branch: { name: 'a' } }, destination: { branch: { name: 'b' } },
+        close_source_branch: false,
+      },
+      { detectDuplicate: true },
+    );
+  });
+
+  // Requirement 4 lands one layer down (bitbucket-api.ts's classify), but
+  // the provider is what must opt in — this pins that createPullRequest
+  // actually sets detectDuplicate, not just that the api supports it.
+  it('lets a duplicate ForgeError from the host reach the caller with kind duplicate', async () => {
+    const duplicate = new ForgeError('duplicate', 400, 'There is already an open pull request from a to b.');
+    const { provider } = build({ post: vi.fn().mockRejectedValue(duplicate) });
+    await expect(provider.createPullRequest(repo, {
+      title: 't', description: '', sourceBranch: 'a', targetBranch: 'b',
+    })).rejects.toBe(duplicate);
+  });
+
   it('lists comments without the deleted ones', async () => {
     const { provider } = build({
       getPaged: vi.fn().mockResolvedValue((commentsFixture as { values: unknown[] }).values),

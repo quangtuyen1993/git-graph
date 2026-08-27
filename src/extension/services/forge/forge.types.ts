@@ -88,6 +88,17 @@ export interface PullRequestFile {
   binary: boolean;
 }
 
+/**
+ * Cheap, cacheable repository metadata — currently just the default branch,
+ * which the create-pull-request form uses to pre-select the target. Backed
+ * by one GET on every host this interface has been checked against:
+ * Bitbucket's repository resource carries `mainbranch.name`; GitHub's
+ * carries `default_branch` on the same shape of call.
+ */
+export interface ForgeRepoInfo {
+  defaultBranch: string;
+}
+
 export interface CreatePullRequestInput {
   title: string;
   description: string;
@@ -164,6 +175,26 @@ export interface ForgeProvider {
   getPullRequestDiff(repo: ForgeRepoRef, id: string): Promise<string>;
   getPullRequestFiles(repo: ForgeRepoRef, id: string): Promise<PullRequestFile[]>;
   listComments(repo: ForgeRepoRef, id: string): Promise<ForgeComment[]>;
+
+  /**
+   * One cheap GET; see `ForgeRepoInfo`. Used to default the create-pull-
+   * request form's target branch without hardcoding 'main'/'master'.
+   */
+  getRepoInfo(repo: ForgeRepoRef): Promise<ForgeRepoInfo>;
+
+  /**
+   * Reviewer *candidates* for a pull request that does not exist yet —
+   * never a workspace member directory, and no provider here may promise
+   * completeness. Bitbucket backs this with its default-reviewers endpoint,
+   * which is itself a suggestion list the host computes, not "everyone with
+   * access". A GitHub provider's nearest equivalent — the collaborators
+   * endpoint — is paginated and gated behind push/triage permission on the
+   * token, so it may legitimately return a partial list, or an empty one on
+   * a token that lacks permission; this contract allows both. The webview
+   * must present this array as suggestions, never as a complete directory to
+   * choose from.
+   */
+  listReviewerCandidates(repo: ForgeRepoRef): Promise<ForgeUser[]>;
 
   createPullRequest(repo: ForgeRepoRef, input: CreatePullRequestInput): Promise<PullRequestDetail>;
   setReviewStatus(
