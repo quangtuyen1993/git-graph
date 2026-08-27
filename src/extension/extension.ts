@@ -361,6 +361,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (MUTATING_REMOTE_METHODS.has(method)) {
         // Cheap: drops cache entries, does not fetch. The next panel read pays.
         //
+        // Scoped to the repository the push/pull/fetch actually ran
+        // against — forge.refresh resolves the *current* repo and calls
+        // store.invalidate(prefix), not store.clear(). A workspace can hold
+        // forge cache entries for more than one repository at once (the
+        // review panel is retainContextWhenHidden and can still be showing
+        // a repository that is no longer active), and clear() used to drop
+        // all of them on a push in any one of them.
+        //
         // Wrapped: this is a side effect of a git call that already
         // succeeded, not the thing the caller asked for. RouterRegistry has
         // no error handling of its own, and sendEvent reaches into a
@@ -368,10 +376,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // is disposed. Without this try/catch, a push landing at exactly
         // that moment would report failure and drop `result`, even though
         // the push itself succeeded — a forge side effect must never be
-        // able to fail a graph operation.
+        // able to fail a graph operation. requireForge() rejecting when the
+        // current repository has no forge remote at all is exactly the same
+        // shape of non-fatal failure and is caught here too.
         try {
-          forgeStore.clear();
-          routers.broadcast('forge.changed', {});
+          await forgeHandler('forge.refresh', {});
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           console.error(`[extension] forge cache invalidation after ${method} failed: ${message}`);

@@ -53,9 +53,16 @@ describe('forge host wiring', () => {
     expect(source).toContain('gitGraphPro.forge.remote');
   });
 
-  it('clears the forge cache after a push, pull or fetch', () => {
+  // Scoped to the repository the push/pull/fetch actually ran against
+  // (forge.refresh resolves the current repo and invalidates its prefix)
+  // rather than forgeStore.clear(), which would drop cache entries for
+  // every repository the workspace has ever shown forge data for — the
+  // review panel is retainContextWhenHidden and can still be pinned to a
+  // repository that is no longer active.
+  it('invalidates only the affected repository\'s forge cache after a push, pull or fetch', () => {
     expect(source).toContain('MUTATING_REMOTE_METHODS');
-    expect(source).toMatch(/forgeStore\.clear\(\)/);
+    expect(source).toMatch(/forgeHandler\('forge\.refresh'/);
+    expect(source).not.toMatch(/forgeStore\.clear\(\)/);
   });
 
   // Makes the manifest's contributes.authentication entry true: without this
