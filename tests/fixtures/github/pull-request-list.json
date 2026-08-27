@@ -1,0 +1,43 @@
+[
+  {
+    "number": 118,
+    "title": "fix(auth): refresh token race",
+    "state": "open",
+    "draft": true,
+    "merged_at": null,
+    "updated_at": "2026-08-25T09:30:00Z",
+    "html_url": "https://github.com/acme/mpos/pull/118",
+    "user": { "login": "an-tran", "id": 1001, "avatar_url": "https://avatar.example/an.png" },
+    "head": { "ref": "feature/RMS-1027", "sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", "repo": { "full_name": "acme/mpos" } },
+    "base": { "ref": "develop", "sha": "b2c3d4e5f60718293a4b5c6d7e8f90123456789a", "repo": { "full_name": "acme/mpos" } },
+    "requested_reviewers": [
+      { "login": "hoa-pham", "id": 1003, "avatar_url": "https://avatar.example/hoa.png" }
+    ]
+  },
+  {
+    "number": 100,
+    "title": "chore: bump deps",
+    "state": "closed",
+    "draft": false,
+    "merged_at": "2026-08-10T00:00:00Z",
+    "updated_at": "2026-08-10T00:00:00Z",
+    "html_url": "https://github.com/acme/mpos/pull/100",
+    "user": { "login": "an-tran", "id": 1001 },
+    "head": { "ref": "chore/deps", "sha": "c" },
+    "base": { "ref": "develop", "sha": "d" },
+    "requested_reviewers": []
+  },
+  {
+    "number": 99,
+    "title": "spike: rejected approach",
+    "state": "closed",
+    "draft": false,
+    "merged_at": null,
+    "updated_at": "2026-08-05T00:00:00Z",
+    "html_url": "https://github.com/acme/mpos/pull/99",
+    "user": { "login": "minh-le", "id": 1002 },
+    "head": { "ref": "spike/x", "sha": "e" },
+    "base": { "ref": "develop", "sha": "f" },
+    "requested_reviewers": []
+  }
+]

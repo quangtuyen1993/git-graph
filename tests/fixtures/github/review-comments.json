@@ -1,0 +1,33 @@
+[
+  {
+    "id": 6001,
+    "user": { "login": "minh-le", "id": 1002 },
+    "body": "Consider a mutex here.",
+    "created_at": "2026-08-21T00:00:00Z",
+    "path": "src/auth.ts",
+    "line": 42,
+    "original_line": 42,
+    "side": "RIGHT"
+  },
+  {
+    "id": 6002,
+    "user": { "login": "an-tran", "id": 1001 },
+    "body": "Done in the latest commit.",
+    "created_at": "2026-08-21T01:00:00Z",
+    "path": "src/auth.ts",
+    "line": 42,
+    "original_line": 42,
+    "side": "RIGHT",
+    "in_reply_to_id": 6001
+  },
+  {
+    "id": 6003,
+    "user": { "login": "hoa-pham", "id": 1003 },
+    "body": "This removed branch used to matter, why drop it?",
+    "created_at": "2026-08-21T02:00:00Z",
+    "path": "src/legacy.ts",
+    "line": null,
+    "original_line": 17,
+    "side": "LEFT"
+  }
+]

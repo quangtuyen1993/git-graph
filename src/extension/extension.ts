@@ -17,6 +17,9 @@ import { BitbucketApi } from './services/forge/bitbucket/bitbucket-api';
 import { BitbucketAuthProvider, BITBUCKET_AUTH_ID, BITBUCKET_AUTH_LABEL } from './services/forge/bitbucket/bitbucket-auth';
 import { BitbucketCloudProvider } from './services/forge/bitbucket/bitbucket-cloud.provider';
 import { promptForBitbucketCredentials, verifyBitbucketCredentials } from './services/forge/bitbucket/bitbucket-sign-in';
+import { GitHubApi } from './services/forge/github/github-api';
+import { getGitHubAccessToken } from './services/forge/github/github-auth';
+import { GitHubCloudProvider } from './services/forge/github/github-cloud.provider';
 
 // The single ReviewRunner constructed in activate() below. Held here so
 // deactivate() can kill every in-flight CLI process — without this, a
@@ -126,6 +129,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   forgeRegistry.register(new BitbucketCloudProvider({
     api: new BitbucketApi({ getCredentials: () => bitbucketAuth.getCredentials() }),
     auth: bitbucketAuth,
+  }));
+  // No AuthenticationProvider to register or dispose here, unlike
+  // Bitbucket above: GitHub is authenticated through VS Code's own built-in
+  // `github` provider, which this extension only consumes.
+  forgeRegistry.register(new GitHubCloudProvider({
+    api: new GitHubApi({ getToken: getGitHubAccessToken }),
   }));
 
   const forgeHandler = createForgeHandler({

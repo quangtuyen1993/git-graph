@@ -1,0 +1,28 @@
+{
+  "number": 118,
+  "title": "fix(auth): refresh token race",
+  "body": "Single-flight the refresh.",
+  "state": "open",
+  "draft": false,
+  "merged_at": null,
+  "comments": 3,
+  "review_comments": 2,
+  "updated_at": "2026-08-25T09:30:00Z",
+  "html_url": "https://github.com/acme/mpos/pull/118",
+  "user": { "login": "an-tran", "id": 1001, "avatar_url": "https://avatar.example/an.png" },
+  "head": {
+    "ref": "feature/RMS-1027",
+    "sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+    "repo": { "full_name": "acme/mpos" }
+  },
+  "base": {
+    "ref": "develop",
+    "sha": "b2c3d4e5f60718293a4b5c6d7e8f90123456789a",
+    "repo": { "full_name": "acme/mpos" }
+  },
+  "requested_reviewers": [
+    { "login": "hoa-pham", "id": 1003, "avatar_url": "https://avatar.example/hoa.png" }
+  ],
+  "mergeable": true,
+  "mergeable_state": "clean"
+}

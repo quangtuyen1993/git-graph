@@ -1,0 +1,6 @@
+[
+  { "filename": "src/new.ts", "status": "added", "additions": 12, "deletions": 0, "patch": "@@ -0,0 +1,12 @@\n+new" },
+  { "filename": "src/old.ts", "status": "removed", "additions": 0, "deletions": 8, "patch": "@@ -1,8 +0,0 @@\n-old" },
+  { "filename": "src/renamed-to.ts", "previous_filename": "src/renamed-from.ts", "status": "renamed", "additions": 1, "deletions": 1, "patch": "@@ -1,1 +1,1 @@\n-a\n+b" },
+  { "filename": "assets/logo.png", "status": "modified", "additions": 0, "deletions": 0 }
+]
