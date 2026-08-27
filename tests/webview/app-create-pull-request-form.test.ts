@@ -96,6 +96,51 @@ describe('Creating a pull request', () => {
     expect(rendered.getAllByText('feat: widgets').length).toBeGreaterThan(0);
   });
 
+  // Ledger item: no de-duplication by id when a created pull request is
+  // prepended to the list. forge.pr.create broadcasts forge.changed before
+  // it returns (forge-method-handler.ts), so the forge.changed listener's
+  // own loadPullRequests() can race the optimistic prepend and already have
+  // fetched a list containing the new pull request by the time
+  // forge.pr.create resolves. Without de-duplication that produces two rows
+  // sharing one `pr.id` key.
+  it('does not duplicate the created pull request when forge.changed races the optimistic prepend', async () => {
+    let forgeChangedHandler: (() => void) | undefined;
+    on.mockImplementation((event: string, handler: () => void) => {
+      if (event === 'forge.changed') forgeChangedHandler = handler;
+      return vi.fn();
+    });
+
+    stubApp({ 'forge.pr.create': () => createdDetail });
+    const rendered = render(App);
+    await openCreateForm(rendered);
+    send.mockClear();
+
+    // forge.pr.create's own resolution fires forge.changed first, mirroring
+    // the host's broadcast-then-return order — by the time it resolves, the
+    // forge.changed-triggered forge.pr.list refetch has already landed the
+    // new pull request in `pullRequests`.
+    stubApp({
+      'forge.pr.create': async () => {
+        stubApp({
+          'forge.pr.list': () => ({ pullRequests: [createdDetail], stale: false }),
+          'forge.pr.get': () => createdDetail, 'forge.pr.comments': () => ({ comments: [] }), 'forge.pr.files': () => ({ files: [] }),
+        });
+        await forgeChangedHandler?.();
+        return createdDetail;
+      },
+      'forge.pr.get': () => createdDetail, 'forge.pr.comments': () => ({ comments: [] }), 'forge.pr.files': () => ({ files: [] }),
+    });
+
+    await fireEvent.click(rendered.getByRole('button', { name: /^create pull request$/i }));
+
+    await waitFor(() => expect(send).toHaveBeenCalledWith('forge.pr.create', expect.anything()));
+    await waitFor(() => expect(rendered.getByText('PULL REQUESTS')).toBeInTheDocument());
+    await fireEvent.click(rendered.getByText('PULL REQUESTS'));
+
+    await waitFor(() =>
+      expect(rendered.getAllByRole('button', { name: /feat: widgets/i })).toHaveLength(1));
+  });
+
   // Acceptance 3: a duplicate attempt names the existing pull request and
   // offers to open it — and does not destroy the form's entered values.
   it('names the existing pull request and opens it on a duplicate', async () => {

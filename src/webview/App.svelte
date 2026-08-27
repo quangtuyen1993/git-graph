@@ -778,7 +778,15 @@
       // Appears in the sidebar list with no manual refresh: patched locally
       // here, the same optimistic-update idiom approve/merge already use,
       // rather than a round trip back through forge.pr.list.
-      pullRequests = [created, ...pullRequests];
+      //
+      // De-duplicated by id: forge.pr.create broadcasts forge.changed
+      // before it returns (see forge-method-handler.ts), so the
+      // forge.changed listener's own loadPullRequests() can race this
+      // optimistic prepend and already have fetched a list that includes
+      // the new pull request by the time this resolves. Filtering it out
+      // of the tail before prepending keeps {#each pullRequests as pr
+      // (pr.id)} from ever seeing two rows with the same key.
+      pullRequests = [created, ...pullRequests.filter((pr) => pr.id !== created.id)];
       createPullRequestState = null;
       // Reuses the normal selection path rather than assigning pullRequestDetail
       // directly: `created` carries no comments or files (forge.pr.create's
