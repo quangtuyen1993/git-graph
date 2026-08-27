@@ -119,6 +119,37 @@ describe('forge namespace', () => {
     expect(broadcast).toHaveBeenCalledWith('forge.changed', {});
   });
 
+  // Regression: forge.refresh is reachable on a path the user did not
+  // initiate — extension.ts calls it after every git.push/pull/fetch for
+  // whatever repository happens to be active, forge remote or not.
+  // requireForge() throwing here previously violated the additive-only
+  // global constraint ("no errors, no console noise" for a repository with
+  // no forge remote) on every single push in an ordinary repository. Driven
+  // at the handler level (the actual runtime path), not by grepping source.
+  it('is a quiet no-op for a repository with no forge remote, and logs nothing', async () => {
+    const { handle, broadcast } = build({ remoteUrl: undefined });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(handle('forge.refresh', {})).resolves.toEqual({ success: true });
+
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(broadcast).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  // Same reasoning, the other no-provider case: a remote that resolves but
+  // matches no registered provider (e.g. a self-hosted git host).
+  it('is a quiet no-op when no provider claims the remote host', async () => {
+    const { handle, broadcast } = build({ remoteUrl: 'git@gitlab.com:acme/mpos.git' });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(handle('forge.refresh', {})).resolves.toEqual({ success: true });
+
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(broadcast).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
   it('signs in on demand and broadcasts the change', async () => {
     const provider = new FakeForgeProvider({ host: 'bitbucket.org', session: undefined });
     const { handle, broadcast } = build({ provider });

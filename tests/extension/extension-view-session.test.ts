@@ -728,4 +728,27 @@ describe('extension view sessions', () => {
     expect(response.result).toEqual({ success: true });
     expect(hostMocks.push).toHaveBeenCalledTimes(1);
   });
+
+  // Regression: the global constraint that a repository with no forge
+  // remote produces "no errors, no console noise" was being violated on
+  // every single push — git.push/pull/fetch unconditionally called
+  // forge.refresh, which threw a plain (untranslated) Error for a
+  // no-provider repo, and that error landed in console.error via
+  // extension.ts's own catch. Driven through the real end-to-end wiring
+  // (webview message -> router -> extension.ts -> forgeHandler), not a
+  // source-text grep, since that is the only way this ever actually fires.
+  it('logs nothing to the console on a git.push in a repository with no forge remote', async () => {
+    hostMocks.getRemoteUrl.mockResolvedValue(undefined);
+    const view = await activateAndResolveView();
+    await vi.waitFor(() => expect(hostMocks.createFileSystemWatcher).toHaveBeenCalledTimes(1));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    view.receive({ id: 'push-2', type: 'request', method: 'git.push', params: {} });
+
+    const response = await responseFor(view, 'push-2');
+    expect(response.error).toBeUndefined();
+    expect(response.result).toEqual({ success: true });
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
 });

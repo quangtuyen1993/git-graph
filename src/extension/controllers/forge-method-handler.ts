@@ -154,7 +154,18 @@ export function createForgeHandler(deps: ForgeHandlerDeps) {
       }
 
       case 'forge.refresh': {
-        const resolved = await requireForge();
+        // Unlike every other case below, this one is reachable on a path
+        // the user did not initiate: extension.ts calls it after every
+        // git.push/pull/fetch, for whatever repository happens to be
+        // active, forge remote or not. requireForge() throwing here would
+        // violate the additive-only global constraint ("no errors, no
+        // console noise" for a repository with no forge remote) on every
+        // single push in an ordinary repository — the same reasoning
+        // `status()` above already applies by returning `{ available:
+        // false }` rather than throwing. Refreshing a cache that does not
+        // exist is a no-op, not a failure.
+        const resolved = await resolve();
+        if (!resolved) return { success: true };
         deps.store.invalidate(resolved.prefix);
         deps.broadcast('forge.changed', {});
         return { success: true };
