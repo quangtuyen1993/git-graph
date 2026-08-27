@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { BitbucketApi, MAX_CONCURRENT_REQUESTS } from '../../src/extension/services/forge/bitbucket/bitbucket-api';
 import { ForgeError } from '../../src/extension/services/forge/forge.types';
 
-const credentials = { email: 'tuyen@example.com', token: 'ATATT-secret-token' };
+const credentials = { token: 'ATATT-secret-token' };
 
 function jsonResponse(body: unknown, init: { status?: number; headers?: Record<string, string> } = {}) {
   return new Response(JSON.stringify(body), {
@@ -21,27 +21,16 @@ describe('BitbucketApi', () => {
   // for why: it is the one scheme Atlassian's docs confirm both Bitbucket
   // token families (Atlassian-account API tokens and repository/project/
   // workspace access tokens) accept, so this client never has to know, ask,
-  // or probe which kind a stored credential is. `credentials.email` — still
-  // present on the fixture, since real stored credentials may carry one for
-  // display — must not appear in the header at all.
-  it('sends HTTP Bearer with the token, never Basic, regardless of email', async () => {
+  // or probe which kind a stored credential is. `BitbucketCredentials`
+  // carries nothing but the token, so there is nothing else this header
+  // could be built from.
+  it('sends HTTP Bearer with the token, never Basic', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
     const { api } = build(fetchImpl as never);
     await api.getJson('/user');
 
     const [url, init] = fetchImpl.mock.calls[0];
     expect(url).toBe('https://api.bitbucket.org/2.0/user');
-    expect((init.headers as Record<string, string>).Authorization).toBe(`Bearer ${credentials.token}`);
-  });
-
-  it('sends the same Bearer header when there is no email at all (an access token)', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
-    const api = new BitbucketApi({
-      getCredentials: async () => ({ email: '', token: credentials.token }), fetchImpl: fetchImpl as never,
-    });
-    await api.getJson('/user');
-
-    const [, init] = fetchImpl.mock.calls[0];
     expect((init.headers as Record<string, string>).Authorization).toBe(`Bearer ${credentials.token}`);
   });
 

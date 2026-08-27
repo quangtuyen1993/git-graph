@@ -41,10 +41,12 @@ Requires a Bitbucket Cloud token with scopes `read:repository:bitbucket`,
 `read:pullrequest:bitbucket`, `write:pullrequest:bitbucket` — either an Atlassian API
 token (id.atlassian.com) or a repository/project/workspace access token (created in
 Bitbucket's own settings) both work; the extension sends `Authorization: Bearer`, which
-both token kinds accept. Run **Git Graph Pro: Sign in to Bitbucket** from the Command
-Palette — the email prompt is optional (only an API token has one to give) and is used
-solely to label the session. The token is stored in VS Code's SecretStorage and never
-leaves the extension host.
+both token kinds accept, and only Bearer — there is no other scheme to fall back to. Run
+**Git Graph Pro: Sign in to Bitbucket** from the Command Palette and paste the token; the
+session is labelled from the repository being verified (its workspace name, or failing
+that its full name or owner), not from an email, since a Bearer-only credential has none
+to give. The token is stored in VS Code's SecretStorage and never leaves the extension
+host.
 
 ### 🤖 AI Code Review
 

@@ -291,7 +291,7 @@ describe('gitGraphPro.forge.signIn command', () => {
   // description — naming the missing scopes — as a readable notification,
   // not the raw host message and not an uncaught command error.
   it('shows the provider\'s scope-naming description when verification is forbidden', async () => {
-    bitbucketSignInMocks.prompt.mockResolvedValue({ email: 'tuyen@example.com', token: 'bad-token' });
+    bitbucketSignInMocks.prompt.mockResolvedValue({ token: 'bad-token' });
     bitbucketSignInMocks.verify.mockRejectedValue(
       new ForgeError('forbidden', 403, 'Your credentials lack one or more required privilege scopes.'),
     );
@@ -312,7 +312,7 @@ describe('gitGraphPro.forge.signIn command', () => {
   });
 
   it('signs in and reports no error when the token verifies', async () => {
-    bitbucketSignInMocks.prompt.mockResolvedValue({ email: 'tuyen@example.com', token: 'good-token' });
+    bitbucketSignInMocks.prompt.mockResolvedValue({ token: 'good-token' });
     bitbucketSignInMocks.verify.mockResolvedValue('Tuyen Nguyen');
 
     await activateExtension();

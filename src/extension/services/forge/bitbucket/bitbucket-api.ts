@@ -150,20 +150,21 @@ export class BitbucketApi {
     if (path.startsWith('http') && new URL(url).origin !== BITBUCKET_API_ORIGIN) {
       throw new ForgeError('other', 0, `Refusing to follow a link to a different origin: ${url}`);
     }
-    // Bearer, not Basic — and this is the only scheme this client ever sends.
-    // Atlassian's own docs (support.atlassian.com/bitbucket-cloud/docs/using-api-tokens,
+    // Bearer, not Basic — and this is the only scheme this client ever sends,
+    // by design, not by omission. Atlassian's own docs
+    // (support.atlassian.com/bitbucket-cloud/docs/using-api-tokens,
     // .../using-access-tokens) establish two distinct token families for Bitbucket
     // Cloud: an Atlassian-account API token (id.atlassian.com), which accepts
     // *either* HTTP Basic (email:token) *or* Bearer, and a repository/project/
     // workspace access token (created in Bitbucket's own settings, not tied to
-    // any account), which accepts *only* Bearer — Basic on an access token is
-    // what produced the 403-on-every-scoped-endpoint this fix responds to.
-    // Bearer is the intersection of what both families accept, so sending it
-    // unconditionally serves either kind without this client ever having to
-    // know, ask, or remember which one a credential is — no per-credential
-    // scheme flag, no probing request. `credentials.email` is therefore never
-    // read here; it survives only as an optional display label the sign-in
-    // flow may collect (see bitbucket-sign-in.ts).
+    // any account and so with no email behind it at all), which accepts *only*
+    // Bearer — Basic on an access token is what produced the
+    // 403-on-every-scoped-endpoint this fix responds to. Bearer is the
+    // intersection of what both families accept, so sending it unconditionally
+    // serves either kind without this client ever having to know, ask, or
+    // remember which one a credential is — no per-credential scheme flag, no
+    // probing request, and `BitbucketCredentials` (bitbucket-auth.ts) carries
+    // nothing but the token for exactly this reason.
     const authorization = `Bearer ${credentials.token}`;
 
     return this.queue.run(async () => {

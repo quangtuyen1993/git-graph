@@ -56,15 +56,15 @@ export function isSignInCancelled(error: unknown): boolean {
 }
 
 /**
- * `email` is display-only — see bitbucket-api.ts's `request()` for why
- * authentication never reads it (Bearer, sent unconditionally, needs no
- * username for either Bitbucket token family). It may be `''`: a repository,
- * project or workspace access token has no associated Atlassian account, so
- * there is no email to give, and `promptForBitbucketCredentials` accepts a
- * blank answer rather than forcing one.
+ * Bitbucket authentication is Bearer-only (see bitbucket-api.ts's `request()`):
+ * an Atlassian API token accepts either Basic or Bearer, a repository/project/
+ * workspace access token accepts only Bearer and has no account or email
+ * behind it at all, so Bearer is the one scheme that serves both without this
+ * extension ever asking which kind a credential is. There is accordingly
+ * nothing here but the token itself — no email, no username, nothing else
+ * authentication could read.
  */
 export interface BitbucketCredentials {
-  email: string;
   token: string;
 }
 
@@ -112,11 +112,6 @@ interface StoredCredentials extends BitbucketCredentials {
  * so the token itself must never appear in one — a one-way hash keeps the id
  * deterministic for the same credential (so `removeSession` and a window
  * reload agree on it) without making it reversible to the token.
- *
- * Hashes the token alone, not `email:token`: `email` is a display label a
- * user may leave blank (an access token has none to give), so it must not
- * factor into identity — two sign-ins with the same token and a different
- * label typed in must still collide on one stored credential.
  */
 function sessionId(credentials: BitbucketCredentials): string {
   return createHash('sha256').update(credentials.token).digest('hex');
@@ -129,11 +124,10 @@ function sessionId(credentials: BitbucketCredentials): string {
  * menu entry, a sign-out affordance there, and session-change plumbing other
  * extensions could in principle observe.
  *
- * The email/token pair Bitbucket's Basic auth needs cannot be expressed as a
- * single AuthenticationSession.accessToken alone, so `getCredentials()`
- * (below, not part of the interface) stays the path BitbucketApi uses — it
- * never goes through vscode.authentication.getSession, and the credential it
- * returns never leaves this extension host.
+ * `BitbucketApi` does not go through `vscode.authentication.getSession` for
+ * its credential — `getCredentials()` below (not part of the interface) is
+ * the path it uses instead, and the credential it returns never leaves this
+ * extension host.
  */
 export class BitbucketAuthProvider implements vscode.AuthenticationProvider {
   private readonly changeEmitter =
@@ -251,15 +245,13 @@ export class BitbucketAuthProvider implements vscode.AuthenticationProvider {
   }
 
   /**
-   * The email/token pair BitbucketApi needs for HTTP Basic auth. Deliberately
-   * not part of vscode.AuthenticationProvider: an AuthenticationSession's
-   * accessToken is a single opaque string, but Bitbucket's API needs the
-   * email alongside the token. Used only by this extension's own BitbucketApi
-   * wiring — the credential it returns never crosses to the webview.
+   * The token BitbucketApi sends as `Authorization: Bearer`. Deliberately not
+   * part of vscode.AuthenticationProvider — this is BitbucketApi's own
+   * wiring, and the credential it returns never crosses to the webview.
    */
   public async getCredentials(): Promise<BitbucketCredentials | undefined> {
     const stored = await this.load();
-    return stored ? { email: stored.email, token: stored.token } : undefined;
+    return stored ? { token: stored.token } : undefined;
   }
 
   public dispose(): void {
@@ -268,15 +260,13 @@ export class BitbucketAuthProvider implements vscode.AuthenticationProvider {
 
   private toSession(stored: StoredCredentials): vscode.AuthenticationSession {
     const id = sessionId(stored);
-    // account.id falls back to the same token hash used for the session id
-    // when there is no email to give it — an access token has no Atlassian
-    // account behind it, so `stored.email` is `''` in that case (see
-    // BitbucketCredentials's doc comment), and an empty id is a worse
-    // identifier than a stable, already-computed one.
+    // account.id has no email to fall back to — a Bearer-only credential has
+    // none, ever (see BitbucketCredentials's doc comment) — so the already-
+    // computed token hash is the identifier, not just the session id's.
     return {
       id,
       accessToken: stored.token,
-      account: { id: stored.email || id, label: stored.accountLabel },
+      account: { id, label: stored.accountLabel },
       scopes: [...BITBUCKET_TOKEN_SCOPES],
     };
   }
@@ -286,10 +276,17 @@ export class BitbucketAuthProvider implements vscode.AuthenticationProvider {
     const raw = await this.deps.secrets.get(SECRET_KEY);
     if (!raw) return undefined;
     try {
-      const parsed = JSON.parse(raw) as StoredCredentials;
-      if (!parsed?.email || !parsed?.token) return undefined;
-      this.cached = parsed;
-      return parsed;
+      // Cast loosely rather than as StoredCredentials: a credential stored by
+      // a version that still asked for an email carries a stray `email`
+      // field this version never reads. Requiring only `token` and
+      // `accountLabel` — and rebuilding the object from just those two —
+      // lets that older entry load into a valid session instead of being
+      // rejected or, worse, silently carrying a field nothing here expects.
+      const parsed = JSON.parse(raw) as Partial<StoredCredentials> | null;
+      if (!parsed?.token || !parsed?.accountLabel) return undefined;
+      const stored: StoredCredentials = { token: parsed.token, accountLabel: parsed.accountLabel };
+      this.cached = stored;
+      return stored;
     } catch {
       // Corrupt entry: treat as signed out rather than wedging every call.
       return undefined;

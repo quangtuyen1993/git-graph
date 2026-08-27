@@ -25,7 +25,7 @@ class MemorySecrets {
   async delete(key: string) { this.values.delete(key); }
 }
 
-const credentials = { email: 'tuyen@example.com', token: 'ATATT-secret-token' };
+const credentials = { token: 'ATATT-secret-token' };
 const repo = { host: 'bitbucket.org', owner: 'tuyen', name: 'repo' };
 
 function build(overrides: Partial<{ prompt: unknown; verify: unknown; resolveRepo: unknown }> = {}) {
@@ -48,7 +48,7 @@ describe('BitbucketAuthProvider', () => {
     const session = await provider.createSession(SCOPES);
     expect(prompt).toHaveBeenCalledOnce();
     expect(verify).toHaveBeenCalledWith(credentials, repo);
-    expect(session.account).toEqual({ id: credentials.email, label: 'Tuyen Nguyen' });
+    expect(session.account).toEqual({ id: session.id, label: 'Tuyen Nguyen' });
     expect(session.scopes).toEqual(SCOPES);
   });
 
@@ -142,6 +142,31 @@ describe('BitbucketAuthProvider', () => {
     } as never);
 
     await expect(provider.getSessions()).resolves.toEqual([]);
+  });
+
+  // Migration: a credential stored by the previous, email-collecting version
+  // of this extension carries a stray `email` field alongside `token` and
+  // `accountLabel`. That entry must still load into a valid session — not
+  // crash, not silently drop the user to signed-out — even though nothing in
+  // this version's BitbucketCredentials shape has room for `email` any more.
+  it('loads a credential stored by the previous, email-collecting version without crashing', async () => {
+    const secrets = new MemorySecrets();
+    await secrets.store('forge:bitbucket-cloud:token', JSON.stringify({
+      email: 'tuyen@example.com', token: 'ATATT-old-token', accountLabel: 'Tuyen Nguyen',
+    }));
+    const provider = new BitbucketAuthProvider({
+      secrets, prompt: vi.fn(), verify: vi.fn(),
+    } as never);
+
+    const sessions = await provider.getSessions();
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].accessToken).toBe('ATATT-old-token');
+    expect(sessions[0].account.label).toBe('Tuyen Nguyen');
+    // The stray email must not leak into the account id or anywhere else the
+    // session shape exposes.
+    expect(JSON.stringify(sessions[0])).not.toContain('tuyen@example.com');
+
+    await expect(provider.getCredentials()).resolves.toEqual({ token: 'ATATT-old-token' });
   });
 
   it('reuses the stored credential on later calls', async () => {

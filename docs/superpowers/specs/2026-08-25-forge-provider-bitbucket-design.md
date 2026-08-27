@@ -227,8 +227,11 @@ Bearer is therefore the intersection of what both families accept, and `bitbucke
 sends it unconditionally on every request. This is deliberately *not* a scheme-detection
 or scheme-memory mechanism — there is only one scheme, so nothing needs detecting or
 remembering, and a user signs in with either kind of token without this extension ever
-asking which one it is. The email the sign-in prompt collects (see below) plays no part
-in authentication; it is a display label only, and it is optional.
+asking which one it is. Because Bearer needs nothing besides the token, the sign-in
+prompt asks for the token alone — there is no email step, and `BitbucketCredentials`
+(bitbucket-auth.ts) has no field for one. The session label a user sees in the Accounts
+menu comes from the repository being verified instead (see the `createSession` steps
+below), not from anything the user types.
 
 OAuth 2.0 remains available but is rejected for v1 on three grounds:
 
@@ -257,19 +260,18 @@ valid session.
 
 ```
 createSession():
-  1. input box — Atlassian account email (optional; leave blank for an access token)
-  2. input box — API token or access token (password: true)
-  3. resolve the repository the user currently has open (the configured remote,
+  1. input box — API token or access token (password: true)
+  2. resolve the repository the user currently has open (the configured remote,
      parsed and matched to this host — independent of forge-method-handler's own
      resolution, since createSession is reached through vscode.authentication's
      out-of-process round trip, which carries only the requested scopes)
-  4. GET /2.0/repositories/{workspace}/{repo_slug} on that repository → validate immediately
-  5. SecretStorage['forge:bitbucket-cloud:token'] = { email, token }
-     session.account.label = email, else the repository's workspace name, else its
-     full name, else the repository owner — whichever is first available
+  3. GET /2.0/repositories/{workspace}/{repo_slug} on that repository → validate immediately
+  4. SecretStorage['forge:bitbucket-cloud:token'] = { token, accountLabel }
+     accountLabel = the repository's workspace name, else its full name, else the
+     repository owner — whichever is first available; session.account.label reads it
 ```
 
-Step 4 exists so a mistyped or under-scoped token fails at the moment of entry, rather
+Step 3 exists so a mistyped or under-scoped token fails at the moment of entry, rather
 than surfacing later as an unexplained empty PR list. It checks the repository the user
 already has open, not `/2.0/user`: nothing in this extension reads user data for any
 other reason, and asking for permission to do so anyway is what let a token correctly
@@ -277,8 +279,15 @@ scoped for every real feature still fail sign-in with a 403. A repository with n
 Bitbucket remote open cannot reach step 1 at all — `gitGraphPro.forge.signIn` and the
 webview's `forge.signIn` both resolve the repository through `requireForge()` before
 `createSession` is ever invoked, so the ordinary "no forge repo" case is already handled
-above this flow, not inside it. Step 3 fails sensibly (a readable rejection, not a crash)
+above this flow, not inside it. Step 2 fails sensibly (a readable rejection, not a crash)
 in the narrow race where that resolution is lost between the two.
+
+A credential stored by an earlier version of this extension — back when the sign-in
+prompt still asked for an email — carries a stray `email` field alongside `token` and
+`accountLabel`. `BitbucketAuthProvider.load()` reads only `token` and `accountLabel` out
+of whatever JSON it finds and rebuilds the object from those two, so that entry loads
+into a valid session on this version too; the email is dropped, never migrated forward,
+since nothing here has a use for it.
 
 Required token scopes, which the sign-in prompt must list verbatim:
 `read:repository:bitbucket`, `read:pullrequest:bitbucket`, `write:pullrequest:bitbucket`.
