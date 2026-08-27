@@ -31,6 +31,13 @@
    * sentence on the rare tick before `forge.status` has resolved a name.
    */
   export let providerName = 'your forge';
+  /**
+   * The status the list was fetched with — 'open' unless the sidebar's
+   * filter control (owned by BranchSidebar) was moved off it. Only used for
+   * the empty-state message; `pullRequests` itself already reflects the
+   * filter by the time it reaches this component.
+   */
+  export let filter: 'open' | 'merged' | 'closed' | 'all' = 'open';
 
   const dispatch = createEventDispatcher<{ select: { id: string }; signIn: void }>();
 
@@ -42,6 +49,13 @@
 
   const countBy = (pr: PullRequestRow, status: Reviewer['status']) =>
     pr.reviewers.filter((reviewer) => reviewer.status === status).length;
+
+  /* 'all' has no adjective that reads well here, so it drops the word entirely. */
+  $: emptyMessage = filter === 'all' ? 'No pull requests' : `No ${filter} pull requests`;
+
+  const STATE_LABEL: Record<PullRequestRow['state'], string> = {
+    open: 'Open', merged: 'Merged', closed: 'Closed', draft: 'Draft',
+  };
 </script>
 
 {#if !signedIn}
@@ -54,12 +68,12 @@
   {/if}
 
   {#if visible.length === 0}
-    <div class="pr-empty">{needle ? 'No matching pull requests' : 'No open pull requests'}</div>
+    <div class="pr-empty">{needle ? 'No matching pull requests' : emptyMessage}</div>
   {:else}
     {#each visible as pr (pr.id)}
       <button type="button" class="pr-row" on:click={() => dispatch('select', { id: pr.id })}>
-        <span class="pr-state" class:draft={pr.state === 'draft'}
-              aria-label={pr.state === 'draft' ? 'Draft' : 'Open'}>●</span>
+        <span class="pr-state" class:draft={pr.state === 'draft'} class:merged={pr.state === 'merged'}
+              class:closed={pr.state === 'closed'} aria-label={STATE_LABEL[pr.state]}>●</span>
         <span class="pr-number">#{pr.number}</span>
         <span class="pr-title">{pr.title}</span>
 
@@ -98,6 +112,8 @@
   .pr-signin { color: var(--vscode-textLink-foreground); }
   .pr-state { color: var(--vscode-gitDecoration-untrackedResourceForeground); font-size: 10px; }
   .pr-state.draft { opacity: 0.55; }
+  .pr-state.merged { color: var(--vscode-charts-purple, #8250df); }
+  .pr-state.closed { color: var(--vscode-testing-iconFailed, #f14c4c); }
   .pr-number { color: var(--vscode-descriptionForeground); flex-shrink: 0; }
   .pr-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pr-chip { margin-left: auto; flex-shrink: 0; font-size: 11px; }

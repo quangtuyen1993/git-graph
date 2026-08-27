@@ -3,7 +3,7 @@
   import BranchTreeList from './BranchTreeList.svelte';
   import PullRequestList from './PullRequestList.svelte';
   import Icon from '../common/Icon.svelte';
-  import type { SidebarPersistedState } from '../../lib/sidebar-state';
+  import { normalizePullRequestListFilter, type PullRequestListFilter, type SidebarPersistedState } from '../../lib/sidebar-state';
   import { activeBranchGroupPaths, buildBranchTree, type BranchTreeNode } from '../../lib/branch-tree';
   import { matchesPullRequestQuery } from '../../lib/branch-pull-requests';
 
@@ -189,6 +189,15 @@
   let worktreesExpanded = false;
   let submodulesExpanded = false;
   let pullRequestsExpanded = false;
+  /**
+   * Which pull request states the section shows. Defaults to `open` — a
+   * long-lived repository can hold hundreds of merged pull requests, and
+   * open is what someone opens the sidebar to see. Persisted the same way as
+   * the expand/collapse flags above (see `emitState`/`initialState`), but a
+   * change also fires `pullRequestsFilterChange` immediately, outside the
+   * debounce, so the host can refetch without waiting on the storage write.
+   */
+  let pullRequestsFilter: PullRequestListFilter = 'open';
   let expandedRemotes: Record<string, boolean> = {};
   let expandedGroups: Record<string, boolean> = {};
   let branchGroupsInitialized = false;
@@ -213,6 +222,7 @@
       worktreesExpanded = initialState.sections.worktrees ?? false;
       submodulesExpanded = initialState.sections.submodules ?? false;
       pullRequestsExpanded = initialState.sections.pullRequests ?? false;
+      pullRequestsFilter = normalizePullRequestListFilter(initialState.pullRequestsFilter);
       expandedRemotes = { ...initialState.expandedRemotes };
       expandedGroups = { ...initialState.expandedGroups };
       branchGroupsInitialized = true;
@@ -224,6 +234,7 @@
       worktreesExpanded = false;
       submodulesExpanded = false;
       pullRequestsExpanded = false;
+      pullRequestsFilter = 'open';
       expandedRemotes = {};
       expandedGroups = {};
       branchGroupsInitialized = false;
@@ -243,7 +254,25 @@
       },
       expandedRemotes,
       expandedGroups,
+      pullRequestsFilter,
     } satisfies SidebarPersistedState);
+  }
+
+  /**
+   * Fires on every filter change, not debounced like `emitState`'s save —
+   * `forge.pr.list` needs to be refetched right away, not 300ms after the
+   * user stops clicking. `emitState()` still runs alongside it so the choice
+   * is persisted the same way every other section's expand state is.
+   */
+  function setPullRequestsFilter(next: PullRequestListFilter) {
+    if (next === pullRequestsFilter) return;
+    pullRequestsFilter = next;
+    dispatch('pullRequestsFilterChange', { filter: next });
+    emitState();
+  }
+
+  function handlePullRequestsFilterChange(event: Event) {
+    setPullRequestsFilter((event.currentTarget as HTMLSelectElement).value as PullRequestListFilter);
   }
 
   $: if (!branchGroupsInitialized && localBranches.length > 0) {
@@ -621,11 +650,31 @@
     </button>
 
     {#if sectionOpen.pullRequests}
+      {#if forgeSignedIn}
+        <!--
+          One compact row, not a segmented control with four buttons — this
+          section already competes with six others for a short bottom panel
+          (see the LOCAL-default-open comment above), and a native <select>
+          costs a single 20px row whichever option is picked.
+        -->
+        <select
+          class="pr-filter"
+          aria-label="Filter pull requests by status"
+          value={pullRequestsFilter}
+          on:change={handlePullRequestsFilterChange}
+        >
+          <option value="open">Open</option>
+          <option value="merged">Merged</option>
+          <option value="closed">Closed</option>
+          <option value="all">All</option>
+        </select>
+      {/if}
       <PullRequestList
         {pullRequests}
         stale={pullRequestsStale}
         signedIn={forgeSignedIn}
         providerName={forgeProviderName || 'your forge'}
+        filter={pullRequestsFilter}
         {query}
         on:select
         on:signIn
@@ -932,6 +981,26 @@
 
   .branch-item.submodule.conflicted .branch-name {
     color: var(--vscode-editorError-foreground, #f14c4c);
+  }
+
+  /* One row, sized to match a pull request row's own left indent (20px) so it reads as part of the section, not a stray control above it. */
+  .pr-filter {
+    display: block;
+    width: calc(100% - 28px);
+    margin: 2px 8px 2px 20px;
+    padding: 1px 4px;
+    height: 20px;
+    border: 1px solid var(--vscode-dropdown-border, transparent);
+    border-radius: 3px;
+    background: var(--vscode-dropdown-background, rgba(128, 128, 128, 0.1));
+    color: var(--vscode-dropdown-foreground, inherit);
+    font-family: inherit;
+    font-size: 11px;
+  }
+
+  .pr-filter:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007acc);
+    outline-offset: -1px;
   }
 
   .submodule-head {

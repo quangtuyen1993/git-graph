@@ -5,7 +5,10 @@
   import { calculateVisibleRange, getTotalHeight, ROW_HEIGHT, BUFFER_ROWS } from './lib/virtual-scroll';
   import GraphCanvas from './components/graph/GraphCanvas.svelte';
   import ContextMenu from './components/actions/ContextMenu.svelte';
-  import { isSidebarPersistedState, type SidebarPersistedState } from './lib/sidebar-state';
+  import {
+    isSidebarPersistedState, normalizePullRequestListFilter,
+    type PullRequestListFilter, type SidebarPersistedState,
+  } from './lib/sidebar-state';
   import { refDisplayName, refType, sortRefsForRow } from './lib/ref-chips';
   import type { MenuItem } from './types/menu.types';
   import { getColorRgb } from './lib/graph-colors';
@@ -199,10 +202,26 @@
     sidebarStateKey = repoPath ? `sidebarState:${repoPath}` : '';
     if (!sidebarStateKey) {
       sidebarState = null;
+      await applyPullRequestsFilter('open');
       return;
     }
     const stored = await bridge.send('ui.getState', { key: sidebarStateKey });
     sidebarState = isSidebarPersistedState(stored) ? stored : null;
+    await applyPullRequestsFilter(normalizePullRequestListFilter(sidebarState?.pullRequestsFilter));
+  }
+
+  /**
+   * `refreshForgeStatus` is fired before this ever resolves (see onMount's
+   * own comment on why), so by the time a persisted non-default filter shows
+   * up here the initial `open` fetch it triggered has usually already
+   * landed. Refetch only when the resolved filter actually differs from
+   * what is already selected, so the common case — no persisted state, or a
+   * repo that was last left on Open — costs nothing extra.
+   */
+  async function applyPullRequestsFilter(filter: PullRequestListFilter): Promise<void> {
+    if (filter === pullRequestsFilter) return;
+    pullRequestsFilter = filter;
+    if (forgeAvailable && forgeSignedIn) await loadPullRequests();
   }
 
   function handleSidebarStateChange(state: SidebarPersistedState): void {
@@ -318,6 +337,8 @@
     targetBranch: string;
     reviewers: ForgeReviewer[];
     commentCount: number;
+    /** Only read when the filter is `'all'`, to sort the three merged lists most-recent-first. */
+    updatedAt?: string;
   }
   interface PullRequestDetailData extends PullRequestSummary {
     description: string;
@@ -352,6 +373,13 @@
   let forgeCapabilities: ForgeCapabilities = NO_FORGE_CAPABILITIES;
   let pullRequests: PullRequestSummary[] = [];
   let pullRequestsStale = false;
+  /**
+   * The section's status filter, owned by BranchSidebar (persisted the same
+   * way as its expand/collapse flags — see `loadSidebarState` and
+   * `handlePullRequestsFilterChange`) but read from here because fetching
+   * lives here, alongside every other `forge.pr.*` call.
+   */
+  let pullRequestsFilter: PullRequestListFilter = 'open';
   $: branchPullRequests = deriveBranchPullRequests(pullRequests);
 
   let selectedPullRequestId: string | null = null;
@@ -411,25 +439,72 @@
     createPullRequestState = null;
   }
 
+  /** One `forge.pr.list` round trip for a single host-vocabulary state. */
+  async function fetchPullRequestState(
+    state: 'open' | 'merged' | 'closed',
+  ): Promise<{ pullRequests: PullRequestSummary[]; stale: boolean }> {
+    return bridge.send('forge.pr.list', { state }) as Promise<{ pullRequests: PullRequestSummary[]; stale: boolean }>;
+  }
+
   /**
-   * Pulls the open pull request list. A failure leaves whatever list is
-   * already on screen (that is right — an expired token must not blank a
-   * list a moment ago showed real data) but is no longer silent: it is
-   * surfaced as a transient message and the list is marked stale, since an
-   * unauthorized failure here is also what drives `handle()` on the host to
-   * sign the session out (see forge-method-handler.ts), and the next
-   * `forge.changed` this produces is what returns the sidebar to its
-   * signed-out row.
+   * Pulls the pull request list for `pullRequestsFilter`. A failure leaves
+   * whatever list is already on screen (that is right — an expired token
+   * must not blank a list a moment ago showed real data) but is no longer
+   * silent: it is surfaced as a transient message and the list is marked
+   * stale, since an unauthorized failure here is also what drives `handle()`
+   * on the host to sign the session out (see forge-method-handler.ts), and
+   * the next `forge.changed` this produces is what returns the sidebar to
+   * its signed-out row.
+   *
+   * `pullRequestsFetchToken` guards against two calls racing — a filter
+   * switch fired while an earlier fetch (a different state, or an earlier
+   * `'all'`) is still in flight must not let the stale one win just because
+   * its response happened to land second.
    */
+  let pullRequestsFetchToken = 0;
   async function loadPullRequests(): Promise<void> {
+    const token = ++pullRequestsFetchToken;
+    const filter = pullRequestsFilter;
     try {
-      const result = await bridge.send('forge.pr.list') as { pullRequests: PullRequestSummary[]; stale: boolean };
-      pullRequests = result.pullRequests;
-      pullRequestsStale = result.stale;
+      let merged: PullRequestSummary[];
+      let stale: boolean;
+      if (filter === 'all') {
+        // No host filters by more than one state per call, so 'all' means
+        // asking for all three and merging client-side — three times the
+        // requests and three times the quota, which is exactly why it is not
+        // the default. Each call still goes through the same forge.pr.list
+        // path as a single-state fetch, so it hits the normal request queue
+        // and the host's per-state TTL cache rather than going around them.
+        const results = await Promise.all(
+          (['open', 'merged', 'closed'] as const).map((state) => fetchPullRequestState(state)),
+        );
+        merged = results.flatMap((result) => result.pullRequests)
+          .sort((a, b) => Date.parse(b.updatedAt ?? '') - Date.parse(a.updatedAt ?? ''));
+        stale = results.some((result) => result.stale);
+      } else {
+        const result = await fetchPullRequestState(filter);
+        merged = result.pullRequests;
+        stale = result.stale;
+      }
+      if (token !== pullRequestsFetchToken) return; // superseded by a later filter change
+      pullRequests = merged;
+      pullRequestsStale = stale;
     } catch (e) {
+      if (token !== pullRequestsFetchToken) return;
       showTransientMessage(messageOf(e));
       pullRequestsStale = true;
     }
+  }
+
+  /**
+   * The sidebar's filter control fires this immediately on change (see
+   * BranchSidebar's `pullRequestsFilterChange`) — separate from its debounced
+   * `stateChange` save, since a refetch must not wait 300ms behind a storage
+   * write.
+   */
+  async function handlePullRequestsFilterChange(event: CustomEvent<{ filter: PullRequestListFilter }>): Promise<void> {
+    pullRequestsFilter = event.detail.filter;
+    if (forgeAvailable && forgeSignedIn) await loadPullRequests();
   }
 
   /**
@@ -2477,6 +2552,7 @@
             {branchPullRequests}
             on:select={handlePullRequestSelect}
             on:signIn={handleForgeSignIn}
+            on:pullRequestsFilterChange={handlePullRequestsFilterChange}
           />
         {/key}
       </aside>

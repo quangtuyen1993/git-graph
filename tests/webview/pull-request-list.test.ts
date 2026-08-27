@@ -81,4 +81,25 @@ describe('PullRequestList', () => {
     render(PullRequestList, { pullRequests: [], stale: false, signedIn: true, query: '' });
     expect(screen.getByText(/no open pull requests/i)).toBeInTheDocument();
   });
+
+  it.each([
+    ['merged', 'No merged pull requests'],
+    ['closed', 'No closed pull requests'],
+    ['all', 'No pull requests'],
+  ] as const)('reports the empty state for the %s filter', (filter, expected) => {
+    render(PullRequestList, { pullRequests: [], stale: false, signedIn: true, query: '', filter });
+    expect(screen.getByText(expected)).toBeInTheDocument();
+  });
+
+  // A merged or closed row must not keep announcing itself as open just
+  // because that used to be the only state this list ever rendered.
+  it.each([
+    ['open', 'Open'],
+    ['merged', 'Merged'],
+    ['closed', 'Closed'],
+    ['draft', 'Draft'],
+  ] as const)('labels a %s row as %s, not always "Open"', (state, label) => {
+    render(PullRequestList, { pullRequests: [pr({ state })], stale: false, signedIn: true, query: '' });
+    expect(screen.getByLabelText(label)).toBeInTheDocument();
+  });
 });

@@ -510,3 +510,95 @@ describe('PULL REQUESTS section', () => {
     expect(row).toHaveTextContent('#77');
   });
 });
+
+describe('PULL REQUESTS status filter', () => {
+  afterEach(cleanup);
+
+  it('defaults to Open and does not show a filter control while signed out', async () => {
+    const { getByRole, queryByRole } = render(BranchSidebar, {
+      branches, tags, stashes, worktrees, submodules,
+      forgeAvailable: true, forgeSignedIn: false, forgeProviderName: 'Bitbucket', pullRequests: [],
+    });
+
+    await fireEvent.click(getByRole('button', { name: /pull requests/i }));
+
+    expect(queryByRole('combobox', { name: /filter pull requests/i })).toBeNull();
+  });
+
+  it('defaults the filter control to Open once signed in', async () => {
+    const { getByRole } = render(BranchSidebar, {
+      branches, tags, stashes, worktrees, submodules,
+      forgeAvailable: true, forgeSignedIn: true, pullRequests,
+    });
+
+    await fireEvent.click(getByRole('button', { name: /pull requests/i }));
+
+    const select = getByRole('combobox', { name: /filter pull requests/i }) as HTMLSelectElement;
+    expect(select.value).toBe('open');
+  });
+
+  it('dispatches pullRequestsFilterChange and persists the choice in stateChange when switched', async () => {
+    const rendered = render(BranchSidebar, {
+      branches, tags, stashes, worktrees, submodules,
+      forgeAvailable: true, forgeSignedIn: true, pullRequests,
+    });
+    const onFilterChange = vi.fn();
+    const onStateChange = vi.fn();
+    rendered.component.$on('pullRequestsFilterChange', onFilterChange);
+    rendered.component.$on('stateChange', onStateChange);
+
+    await fireEvent.click(rendered.getByRole('button', { name: /pull requests/i }));
+    const select = rendered.getByRole('combobox', { name: /filter pull requests/i });
+    await fireEvent.change(select, { target: { value: 'merged' } });
+
+    expect(onFilterChange).toHaveBeenCalledWith(expect.objectContaining({ detail: { filter: 'merged' } }));
+    expect(onStateChange).toHaveBeenCalledWith(
+      expect.objectContaining({ detail: expect.objectContaining({ pullRequestsFilter: 'merged' }) }),
+    );
+  });
+
+  it('restores a persisted filter from initialState', async () => {
+    const { getByRole } = render(BranchSidebar, {
+      branches, tags, stashes, worktrees, submodules,
+      forgeAvailable: true, forgeSignedIn: true, pullRequests,
+      initialState: {
+        sections: { local: true, remote: false, tags: false, stashes: false, worktrees: false, submodules: false, pullRequests: true },
+        expandedRemotes: {},
+        expandedGroups: {},
+        pullRequestsFilter: 'closed',
+      },
+    });
+
+    const select = getByRole('combobox', { name: /filter pull requests/i }) as HTMLSelectElement;
+    expect(select.value).toBe('closed');
+  });
+
+  it('falls back to Open for state persisted before this field existed', async () => {
+    const { getByRole } = render(BranchSidebar, {
+      branches, tags, stashes, worktrees, submodules,
+      forgeAvailable: true, forgeSignedIn: true, pullRequests,
+      initialState: {
+        sections: { local: true, remote: false, tags: false, stashes: false, worktrees: false, submodules: false, pullRequests: true },
+        expandedRemotes: {},
+        expandedGroups: {},
+      },
+    });
+
+    const select = getByRole('combobox', { name: /filter pull requests/i }) as HTMLSelectElement;
+    expect(select.value).toBe('open');
+  });
+
+  it("the section count badge follows whatever pullRequests it is handed, not a fixed open count", () => {
+    const mixed = [
+      ...pullRequests,
+      { id: 'pr-2', number: 43, title: 'Merged one', state: 'merged' as const, sourceBranch: 'feature/y', reviewers: [], commentCount: 0 },
+      { id: 'pr-3', number: 44, title: 'Closed one', state: 'closed' as const, sourceBranch: 'feature/z', reviewers: [], commentCount: 0 },
+    ];
+    const { getByRole } = render(BranchSidebar, {
+      branches, tags, stashes, worktrees, submodules,
+      forgeAvailable: true, forgeSignedIn: true, pullRequests: mixed,
+    });
+
+    expect(getByRole('button', { name: /pull requests.*3/i })).toBeInTheDocument();
+  });
+});
