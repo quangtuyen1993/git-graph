@@ -11,3 +11,8 @@ svelte.config.js
 vite.config.ts
 esbuild.config.mjs
 .gitignore
+.worktrees/**
+.claude/**
+*.vsix
+tsconfig.test.json
+tsconfig.webview.json
