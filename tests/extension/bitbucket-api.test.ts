@@ -118,6 +118,21 @@ describe('BitbucketApi', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(12);
   });
 
+  // Ledger item: the untested page cap. A malformed or self-referential
+  // `next` link must not spin getPaged forever burning the request budget —
+  // MAX_PAGINATION_PAGES is the ceiling, but nothing previously drove it.
+  it('stops pagination once MAX_PAGINATION_PAGES is reached and reports why', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async () =>
+      jsonResponse({ values: [{ id: 1 }], next: 'https://api.bitbucket.org/2.0/x?page=next' }));
+    const { api } = build(fetchImpl as never);
+
+    await expect(api.getPaged('/x')).rejects.toMatchObject({
+      hostMessage: expect.stringContaining('did not finish within'),
+    });
+    // 200 pages fetched, then it gives up rather than continuing forever.
+    expect(fetchImpl).toHaveBeenCalledTimes(200);
+  });
+
   it('follows Bitbucket pagination until there is no next link', async () => {
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ values: [{ id: 1 }], next: 'https://api.bitbucket.org/2.0/x?page=2' }))
@@ -270,5 +285,70 @@ describe('BitbucketApi', () => {
     const { api } = build(fetchImpl as never);
 
     await expect(api.getJson('/a')).rejects.toMatchObject({ retryAfterSeconds: 5 * 60 });
+  });
+
+  // Ledger item: the untested HTTP-date branch of parseRetryAfter. RFC 9110
+  // §10.2.3 allows Retry-After to be an HTTP-date instead of delta-seconds,
+  // and Bitbucket has been seen to send either — only the delta-seconds form
+  // was previously exercised.
+  it('parses an HTTP-date Retry-After into a delta from now', async () => {
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const future = new Date(now + 12_000).toUTCString();
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({ error: { message: 'Rate limit' } }, { status: 429, headers: { 'retry-after': future } }));
+    const { api } = build(fetchImpl as never);
+
+    await expect(api.getJson('/a')).rejects.toMatchObject({ retryAfterSeconds: 12 });
+    vi.restoreAllMocks();
+  });
+
+  // A Retry-After that is neither a positive delta nor a parseable,
+  // still-future date (garbage, or a date already in the past) falls back to
+  // 60s rather than firing again immediately.
+  it('falls back to 60s when Retry-After is neither a valid delta nor a future date', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({ error: { message: 'Rate limit' } }, { status: 429, headers: { 'retry-after': 'not-a-real-value' } }));
+    const { api } = build(fetchImpl as never);
+
+    await expect(api.getJson('/a')).rejects.toMatchObject({ retryAfterSeconds: 60 });
+  });
+
+  // Ledger item: the deadline extended mid-sleep. waitForPause loops only
+  // while `pausedUntil` has itself moved further out *since the last sleep
+  // call started* — not against the raw clock — so a concurrent request that
+  // extends the pause while this call is already asleep must make it sleep
+  // again for the remainder, rather than firing the moment its original,
+  // now-stale wait elapses.
+  it('sleeps again when the pause deadline is extended while a request is already asleep', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { message: 'Rate limit' } }, { status: 429, headers: { 'retry-after': '5' } }))
+      .mockResolvedValue(jsonResponse({ ok: true }));
+    const sleep = vi.fn();
+    const { api } = build(fetchImpl as never, sleep as never);
+
+    // First call lands the 429 and sets pausedUntil ~5s out.
+    await api.getJson('/a').catch(() => {});
+    expect(sleep).not.toHaveBeenCalled();
+
+    // The second call starts waiting out that 5s pause. Its first `sleep`
+    // call simulates a third, concurrent request extending the deadline
+    // further while this one is asleep, by resolving to nothing but leaving
+    // pausedUntil further out than it was when this wait began.
+    let sleepCallCount = 0;
+    sleep.mockImplementation(async () => {
+      sleepCallCount += 1;
+      if (sleepCallCount === 1) {
+        // Simulate a concurrent 429 landing mid-sleep and extending the
+        // shared deadline well past what this call started waiting for.
+        (api as unknown as { pausedUntil: number }).pausedUntil = Date.now() + 60_000;
+      }
+    });
+
+    await api.getJson('/b');
+    // Woke from the first sleep, re-checked, found the deadline had moved
+    // further out, and had to sleep a second time for the remainder.
+    expect(sleep).toHaveBeenCalledTimes(2);
   });
 });

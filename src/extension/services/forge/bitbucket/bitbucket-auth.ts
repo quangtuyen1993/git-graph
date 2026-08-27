@@ -64,6 +64,17 @@ export class BitbucketAuthProvider implements vscode.AuthenticationProvider {
 
   private cached: StoredCredentials | undefined;
 
+  /**
+   * In-flight createSession() call, so two overlapping sign-in round-trips
+   * (the graph panel and the review panel both call vscode.authentication's
+   * getSession({ createIfNone: true }) when neither has a session yet, or a
+   * user double-clicks "Sign in") collapse into one prompt-and-verify
+   * sequence instead of opening the credential input boxes twice and
+   * spending two /user probe requests. Cleared once the call settles either
+   * way, so a later, genuinely separate sign-in still prompts again.
+   */
+  private inFlightCreateSession: Promise<vscode.AuthenticationSession> | undefined;
+
   constructor(private readonly deps: BitbucketAuthDeps) {}
 
   /**
@@ -81,6 +92,20 @@ export class BitbucketAuthProvider implements vscode.AuthenticationProvider {
   }
 
   public async createSession(_scopes: readonly string[]): Promise<vscode.AuthenticationSession> {
+    // Join an already-running sign-in rather than starting a second prompt
+    // beside it — see the field comment on inFlightCreateSession.
+    if (this.inFlightCreateSession) return this.inFlightCreateSession;
+
+    const run = this.doCreateSession();
+    this.inFlightCreateSession = run;
+    try {
+      return await run;
+    } finally {
+      this.inFlightCreateSession = undefined;
+    }
+  }
+
+  private async doCreateSession(): Promise<vscode.AuthenticationSession> {
     const entered = await this.deps.prompt();
     // createSession must resolve to a session or reject — there is no third
     // option in the interface it implements — so a cancelled prompt becomes

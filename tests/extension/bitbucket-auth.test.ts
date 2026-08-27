@@ -50,6 +50,42 @@ describe('BitbucketAuthProvider', () => {
     expect(session.scopes).toEqual(SCOPES);
   });
 
+  // Ledger item: two overlapping sign-in round-trips. Two panels (the graph
+  // webview and the review webview) can each drive `vscode.authentication`
+  // into calling createSession() when neither has a session yet — without
+  // coalescing, that opens the two-input-box prompt twice and spends two
+  // /user verification requests for what is really one sign-in.
+  it('coalesces two concurrent createSession calls into a single prompt-and-verify round trip', async () => {
+    let resolvePrompt!: (value: typeof credentials) => void;
+    const prompt = vi.fn().mockReturnValue(new Promise((resolve) => { resolvePrompt = resolve; }));
+    const verify = vi.fn().mockResolvedValue('Tuyen Nguyen');
+    const { provider } = build({ prompt, verify });
+
+    const first = provider.createSession(SCOPES);
+    const second = provider.createSession(SCOPES);
+
+    resolvePrompt(credentials);
+    const [firstSession, secondSession] = await Promise.all([first, second]);
+
+    expect(prompt).toHaveBeenCalledOnce();
+    expect(verify).toHaveBeenCalledOnce();
+    expect(firstSession).toEqual(secondSession);
+  });
+
+  // Once a sign-in settles (success or cancellation), the next call must
+  // start a fresh round trip rather than staying joined to the finished one.
+  it('starts a new round trip after the previous createSession call has settled', async () => {
+    const prompt = vi.fn().mockResolvedValue(credentials);
+    const verify = vi.fn().mockResolvedValue('Tuyen Nguyen');
+    const { provider } = build({ prompt, verify });
+
+    await provider.createSession(SCOPES);
+    await provider.createSession(SCOPES);
+
+    expect(prompt).toHaveBeenCalledTimes(2);
+    expect(verify).toHaveBeenCalledTimes(2);
+  });
+
   // A mistyped or under-scoped token must fail where it was typed.
   it('stores nothing when verification fails', async () => {
     const { provider, secrets } = build({ verify: vi.fn().mockRejectedValue(new Error('401')) });
@@ -64,6 +100,34 @@ describe('BitbucketAuthProvider', () => {
     const { provider, secrets } = build({ prompt: vi.fn().mockResolvedValue(undefined) });
     await expect(provider.createSession(SCOPES)).rejects.toThrow(/cancel/i);
     expect(await secrets.get('forge:bitbucket-cloud:token')).toBeUndefined();
+  });
+
+  // Ledger item: the corrupt-stored-secret test. `load()`'s catch treats a
+  // secret that fails JSON.parse as signed out rather than throwing — the
+  // fail-safe path itself is judged correct as-is (closed won't-fix
+  // separately), but nothing previously exercised it.
+  it('treats an unparseable stored secret as signed out rather than throwing', async () => {
+    const secrets = new MemorySecrets();
+    await secrets.store('forge:bitbucket-cloud:token', 'not-json{{{');
+    const provider = new BitbucketAuthProvider({
+      secrets, prompt: vi.fn(), verify: vi.fn(),
+    } as never);
+
+    await expect(provider.getSessions()).resolves.toEqual([]);
+    await expect(provider.getCredentials()).resolves.toBeUndefined();
+  });
+
+  // A stored value that parses as JSON but is missing the fields a
+  // credential needs (a truncated write, a shape from an older version)
+  // must be treated the same way — signed out, not a thrown error.
+  it('treats a stored secret missing required fields as signed out', async () => {
+    const secrets = new MemorySecrets();
+    await secrets.store('forge:bitbucket-cloud:token', JSON.stringify({ email: 'tuyen@example.com' }));
+    const provider = new BitbucketAuthProvider({
+      secrets, prompt: vi.fn(), verify: vi.fn(),
+    } as never);
+
+    await expect(provider.getSessions()).resolves.toEqual([]);
   });
 
   it('reuses the stored credential on later calls', async () => {
