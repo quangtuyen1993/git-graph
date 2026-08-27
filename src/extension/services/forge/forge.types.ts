@@ -39,6 +39,19 @@ export interface PullRequestSummary {
    * (a per-PR call) is authoritative.
    */
   reviewers: { user: ForgeUser; status: ReviewStatus }[];
+  /**
+   * A provider may report `0` here on a `listPullRequests` summary even
+   * when the pull request has comments — the same list-versus-detail gap
+   * `reviewers` above has, hit independently for this field: GitHub's list
+   * endpoint carries neither `comments` nor `review_comments` (only its
+   * single-PR GET does; see github-mapper.ts's `RawPullRequest.comments`),
+   * so `mapPullRequestSummary` defaults both to 0 there. Bitbucket's list
+   * endpoint does carry an accurate `comment_count`, but nothing in this
+   * type distinguishes the two — treat this field as a hint on a list
+   * response, never a source of truth. The same field on a
+   * `PullRequestDetail` from `getPullRequest` (a per-PR call) is
+   * authoritative.
+   */
   commentCount: number;
   webUrl: string;
   updatedAt: string;
