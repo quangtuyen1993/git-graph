@@ -1,9 +1,11 @@
-<script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-  import { matchesPullRequestQuery } from '../../lib/branch-pull-requests';
-
-  interface ForgeUser { displayName: string; accountId: string }
-  interface Reviewer { user: ForgeUser; status: 'approved' | 'changes_requested' | 'pending' }
+<script context="module" lang="ts">
+  // svelte-check: `export` of a type-only declaration is only valid in
+  // `<script context="module">` — see PullRequestDetail.svelte's identical
+  // note. Reviewer and ForgeUser move here too, since PullRequestRow depends
+  // on them and a module script's top-level scope is what the instance
+  // script below can see, not the other way around.
+  export interface ForgeUser { displayName: string; accountId: string }
+  export interface Reviewer { user: ForgeUser; status: 'approved' | 'changes_requested' | 'pending' }
   export interface PullRequestRow {
     id: string;
     number: number;
@@ -13,6 +15,11 @@
     reviewers: Reviewer[];
     commentCount: number;
   }
+</script>
+
+<script lang="ts">
+  import { createEventDispatcher } from 'svelte';
+  import { matchesPullRequestQuery } from '../../lib/branch-pull-requests';
 
   export let pullRequests: PullRequestRow[] = [];
   export let stale = false;

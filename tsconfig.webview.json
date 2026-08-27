@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"]
+  },
+  // The counterpart to tsconfig.json/tsconfig.test.json's shared
+  // `"exclude": [..., "src/webview/**"]`: this is the config svelte-check
+  // reads, so it is the one place src/webview is *included* rather than
+  // carved out. tsconfig.json's own "rootDir": "./src" is overridden above
+  // (".") the same way tsconfig.test.json overrides it, since message-bridge.ts
+  // imports a type from src/extension/types/messages.types — a file outside
+  // src/webview but still needed to check it.
+  "include": ["src/webview/**/*.ts", "src/webview/**/*.svelte"],
+  "exclude": ["node_modules", "dist"]
+}

@@ -1,11 +1,32 @@
 <!-- The sibling of CommitDetail.svelte: shows one pull request in the right-hand panel. -->
+<script context="module" lang="ts">
+  // svelte-check (a Svelte-compiler-level check, not just tsc): an `export`
+  // of a type-only declaration is not valid in the instance script — only
+  // `<script context="module">`'s exports are plain ES module exports. Types
+  // PullRequestDetailModel depends on move here too, since a module script's
+  // top-level scope is what the instance script below can see, not the
+  // other way around.
+  export interface ForgeUser { displayName: string; accountId: string }
+  export type ReviewStatus = 'approved' | 'changes_requested' | 'pending';
+  export interface Reviewer { user: ForgeUser; status: ReviewStatus }
+  export interface PullRequestDetailModel {
+    id: string;
+    number: number;
+    title: string;
+    state: string;
+    sourceBranch: string;
+    targetBranch: string;
+    reviewers: Reviewer[];
+    description: string;
+    mergeable: string;
+    webUrl: string;
+  }
+</script>
+
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import Icon from '../common/Icon.svelte';
 
-  interface ForgeUser { displayName: string; accountId: string }
-  type ReviewStatus = 'approved' | 'changes_requested' | 'pending';
-  interface Reviewer { user: ForgeUser; status: ReviewStatus }
   interface ForgeComment {
     id: string;
     author: ForgeUser;
@@ -29,18 +50,6 @@
     requestChanges: boolean;
     merge: boolean;
     mergeStrategies: string[];
-  }
-  export interface PullRequestDetailModel {
-    id: string;
-    number: number;
-    title: string;
-    state: string;
-    sourceBranch: string;
-    targetBranch: string;
-    reviewers: Reviewer[];
-    description: string;
-    mergeable: string;
-    webUrl: string;
   }
 
   export let pullRequest: PullRequestDetailModel | null = null;

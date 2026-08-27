@@ -91,40 +91,51 @@
       {/if}
 
       {#if node.branch && (node.children.length === 0 || expandedGroups[groupKey(node.path)] === true)}
+        <!--
+          A local const rather than `node.branch` everywhere below: TS
+          narrows `node.branch` from `Branch | null` to `Branch` for this
+          `{#if}`'s own condition, but that narrowing does not survive into
+          the closures the event handlers below create (a property access
+          is never assumed stable across a callback, even one defined in the
+          same expression) — svelte-check flags every one of those as
+          possibly null otherwise. `branch`, a real local binding, narrows
+          correctly and stays narrowed everywhere it is captured.
+        -->
+        {@const branch = node.branch}
         <button
           type="button"
           class="branch-item"
-          class:current={node.branch.current}
-          class:selected={selectedBranch === node.branch.name}
+          class:current={branch.current}
+          class:selected={selectedBranch === branch.name}
           style={`--tree-indent: ${(depth + 1) * 16}px`}
-          aria-current={node.branch.current ? 'true' : undefined}
-          aria-pressed={selectedBranch === node.branch.name}
+          aria-current={branch.current ? 'true' : undefined}
+          aria-pressed={selectedBranch === branch.name}
           aria-label={branchPullRequests.has(node.path)
-            ? `${node.branch.name}, pull request #${branchPullRequests.get(node.path)}`
-            : node.branch.name}
-          title={node.branch.name}
-          on:click={() => scheduleSelect(node.branch)}
+            ? `${branch.name}, pull request #${branchPullRequests.get(node.path)}`
+            : branch.name}
+          title={branch.name}
+          on:click={() => scheduleSelect(branch)}
           on:contextmenu={(event) => {
             event.preventDefault();
             event.stopPropagation();
-            dispatch('contextMenu', { event, branch: node.branch });
+            dispatch('contextMenu', { event, branch });
           }}
-          on:dblclick={() => checkout(node.branch)}
-          on:keydown={(event) => handleKeydown(event, node.branch)}
+          on:dblclick={() => checkout(branch)}
+          on:keydown={(event) => handleKeydown(event, branch)}
         >
-          <span class="branch-icon"><Icon name={node.branch.current ? 'check' : 'git-branch'} size={14} /></span>
+          <span class="branch-icon"><Icon name={branch.current ? 'check' : 'git-branch'} size={14} /></span>
           <span class="branch-name">{node.label}</span>
           <span
             class="favourite"
-            class:is-favourite={favourites.includes(node.branch.name)}
+            class:is-favourite={favourites.includes(branch.name)}
             role="button"
             tabindex="-1"
-            aria-label={`${favourites.includes(node.branch.name) ? 'Unstar' : 'Star'} ${node.branch.name}`}
-            on:click|stopPropagation={() => dispatch('favouriteToggle', { name: node.branch.name })}
+            aria-label={`${favourites.includes(branch.name) ? 'Unstar' : 'Star'} ${branch.name}`}
+            on:click|stopPropagation={() => dispatch('favouriteToggle', { name: branch.name })}
             on:keydown|stopPropagation={(event) => {
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
-                dispatch('favouriteToggle', { name: node.branch.name });
+                dispatch('favouriteToggle', { name: branch.name });
               }
             }}
           ><Icon name="star-full" size={12} /></span>
@@ -134,16 +145,16 @@
               title={`Pull request #${branchPullRequests.get(node.path)}`}
             >#{branchPullRequests.get(node.path)}</span>
           {/if}
-          {#if node.branch.ahead > 0 || node.branch.behind > 0}
+          {#if branch.ahead > 0 || branch.behind > 0}
             <span class="ahead-behind">
-              {#if node.branch.ahead > 0}
-                <span class="ahead" title={`${node.branch.ahead} commit(s) to push`}>
-                  <Icon name="arrow-small-up" size={12} />{formatCount(node.branch.ahead)}
+              {#if branch.ahead > 0}
+                <span class="ahead" title={`${branch.ahead} commit(s) to push`}>
+                  <Icon name="arrow-small-up" size={12} />{formatCount(branch.ahead)}
                 </span>
               {/if}
-              {#if node.branch.behind > 0}
-                <span class="behind" title={`${node.branch.behind} commit(s) to pull`}>
-                  <Icon name="arrow-small-down" size={12} />{formatCount(node.branch.behind)}
+              {#if branch.behind > 0}
+                <span class="behind" title={`${branch.behind} commit(s) to pull`}>
+                  <Icon name="arrow-small-down" size={12} />{formatCount(branch.behind)}
                 </span>
               {/if}
             </span>

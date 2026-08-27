@@ -57,8 +57,14 @@
         "command": "gitGraphPro.open",
         "title": "Git Graph Pro: Open"
       },
-      { "command": "gitGraphPro.forge.signIn",  "title": "Git Graph Pro: Sign in to Forge Provider" },
-      { "command": "gitGraphPro.forge.signOut", "title": "Git Graph Pro: Sign out of Forge Provider" }
+      {
+        "command": "gitGraphPro.forge.signIn",
+        "title": "Git Graph Pro: Sign in to Forge Provider"
+      },
+      {
+        "command": "gitGraphPro.forge.signOut",
+        "title": "Git Graph Pro: Sign out of Forge Provider"
+      }
     ],
     "configuration": {
       "title": "Git Graph Pro",
@@ -126,7 +132,8 @@
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit --project tsconfig.json && tsc --noEmit --project tsconfig.test.json",
-    "check": "npm test && npm run coverage && npm run typecheck && npm run build"
+    "check:webview": "svelte-check --tsconfig ./tsconfig.webview.json",
+    "check": "npm test && npm run coverage && npm run typecheck && npm run check:webview && npm run build"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^3.1.0",
@@ -143,6 +150,7 @@
     "esbuild": "^0.20.0",
     "jsdom": "^24.1.3",
     "svelte": "^4.2.0",
+    "svelte-check": "^3.8.6",
     "typescript": "^5.4.0",
     "vite": "^5.4.0",
     "vitest": "^2.1.9"

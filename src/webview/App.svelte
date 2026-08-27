@@ -2499,37 +2499,46 @@
         {#each columnHeaders as column (column.key)}
           <div class="col-{column.key}">
             {#if column.resize && column.edge === 'left'}
+              <!--
+                A local const rather than `column.resize` everywhere below:
+                TS narrows it to ColumnKey for this `{#if}`'s own condition,
+                but that narrowing does not survive into the event-handler
+                closures below (see BranchTreeList.svelte's identical note
+                on `branch`) — svelte-check flags those as possibly null.
+              -->
+              {@const resizeKey = column.resize}
               <!-- svelte-ignore a11y-no-noninteractive-tabindex a11y-no-noninteractive-element-interactions -->
               <div
                 class="col-resizer left"
-                class:dragging={resizingColumn === column.resize}
-                on:mousedown={(e) => startColumnResize(column.resize, e)}
-                on:dblclick|preventDefault={() => resetColumnWidth(column.resize)}
-                on:keydown={(e) => handleColumnResizeKey(column.resize, e)}
+                class:dragging={resizingColumn === resizeKey}
+                on:mousedown={(e) => startColumnResize(resizeKey, e)}
+                on:dblclick|preventDefault={() => resetColumnWidth(resizeKey)}
+                on:keydown={(e) => handleColumnResizeKey(resizeKey, e)}
                 role="separator"
                 aria-orientation="vertical"
                 aria-label={`Resize ${column.label} column`}
-                aria-valuenow={columnWidth(column.resize)}
-                aria-valuemin={columnBounds[column.resize].min}
-                aria-valuemax={columnBounds[column.resize].max}
+                aria-valuenow={columnWidth(resizeKey)}
+                aria-valuemin={columnBounds[resizeKey].min}
+                aria-valuemax={columnBounds[resizeKey].max}
                 tabindex="0"
               ></div>
             {/if}
             <span class="col-title">{column.label}</span>
             {#if column.resize && column.edge === 'right'}
+              {@const resizeKey = column.resize}
               <!-- svelte-ignore a11y-no-noninteractive-tabindex a11y-no-noninteractive-element-interactions -->
               <div
                 class="col-resizer right"
-                class:dragging={resizingColumn === column.resize}
-                on:mousedown={(e) => startColumnResize(column.resize, e)}
-                on:dblclick|preventDefault={() => resetColumnWidth(column.resize)}
-                on:keydown={(e) => handleColumnResizeKey(column.resize, e)}
+                class:dragging={resizingColumn === resizeKey}
+                on:mousedown={(e) => startColumnResize(resizeKey, e)}
+                on:dblclick|preventDefault={() => resetColumnWidth(resizeKey)}
+                on:keydown={(e) => handleColumnResizeKey(resizeKey, e)}
                 role="separator"
                 aria-orientation="vertical"
                 aria-label={`Resize ${column.label} column`}
-                aria-valuenow={columnWidth(column.resize)}
-                aria-valuemin={columnBounds[column.resize].min}
-                aria-valuemax={columnBounds[column.resize].max}
+                aria-valuenow={columnWidth(resizeKey)}
+                aria-valuemin={columnBounds[resizeKey].min}
+                aria-valuemax={columnBounds[resizeKey].max}
                 tabindex="0"
               ></div>
             {/if}

@@ -7,6 +7,19 @@
   input, pressing it (in a field, or anywhere else) does nothing destructive.
   Only the explicit Cancel button ends the flow.
 -->
+<script context="module" lang="ts">
+  // svelte-check: `export` of a type-only declaration is only valid in
+  // `<script context="module">` — see PullRequestDetail.svelte's identical
+  // note.
+  export interface CreatePullRequestSubmitDetail {
+    title: string;
+    description: string;
+    targetBranch: string;
+    reviewers: string[];
+    closeSourceBranch: boolean;
+  }
+</script>
+
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import Combobox from '../Combobox.svelte';
@@ -14,14 +27,6 @@
   interface ReviewerCandidate {
     displayName: string;
     accountId: string;
-  }
-
-  export interface CreatePullRequestSubmitDetail {
-    title: string;
-    description: string;
-    targetBranch: string;
-    reviewers: string[];
-    closeSourceBranch: boolean;
   }
 
   export let sourceBranch: string;
