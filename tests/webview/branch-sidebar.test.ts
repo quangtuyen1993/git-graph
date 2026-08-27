@@ -470,9 +470,26 @@ describe('PULL REQUESTS section', () => {
       branchPullRequests: new Map([['feature-x', 42]]),
     });
 
-    const row = getByRole('button', { name: 'feature-x' });
+    const row = getByRole('button', { name: 'feature-x, pull request #42' });
     expect(row).toHaveTextContent('#42');
     expect(getByRole('button', { name: 'main' })).not.toHaveTextContent('#42');
+  });
+
+  // Ledger item: the #42 badge's accessible name. The badge span carried
+  // only a `title` — which screen readers do not reliably announce, and
+  // which is invisible anyway once nested inside a button whose own
+  // aria-label overrides descendant content for the accessible name
+  // computation. A screen reader user focusing the row must hear that a
+  // pull request exists, not just the branch name.
+  it('folds the pull request number into the branch row\'s accessible name', () => {
+    const branchesWithPr = [...branches, { ...branches[0], name: 'feature-x', current: false }];
+    const { getByRole } = render(BranchSidebar, {
+      branches: branchesWithPr, tags, stashes, worktrees, submodules,
+      forgeAvailable: true, forgeSignedIn: true, pullRequests,
+      branchPullRequests: new Map([['feature-x', 42]]),
+    });
+
+    expect(getByRole('button', { name: /pull request #42/i })).toBeInTheDocument();
   });
 
   // Read-only PR browsing is mostly for someone else's pull request, whose
@@ -489,7 +506,7 @@ describe('PULL REQUESTS section', () => {
 
     await fireEvent.click(getByRole('button', { name: 'Remote group origin' }));
 
-    const row = getByRole('button', { name: 'origin/feature-y' });
+    const row = getByRole('button', { name: 'origin/feature-y, pull request #77' });
     expect(row).toHaveTextContent('#77');
   });
 });

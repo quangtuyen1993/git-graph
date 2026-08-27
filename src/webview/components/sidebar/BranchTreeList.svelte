@@ -99,7 +99,9 @@
           style={`--tree-indent: ${(depth + 1) * 16}px`}
           aria-current={node.branch.current ? 'true' : undefined}
           aria-pressed={selectedBranch === node.branch.name}
-          aria-label={node.branch.name}
+          aria-label={branchPullRequests.has(node.path)
+            ? `${node.branch.name}, pull request #${branchPullRequests.get(node.path)}`
+            : node.branch.name}
           title={node.branch.name}
           on:click={() => scheduleSelect(node.branch)}
           on:contextmenu={(event) => {
