@@ -46,7 +46,8 @@ export default defineConfig({
         'src/extension/services/forge/bitbucket/bitbucket-sign-in.ts',
         'src/extension/controllers/forge-method-handler.ts',
         'src/webview/components/sidebar/PullRequestList.svelte',
-        'src/webview/components/detail/PullRequestDetail.svelte'
+        'src/webview/components/detail/PullRequestDetail.svelte',
+        'src/webview/components/detail/CreatePullRequestForm.svelte'
       ],
       thresholds: {
         statements: 80,
