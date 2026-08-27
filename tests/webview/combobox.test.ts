@@ -71,6 +71,33 @@ describe('Combobox', () => {
     expect(input.value).toBe('abc1234');
   });
 
+  // Ledger item: `query` did not track an externally-set `value` after
+  // mount. A second handoff to a different pull request while the panel is
+  // already open sets `value` via the bound prop without the input ever
+  // losing focus — the input must not keep showing the previous value.
+  it('updates the displayed text when value changes externally without the input being focused', async () => {
+    const { getByRole, component } = render(Combobox, {
+      props: { items, value: 'main', placeholder: 'branch…', 'aria-label': 'Branch' },
+    });
+    const input = getByRole('combobox') as HTMLInputElement;
+    expect(input.value).toBe('main');
+
+    await component.$set({ value: 'feat/login' });
+    await waitFor(() => expect(input.value).toBe('feat/login'));
+  });
+
+  // A user's in-progress typing must not be clobbered by the component's
+  // own echo of what it just wrote back through the bound `value` prop.
+  it('does not fight the user while they are typing', async () => {
+    const { getByRole } = render(Combobox, {
+      props: { items, value: '', placeholder: 'branch…', 'aria-label': 'Branch' },
+    });
+    const input = getByRole('combobox') as HTMLInputElement;
+    await fireEvent.focus(input);
+    await fireEvent.input(input, { target: { value: 'fix/bug' } });
+    expect(input.value).toBe('fix/bug');
+  });
+
   it('sets aria-expanded and aria-activedescendant correctly', async () => {
     const { getByRole } = render(Combobox, { props: { items, value: '', placeholder: 'branch…', 'aria-label': 'Branch' } });
     const input = getByRole('combobox');

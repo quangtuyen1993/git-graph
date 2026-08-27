@@ -24,6 +24,23 @@
   let inputEl: HTMLInputElement;
   let query = value;
 
+  // Ledger item: `query` (the input's displayed text) used to be seeded
+  // from `value` only once at mount, and re-synced only on focus. A second
+  // handoff to a different pull request while the panel is already open
+  // (see App.svelte's review.target handling) sets `value` externally
+  // without the input ever losing and regaining focus — the summary and
+  // file list, which read `value` directly, updated correctly, but the
+  // input kept showing the *previous* pull request's text. Track every
+  // externally-driven change to `value` here; `lastSyncedValue` is updated
+  // in lockstep by every internal write to `value` too (handleInput,
+  // selectItem, handleBlur), so typing does not fight this sync — it only
+  // fires for a change this component did not itself just make.
+  let lastSyncedValue = value;
+  $: if (value !== lastSyncedValue) {
+    query = value;
+    lastSyncedValue = value;
+  }
+
   const listboxId = `combobox-listbox-${Math.random().toString(36).slice(2, 9)}`;
 
   $: filteredItems = open
