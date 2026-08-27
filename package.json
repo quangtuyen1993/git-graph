@@ -57,8 +57,8 @@
         "command": "gitGraphPro.open",
         "title": "Git Graph Pro: Open"
       },
-      { "command": "gitGraphPro.forge.signIn",  "title": "Git Graph Pro: Sign in to Bitbucket" },
-      { "command": "gitGraphPro.forge.signOut", "title": "Git Graph Pro: Sign out of Bitbucket" }
+      { "command": "gitGraphPro.forge.signIn",  "title": "Git Graph Pro: Sign in to Forge Provider" },
+      { "command": "gitGraphPro.forge.signOut", "title": "Git Graph Pro: Sign out of Forge Provider" }
     ],
     "configuration": {
       "title": "Git Graph Pro",

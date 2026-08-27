@@ -267,4 +267,18 @@ describe('forge contributions', () => {
     expect(ids).toContain('gitGraphPro.forge.signIn');
     expect(ids).toContain('gitGraphPro.forge.signOut');
   });
+
+  // Ledger item: manifest-label drift. gitGraphPro.forge.signIn/signOut
+  // dispatch to whichever provider the active repository resolves to
+  // (Bitbucket or GitHub, see forge-method-handler.ts) — the command
+  // palette titles must not name one host, or they read as wrong the
+  // moment a GitHub repository is the active one.
+  it('keeps the sign-in/sign-out command titles provider-neutral', () => {
+    const commands = contributes.commands as unknown as { command: string; title: string }[];
+    const forgeCommands = commands.filter((c) => c.command.startsWith('gitGraphPro.forge.sign'));
+    expect(forgeCommands).toHaveLength(2);
+    for (const { title } of forgeCommands) {
+      expect(title).not.toMatch(/bitbucket|github/i);
+    }
+  });
 });
