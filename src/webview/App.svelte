@@ -18,6 +18,7 @@
   import { calculateDensity, calculatePanelLayout, defaultPanelWidths, type PanelSide } from './lib/panel-layout';
   import CommitDetail from './components/detail/CommitDetail.svelte';
   import PullRequestDetail from './components/detail/PullRequestDetail.svelte';
+  import CreatePullRequestForm from './components/detail/CreatePullRequestForm.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
   import { deriveBranchPullRequests } from './lib/branch-pull-requests';
   import { extractFileDiffContent, type ChangedFile as ForgeChangedFile } from './lib/unified-diff';
@@ -377,6 +378,26 @@
    */
   let pullRequestDiffText: string | null = null;
 
+  /**
+   * The create-pull-request form's state, populated once `openCreatePullRequestForm`
+   * has fetched the repository's default branch and reviewer suggestions —
+   * the form component itself is never mounted until `loading` is false, so
+   * it never has to reconcile a prop that arrived after mount with values
+   * the user may have already typed.
+   */
+  interface CreatePullRequestState {
+    sourceBranch: string;
+    loading: boolean;
+    title: string;
+    targetBranchOptions: string[];
+    defaultTargetBranch: string;
+    reviewerSuggestions: ForgeUser[];
+    submitting: boolean;
+    errorMessage: string | null;
+    duplicate: { id: string; number: number; title: string } | null;
+  }
+  let createPullRequestState: CreatePullRequestState | null = null;
+
   function clearPullRequestSelection(): void {
     selectedPullRequestId = null;
     pullRequestDetail = null;
@@ -384,6 +405,10 @@
     pullRequestFiles = [];
     pullRequestDetailLoading = false;
     pullRequestDiffText = null;
+    // The create form and an open pull request are mutually exclusive right-
+    // panel views; every caller of this function is switching the panel to
+    // something else.
+    createPullRequestState = null;
   }
 
   /**
@@ -490,6 +515,9 @@
     pullRequestFiles = [];
     pullRequestDetailLoading = true;
     pullRequestDiffText = null;
+    // Selecting an existing pull request always wins the panel back from
+    // the create form.
+    createPullRequestState = null;
 
     try {
       const [detail, commentsResult, filesResult] = await Promise.all([
@@ -658,6 +686,121 @@
         path: file.path, oldPath: file.oldPath, status: file.status,
         oldContent: content.oldContent, newContent: content.newContent,
       });
+    } catch (e) {
+      showTransientMessage(messageOf(e));
+    }
+  }
+
+  interface CreatePullRequestSubmitDetail {
+    title: string;
+    description: string;
+    targetBranch: string;
+    reviewers: string[];
+    closeSourceBranch: boolean;
+  }
+
+  /**
+   * Opens the create-pull-request form for `branch`. The form component
+   * itself is never mounted until both the repository's default branch and
+   * the reviewer suggestions have loaded (`createPullRequestState.loading`
+   * gates it in the template below) — the alternative, mounting immediately
+   * and patching props in as they arrive, would have to reconcile a default
+   * arriving after the user already started typing.
+   */
+  async function openCreatePullRequestForm(branch: Branch): Promise<void> {
+    clearBranchHighlight();
+    clearPullRequestSelection();
+    selectedHash = null;
+    selectedHashes = new Set();
+    detailCommit = null;
+    detailFiles = null;
+    rightPanelOpen = true;
+    createPullRequestState = {
+      sourceBranch: branch.name,
+      loading: true,
+      title: '',
+      targetBranchOptions: branches.filter((b) => !b.remote && b.name !== branch.name).map((b) => b.name),
+      defaultTargetBranch: '',
+      reviewerSuggestions: [],
+      submitting: false,
+      errorMessage: null,
+      duplicate: null,
+    };
+
+    try {
+      const [repoInfo, suggestions, commitInfo] = await Promise.all([
+        bridge.send('forge.repoInfo') as Promise<{ defaultBranch: string }>,
+        bridge.send('forge.pr.reviewerSuggestions') as Promise<{ reviewers: ForgeUser[] }>,
+        bridge.send('git.show', { hash: branch.hash }) as Promise<{ commit: { subject: string } }>,
+      ]);
+      // A later action (closing the panel, selecting something else)
+      // superseded this one while it was in flight.
+      if (!createPullRequestState || createPullRequestState.sourceBranch !== branch.name) return;
+      createPullRequestState = {
+        ...createPullRequestState,
+        loading: false,
+        title: commitInfo.commit.subject,
+        defaultTargetBranch: repoInfo.defaultBranch,
+        reviewerSuggestions: suggestions.reviewers,
+      };
+    } catch (e) {
+      if (!createPullRequestState || createPullRequestState.sourceBranch !== branch.name) return;
+      createPullRequestState = null;
+      showTransientMessage(messageOf(e));
+    }
+  }
+
+  /**
+   * Submits the form. A duplicate is not treated as a generic failure: the
+   * host's ForgeError became a `PullRequestDuplicateError` on the host side
+   * (forge-method-handler.ts), which the bridge surfaces here as `kind:
+   * 'PR_DUPLICATE'` plus the existing pull request in `data` — the form
+   * renders that as a named pull request with an open button, not a banner.
+   * Any other failure renders the host's own message verbatim, and the form
+   * stays mounted either way so nothing typed is lost.
+   */
+  async function handleCreatePullRequestSubmit(event: CustomEvent<CreatePullRequestSubmitDetail>): Promise<void> {
+    if (!createPullRequestState) return;
+    const sourceBranch = createPullRequestState.sourceBranch;
+    const detail = event.detail;
+    createPullRequestState = { ...createPullRequestState, submitting: true, errorMessage: null, duplicate: null };
+
+    try {
+      const created = await bridge.send('forge.pr.create', {
+        title: detail.title,
+        description: detail.description,
+        sourceBranch,
+        targetBranch: detail.targetBranch,
+        reviewers: detail.reviewers,
+        closeSourceBranch: detail.closeSourceBranch,
+      }) as PullRequestDetailData;
+
+      // Appears in the sidebar list with no manual refresh: patched locally
+      // here, the same optimistic-update idiom approve/merge already use,
+      // rather than a round trip back through forge.pr.list.
+      pullRequests = [created, ...pullRequests];
+      createPullRequestState = null;
+      // Reuses the normal selection path rather than assigning pullRequestDetail
+      // directly: `created` carries no comments or files (forge.pr.create's
+      // response is a PullRequestDetail, not the fuller shape the detail panel
+      // needs), and this is the same fetch the panel would otherwise perform anyway.
+      await handlePullRequestSelect({ detail: { id: created.id } } as CustomEvent<{ id: string }>);
+    } catch (e) {
+      if (!createPullRequestState) return; // the panel was closed while the request was in flight
+      const failure = e as Error & { kind?: string; data?: { existing?: { id: string; number: number; title: string } } };
+      if (failure.kind === 'PR_DUPLICATE' && failure.data?.existing) {
+        createPullRequestState = { ...createPullRequestState, submitting: false, duplicate: failure.data.existing };
+      } else {
+        createPullRequestState = { ...createPullRequestState, submitting: false, errorMessage: messageOf(e) };
+      }
+    }
+  }
+
+  async function handleCreatePullRequestOpenDuplicate(): Promise<void> {
+    const id = createPullRequestState?.duplicate?.id;
+    if (!id) return;
+    try {
+      await bridge.send('forge.pr.openExternal', { id });
     } catch (e) {
       showTransientMessage(messageOf(e));
     }
@@ -1321,6 +1464,10 @@
     } else if (branch.current) {
       // Current branch menu (can't delete or checkout)
       const hasUpstream = !!branch.upstream;
+      // A branch with no upstream has nothing to open a pull request from —
+      // the item is absent, not disabled, mirroring how an unsupported forge
+      // capability is absent elsewhere (PullRequestDetail's action row).
+      const canCreatePullRequest = hasUpstream && forgeAvailable && forgeCapabilities.createPullRequest;
       contextMenuItems = [
         hasUpstream
           ? { label: 'Push', action: '', children: [
@@ -1339,6 +1486,7 @@
         { label: 'Fetch', action: 'fetch' },
         { label: '', action: '', divider: true },
         { label: 'Rename branch...', action: 'renameBranch' },
+        ...(canCreatePullRequest ? [{ label: 'Create Pull Request...', action: 'createPullRequest' }] : []),
         { label: '', action: '', divider: true },
         { label: 'Compare with...', action: 'compareBranch' },
         { label: 'Show Diff with Working Tree', action: 'diffWorkingTree' },
@@ -1346,6 +1494,7 @@
     } else {
       // Local branch menu
       const hasUpstream = !!branch.upstream;
+      const canCreatePullRequest = hasUpstream && forgeAvailable && forgeCapabilities.createPullRequest;
       contextMenuItems = [
         { label: 'Checkout', action: 'checkout' },
         { label: `New Branch from '${branch.name}'...`, action: 'newBranchFrom' },
@@ -1377,6 +1526,7 @@
         { label: 'Fetch', action: 'fetch' },
         { label: '', action: '', divider: true },
         { label: 'Rename branch...', action: 'renameBranch' },
+        ...(canCreatePullRequest ? [{ label: 'Create Pull Request...', action: 'createPullRequest' }] : []),
         { label: 'Delete branch...', action: 'deleteBranch', danger: true },
       ];
     }
@@ -2044,6 +2194,11 @@
             }
             break;
           }
+          case 'createPullRequest': {
+            const target = branches.find((b) => b.name === branchName);
+            if (target) await openCreatePullRequestForm(target);
+            break;
+          }
           case 'deleteBranch': {
             progress?.awaitConfirmation();
             const tracked = !!branches.find((b) => b.name === branchName)?.upstream;
@@ -2148,7 +2303,7 @@
         }
       }
 
-      return action !== 'copySha' && action !== 'copyShas' && action !== 'reviewCommit' && action !== 'selectForCompare' && action !== 'compareWithSelected' && action !== 'reviewWithSelected' && action !== 'diffWorkingTree';
+      return action !== 'copySha' && action !== 'copyShas' && action !== 'reviewCommit' && action !== 'selectForCompare' && action !== 'compareWithSelected' && action !== 'reviewWithSelected' && action !== 'diffWorkingTree' && action !== 'createPullRequest';
     } finally {
       contextMenuTarget = null;
     }
@@ -2465,7 +2620,27 @@
         on:reset={() => handlePanelReset('right')}
       />
       <aside class="right-panel" style="width: {rightPanelWidth}px;">
-        {#if selectedPullRequestId}
+        {#if createPullRequestState}
+          {#if createPullRequestState.loading}
+            <div class="pr-detail-loading">
+              <LoadingSpinner label="Preparing pull request…" />
+            </div>
+          {:else}
+            <CreatePullRequestForm
+              sourceBranch={createPullRequestState.sourceBranch}
+              initialTitle={createPullRequestState.title}
+              targetBranchOptions={createPullRequestState.targetBranchOptions}
+              defaultTargetBranch={createPullRequestState.defaultTargetBranch}
+              reviewerSuggestions={createPullRequestState.reviewerSuggestions}
+              submitting={createPullRequestState.submitting}
+              errorMessage={createPullRequestState.errorMessage}
+              duplicate={createPullRequestState.duplicate}
+              on:submit={handleCreatePullRequestSubmit}
+              on:cancel={() => { createPullRequestState = null; }}
+              on:openDuplicate={handleCreatePullRequestOpenDuplicate}
+            />
+          {/if}
+        {:else if selectedPullRequestId}
           {#if pullRequestDetailLoading && !pullRequestDetail}
             <div class="pr-detail-loading">
               <LoadingSpinner label="Loading pull request…" />
