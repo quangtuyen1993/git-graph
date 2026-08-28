@@ -35,7 +35,8 @@ each guess at differently.
   `App.svelte` gained 1300 lines between this spec's first draft and its final one. Every
   location below is therefore given as a CSS selector or a symbol name, with a line number only
   as a hint. Locate the selector, not the line. All four premises were re-verified against
-  `main` at `e8ddf5e`.
+  `main` at `e8ddf5e`. The amendment's corrections and additions (R1–R5 in the review) were
+  re-verified separately, against `b27187b`.
 
 ---
 
@@ -63,7 +64,12 @@ backwards, since the folder is the thing you scan to navigate.
 
 ### Explicitly unchanged
 
-- `.section-title` (LOCAL / REMOTE / TAGS / STASHES …) stays `descriptionForeground`. These are
+- The section headers (LOCAL / REMOTE / TAGS / STASHES / WORKTREES / SUBMODULES / PULL REQUESTS
+  / REVIEWS) stay as they are. There is no `.section-title` rule to leave unchanged — that claim
+  was wrong. The label markup (`<span class="section-title">`, e.g. `BranchSidebar.svelte:453`)
+  sets no colour of its own; it inherits from `.section-header` (`BranchSidebar.svelte:855-864`),
+  which reads `--vscode-sideBarSectionHeader-foreground` (fallback `#bbbbbb`) — a different token
+  from `.branch-group`'s `descriptionForeground`, and one this change does not touch. These are
   partition labels; brightening them would put them in competition with their own contents.
 - `.branch-item.remote .branch-name` in `BranchSidebar.svelte` stays `descriptionForeground`.
   Remote branches being quieter than local ones is a deliberate distinction, not an oversight.
@@ -124,9 +130,43 @@ the hash pins the tree, so the diff against its parent cannot change. The cache 
 goes stale and needs no `layoutVersion` invalidation; it is cleared only when the repository
 changes, using the same identity check `assertCurrent` already performs.
 
-**`graph.getWindow` enriches its nodes:** take the window from `GraphService`, collect the
-hashes absent from the cache, issue one `shortStatsFor` call for that group, populate the cache,
-attach the values to the nodes. Scrolling back over seen rows costs nothing.
+The cache holds an entry for every hash a `shortStatsFor` call was made for, not only the hashes
+git returned a stat line for. `git log --no-walk --shortstat` prints nothing for a merge — the
+table above documents that — so without this, a merge would never enter the returned map, would
+therefore always read as absent from the cache, and would be re-requested from git on every
+window, forever. The consequence: a merge's cache entry holds `null`, the same value an
+unresolved commit holds. The dimming rule below is unaffected by this, because it reads
+`parents.length` and never reaches a merge's stats at all. But the +/− counts follow-up named in
+Out of scope will have to treat a merge's `null` as "no stat line exists for merges", not as "not
+loaded yet" — the two cases are indistinguishable in this cache, and will need to be told apart
+some other way if that follow-up is built.
+
+**`graph.getWindow` stays synchronous and returns immediately, stats left at `null`.** It does
+not await `shortStatsFor`. The alternative — an awaited git subprocess in front of every
+first-visit window response — is exactly what the deleted build-time call's `try`/`catch`
+(`graph-method-handler.ts:77-89`) existed to keep off a critical path, and that property must
+not be lost while moving the work. `graph.getWindow` (`graph-method-handler.ts:35-41`) is a
+synchronous in-memory slice today; enrichment must not change that.
+
+**A second host method, `graph.getStats(hashes)`, does the enrichment.** The webview calls it
+with the hashes it has just rendered, right after a window response arrives or new rows scroll
+into view. `GraphMethodHandler` collects the hashes absent from the cache, issues one
+`shortStatsFor` call for that group, populates the cache (negative entries included, as above),
+and returns stats for the full set of requested hashes — cached and freshly fetched together —
+for the webview to attach to whichever rows currently hold those hashes. Scrolling back over
+seen rows costs nothing, because those hashes are already cached and no git call is issued for
+them.
+
+Pull, not broadcast: the webview already knows which hashes are on screen, only the one panel
+that asked wants the answer, and a broadcast would push stats to every attached webview whether
+or not it is looking at those rows.
+
+**Error handling, stated because its absence is what made the earlier version of this design a
+finding:** a failed or slow `graph.getStats` call leaves the affected rows at `null`. No dim, no
+error banner, nothing surfaced to the user. Stats are decoration; the graph is the feature —
+the same property the deleted build-time call protected with its own `try`/`catch`, now
+preserved by construction: a `graph.getStats` failure has nothing to fail *into*, since the
+window it would have enriched has already rendered undimmed.
 
 **`filesChanged` defaults to `null`, not `0`** (set in `GraphService.createLayout`, plus
 `additions` and `deletions` for consistency). `null` means "not known yet"; `0` means "known to
@@ -159,14 +199,25 @@ filesChanged === 0 && parents.length <= 1
 Opacity rather than a `color` override, so this never fights the specificity of the selection
 and find-match rules — and per Part 3's rule, colour is not ours to override.
 
+`0.55` is a chosen number, not a measured one. jsdom performs no layout and computes no colours,
+so no automated test can verify a dimmed row stays legible against any given theme's row
+background — the same limitation Part 3 states plainly for its own contrast claims, applying
+here too. Verified by eye: open the graph in a light theme and a dark theme, dim a genuinely
+empty commit, and confirm its message text is still readable at `opacity: 0.55` in both.
+
 ### Testing
 
 - `shortStatsFor`: argv assertion (`['log','--no-walk','--shortstat','--format=%H', …hashes]`),
   stat-line parsing, and the empty-input short circuit.
-- `graph.getWindow` enrichment: nodes come back carrying stats; asking for the same window twice
-  issues exactly one git call; a second window fetches only its uncached hashes.
+- `graph.getWindow`: returns rows immediately with `filesChanged`/`additions`/`deletions` at
+  `null`; it issues no git call itself.
+- The cache / `graph.getStats`: requesting the same hashes twice issues exactly one git call; a
+  request mixing cached and uncached hashes fetches only the uncached ones; a merge hash is
+  cached as `null` after its one `shortStatsFor` call and is never requested again, since
+  `shortStatsFor` returns no entry for it.
 - Webview: dims for empty non-merge; does not dim a merge with `filesChanged === 0`; does not dim
-  `null`; does not dim a selected row.
+  `null`; does not dim a selected row; a rejected or slow `graph.getStats` call leaves the row
+  undimmed, with nothing surfaced to the user.
 
 ---
 
@@ -190,16 +241,28 @@ meaning.
 
 White text on a pale tint over a light editor background is unreadable.
 
-**Site 2 — `.commit-row.branch-focused`** (`App.svelte`, ~line 3700), not reported but reachable
+**Site 2 — `.commit-row.branch-focused`** (`App.svelte:3699-3709`), not reported but reachable
 by clicking a branch in the sidebar (`focusedBranchHash`, assigned in `handleBranchSelect`):
 
 ```css
-.commit-row.branch-focused { --lane-alpha: 0.72; color: #ffffff; }
+.commit-row.branch-focused {
+  --lane-alpha: 0.72;
+  z-index: 3;
+  color: #ffffff;
+  filter: brightness(1.45) saturate(1.35);
+  box-shadow:
+    inset 4px 0 0 rgb(var(--lane-rgb)),
+    inset 0 0 0 1px rgba(var(--lane-rgb), 0.95),
+    0 0 20px 4px rgba(var(--lane-rgb), 0.72);
+  animation: branch-focus-flash 300ms ease-out;
+}
 ```
 
 Hardcoded white regardless of theme. At alpha 0.72 the lane colour dominates enough to survive
 in dark themes, but the lane palette includes yellow and cyan, where white reads poorly in any
-theme.
+theme. The rule also carries `filter: brightness(1.45) saturate(1.35)` — a second way the text's
+own rendering gets altered, not just its declared colour — alongside three box-shadows and a
+300ms flash animation.
 
 **Not a bug:** `.branch-item.selected` in `BranchTreeList.svelte` (~line 272) sets
 `background: activeSelectionBackground` **and** `color: activeSelectionForeground` together.
@@ -211,16 +274,30 @@ Used as a pair it is correct in every theme — which is the evidence for the fi
   theme guarantees against the editor background. Selection stays obvious through the two
   affordances already present: the tint step (hover `0.13` → selected `0.22`) and the
   lane-coloured accent bar `inset 2px 0 0 0 rgb(var(--lane-rgb))`.
-- `.commit-row.branch-focused`: drop `color: #ffffff` and lower `--lane-alpha` from `0.72` to
-  `0.35`. The high alpha is what forced a hardcoded text colour in the first place; lowering it
-  removes the need. Three distinct levels remain: hover `0.13`, selected `0.22`,
-  branch-focused `0.35`.
+- `.commit-row.branch-focused`: drop `color: #ffffff` **and** `filter: brightness(1.45)
+  saturate(1.35)`, and lower `--lane-alpha` from `0.72` to `0.35`. The high alpha is what forced
+  a hardcoded text colour in the first place; lowering it removes the need. `filter:
+  brightness()`/`saturate()` multiplies the luminance and saturation of everything inside the
+  element, text included — it reaches the same violation as overriding `color`, through a
+  different property, so it is dropped for the same reason. The three box-shadows and the flash
+  animation stay: the 4px inset is the accent bar the rule below names as permitted emphasis, the
+  ring and outer glow sit at or beyond the row's edge without touching a glyph, and the animation
+  is temporal — none of the three alters how the text itself renders. Three distinct levels
+  remain: hover `0.13`, selected `0.22`, branch-focused `0.35`.
+
+  Expect the lane colours in the bar and ring to read less vivid without the `filter` — that is
+  the intended reduction in emphasis, the same direction as dropping alpha from `0.72` to `0.35`,
+  not a loss to compensate for elsewhere.
 
 ### The rule, recorded so this does not regrow
 
-**Do not override `color` on a background we tinted ourselves.** To emphasise a row, raise the
-background alpha, add an accent bar, or change `font-weight` — never the text colour. A
-theme-provided foreground pair may only be used when both halves of the pair are used together.
+**Do not override `color` — or any property that alters how the text itself renders, such as
+`filter` — on a background we tinted ourselves.** `filter: brightness()`/`saturate()` reaches the
+same violation as overriding `color`, through a different property; naming only `color` would
+leave the door open for the next person to reach for `filter` in good faith. To emphasise a row,
+raise the background alpha, add an accent bar, or change `font-weight` — never the text's own
+rendering. A theme-provided foreground pair may only be used when both halves of the pair are
+used together.
 
 ### Testing
 
@@ -270,7 +347,12 @@ Call sites map the reason to their own wording:
   branch filter." with a **Clear filter** action. `absent`: today's message and its **Fetch**
   action, unchanged.
 - **Commit search** — both messages are already right; it switches to the helper so the three
-  sites cannot drift apart again.
+  sites cannot drift apart again. They're already right because search hits are sourced from the
+  repository itself (`git.searchCommits`, `App.svelte:2272`) — a hash `runCommitSearch` finds
+  cannot be `absent` by construction, so `filtered` is the only reason `graph.getRow` can return
+  `null` here. This is also why `missingRowReason`'s single `branchFilterActive` input is
+  sufficient across all three call sites: no call site needs more than that one fact to pick the
+  right reason.
 - **Sidebar branch jump** — `filtered`: says so, instead of returning silently. This closes a
   known gap where the same `null` produced a message in one place and nothing in another.
 
@@ -290,18 +372,44 @@ The invariant worth stating: **a Fetch action appears only when fetching would a
 |---|---|---|
 | `src/webview/components/sidebar/BranchTreeList.svelte` | 1 | two colour values |
 | `src/extension/services/git.service.ts` | 2 | add `shortStatsFor`, delete `getShortStats`, share the parser |
-| `src/extension/controllers/graph-method-handler.ts` | 2 | drop build-time stats, add the window cache and enrichment |
+| `src/extension/controllers/graph-method-handler.ts` | 2 | drop build-time stats, add the hash cache and the `graph.getStats` method |
 | `src/extension/services/graph.service.ts` | 2 | stat defaults `0` → `null` |
 | `src/webview/lib/missing-row.ts` | 4 | **new** |
-| `src/webview/App.svelte` | 2, 3, 4 | node type, dim class + CSS, two contrast rules, three call sites |
+| `src/webview/App.svelte` | 2, 3, 4 | node type, dim class + CSS, the `graph.getStats` call issued after each rendered window, two contrast rules, three call sites |
 | `tests/coverage-closure.test.ts`, `tests/extension/repository-session.test.ts`, `tests/extension/graph-method-handler.test.ts` | 2 | drop `getShortStats` references |
 
 ## Out of scope
 
 - Showing the actual `+`/`−` counts in the row. The stats are now available per window, which
   makes it easy later; it is not asked for here.
-- Splitting `App.svelte` (2587 lines). Named as worthwhile in the previous review, still not a
+- Splitting `App.svelte` (3882 lines). Named as worthwhile in the previous review, still not a
   gate for this work.
 - Raising the 5s `testTimeout` on the real-git integration tests. Pre-existing, and it belongs
   to a change about test infrastructure, not about legibility.
 - Remote branch names and section titles in the sidebar, deliberately left as they are (Part 1).
+
+---
+
+## Roadmap
+
+Three phases. Parts 1, 3 and 4 are CSS and messaging with no data-model change; Part 2 is a
+plumbing project that happens to end in a dim class. Splitting Part 2's data fix from its
+presentation matters because the data fix is independently valuable: deleting the build-time
+call removes a 500-commit diff from the graph-build critical path and fixes a real
+wrong-revisions bug, with no visible change at all.
+
+| Phase | Deliverable | Depends on | Ships alone | Acceptance |
+|---|---|---|---|---|
+| **1** | Parts 1, 3, 4 — sidebar group colours, light-theme contrast, honest missing-row messages | nothing | Yes | Folder groups and branch names are distinguishable; no rule overrides `color` or `filter` on a self-tinted background; each of the three `graph.getRow` null sites says which of the two causes applies |
+| **2** | Part 2's data layer — delete the build-time `getShortStats` call and the method, add `shortStatsFor(hashes)`, hash-keyed cache with negative caching, stat defaults `null`, the `graph.getStats` method | nothing | Yes | Graph build issues no shortstat call; stats for a window are correct under an active branch filter; a merge is requested once and never again |
+| **3** | Part 2's presentation — the dim class and the `parents`-guarded dimming rule | 2 | Yes | A genuinely empty commit dims; a merge does not; a row with unknown stats does not |
+
+Phases 1 and 2 are independent of each other and may run in either order.
+
+**Sequencing against the other plan:** `docs/superpowers/plans/2026-08-28-review-in-graph.md`
+has phases 2, 4 and 5 outstanding, and its phase 2 edits `App.svelte` in the same neighbourhoods
+this spec does — `reviewCommit`/`reviewWithSelected` at :2234–:2246 sit between this spec's
+branch-jump site (:2221) and its search site (:2294), and the pull request's `Review with AI`
+(:862) neighbours the PR-jump flow (:~749) that Part 4 rewrites. No semantic conflict was found;
+the collision is textual. This spec runs wholly before or wholly after that phase 2, never
+interleaved.
