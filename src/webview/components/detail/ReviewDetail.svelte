@@ -75,7 +75,6 @@
     rerun: void;
     openAsFile: void;
     delete: void;
-    openFile: ChangedFile;
   }>();
 
   function shortSha(sha: string): string {
@@ -152,30 +151,27 @@
     {/if}
 
     <!-- Requirement 4: the changed-file list, always flat like
-         PullRequestDetail — see that component's comment on why. Rows open
-         a diff whether this is a finished review or the diff-only state. -->
+         PullRequestDetail — see that component's comment on why. Plain rows,
+         not buttons: opening a diff needs `localBothPresent` (phase 4's
+         scope), which doesn't reach the webview yet. An absent affordance is
+         honest; a button that dispatches into no listener is not — see the
+         repo's own idiom in App.svelte's branch menu ("the item is absent,
+         not disabled"). -->
     <section class="review-files" aria-label="Changed files">
       <h3>Files ({files?.length ?? 0})</h3>
       <ul class="review-file-list">
         {#each files ?? [] as file, fileIndex (fileIndex + ':' + file.path)}
-          <li>
-            <button
-              type="button"
-              class="review-file-row"
-              title={file.path}
-              on:click={() => dispatch('openFile', file)}
-            >
-              <span class="review-file-path">{file.path}</span>
-              <span class="review-file-meta">
-                {#if file.binary}
-                  <span class="file-binary">BIN</span>
-                {:else}
-                  {#if file.additions > 0}<span class="file-add">+{file.additions}</span>{/if}
-                  {#if file.deletions > 0}<span class="file-del">-{file.deletions}</span>{/if}
-                {/if}
-                <span class="file-status file-status-{file.status}">{statusLetter(file.status)}</span>
-              </span>
-            </button>
+          <li class="review-file-row" title={file.path}>
+            <span class="review-file-path">{file.path}</span>
+            <span class="review-file-meta">
+              {#if file.binary}
+                <span class="file-binary">BIN</span>
+              {:else}
+                {#if file.additions > 0}<span class="file-add">+{file.additions}</span>{/if}
+                {#if file.deletions > 0}<span class="file-del">-{file.deletions}</span>{/if}
+              {/if}
+              <span class="file-status file-status-{file.status}">{statusLetter(file.status)}</span>
+            </span>
           </li>
         {/each}
       </ul>
@@ -310,6 +306,9 @@
     padding: 0;
   }
 
+  /* A plain row, not a button — see the template comment on why opening a
+     diff isn't wired here yet. No hover/focus affordance: nothing happens
+     on click, so it must not look like it does. */
   .review-file-row {
     display: flex;
     align-items: center;
@@ -317,21 +316,7 @@
     gap: 8px;
     min-height: 22px;
     padding: 2px 0;
-    border: none;
-    background: none;
     color: inherit;
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .review-file-row:hover {
-    background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.12));
-  }
-
-  .review-file-row:focus-visible {
-    outline: 1px solid var(--vscode-focusBorder, #007acc);
-    outline-offset: -1px;
   }
 
   .review-file-path {

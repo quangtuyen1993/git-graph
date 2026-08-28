@@ -129,18 +129,20 @@ describe('ReviewDetail', () => {
     expect(fired).toBe(true);
   });
 
-  // Acceptance 6: the changed-file list renders and a row dispatches a diff-open.
-  it('renders changed files and dispatches openFile from a row', async () => {
+  // Acceptance 6 (revised, fix round 1): the changed-file list renders, but
+  // as plain, non-interactive rows — opening a diff needs `localBothPresent`
+  // (phase 4's scope), which doesn't reach the webview yet. A row that looks
+  // clickable and dispatches into nothing is exactly the defect this fix
+  // round exists to close, so the row is absent as an affordance, not
+  // present and inert; there is no `openFile` event to dispatch any more.
+  it('renders changed files as plain rows, not buttons', () => {
     const files = [
       { path: 'src/auth.ts', oldPath: null, status: 'modified', additions: 3, deletions: 1, binary: false },
     ];
-    const { component } = render(ReviewDetail, { reviewTarget: branchTarget, run: doneRun, body: 'ok', files });
-    let opened: unknown;
-    component.$on('openFile', (event) => { opened = event.detail; });
+    render(ReviewDetail, { reviewTarget: branchTarget, run: doneRun, body: 'ok', files });
 
-    await fireEvent.click(screen.getByText('src/auth.ts'));
-
-    expect(opened).toEqual(files[0]);
+    expect(screen.getByText('src/auth.ts')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /src\/auth\.ts/i })).not.toBeInTheDocument();
   });
 
   // Acceptance 7: the diff-only state renders base, head and files, with no

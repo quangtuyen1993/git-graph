@@ -46,6 +46,8 @@ function stubApp(overrides: Partial<Record<string, unknown>> = {}) {
       case 'review.get': return reviewEntry;
       case 'review.body': return 'Looks good overall.';
       case 'review.compare': return { files: [] };
+      case 'review.rerun': return { id: reviewEntry.id };
+      case 'review.delete': return { success: true };
       default: return null;
     }
   });
@@ -123,5 +125,41 @@ describe('Selecting a review in the sidebar', () => {
     // button, is what the right panel falls back to.
     expect(rendered.getByText('Select a commit to view details')).toBeInTheDocument();
     expect(rendered.getByRole('button', { name: 'Close panel' })).toBeInTheDocument();
+  });
+});
+
+// Fix round 1: ReviewDetail's Re-run and Delete buttons rendered and did
+// nothing when clicked — no handler was ever registered for either event.
+// These tests click the buttons through App, the same way selectReview()
+// above drives the sidebar, so a handler being silently absent (or wired to
+// the wrong method/id) fails here instead of shipping unnoticed again.
+describe('Re-running and deleting a review from the detail panel', () => {
+  it('sends review.rerun with the selected review\'s id when Re-run is clicked', async () => {
+    stubApp();
+    const rendered = render(App);
+    await selectReview(rendered);
+    await waitFor(() => expect(rendered.getByRole('button', { name: /re-run/i })).toBeInTheDocument());
+    send.mockClear();
+
+    await fireEvent.click(rendered.getByRole('button', { name: /re-run/i }));
+
+    await waitFor(() => expect(send).toHaveBeenCalledWith('review.rerun', { id: reviewEntry.id }));
+  });
+
+  it('sends review.delete with the selected review\'s id and clears the panel when Delete is clicked', async () => {
+    stubApp();
+    const rendered = render(App);
+    await selectReview(rendered);
+    await waitFor(() => expect(rendered.getByRole('button', { name: /delete/i })).toBeInTheDocument());
+    send.mockClear();
+
+    await fireEvent.click(rendered.getByRole('button', { name: /delete/i }));
+
+    await waitFor(() => expect(send).toHaveBeenCalledWith('review.delete', { id: reviewEntry.id }));
+    // Deleting the review currently on screen must also clear the
+    // selection — the panel falls back to CommitDetail's dismissible empty
+    // state, the same as a failed load does.
+    await waitFor(() => expect(rendered.getByText('Select a commit to view details')).toBeInTheDocument());
+    expect(rendered.queryByText('Looks good overall.')).not.toBeInTheDocument();
   });
 });

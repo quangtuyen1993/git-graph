@@ -929,6 +929,65 @@
     }
   }
 
+  /**
+   * Replaces one row of `reviews` (the sidebar list) with a fresher entry,
+   * dropping any stale row under its previous id — the same "patch the list
+   * locally" idiom `applyPullRequestDetailUpdate` uses for a pull request's
+   * reviewer state, rather than a full `review.list` refetch.
+   */
+  function upsertReviewRow(previousId: string, entry: ReviewRow): void {
+    const withoutStale = reviews.filter((row) => row.id !== previousId && row.id !== entry.id);
+    reviews = [entry, ...withoutStale];
+  }
+
+  /**
+   * "Re-run" — `review.rerun` removes the stored entry and starts a fresh
+   * run (review-method-handler.ts), returning the id the new run landed
+   * under. That id is usually the one just removed (the target's shas
+   * haven't moved), but not always — a branch review re-resolves the branch
+   * tip, so a rerun after a new push lands under a new id. Either way the
+   * panel reloads from whatever id came back, which is what picks the fresh
+   * `running` status and starts this selection's own polling, same as
+   * selecting a running review for the first time does.
+   */
+  async function handleReviewRerun(): Promise<void> {
+    if (!selectedReviewId) return;
+    const previousId = selectedReviewId;
+    try {
+      const result = await bridge.send('review.rerun', { id: previousId }) as { id: string };
+      if (selectedReviewId !== previousId) return; // superseded while in flight
+      const newId = result.id;
+      selectedReviewId = newId;
+      reviewDetailLoading = true;
+      stopReviewPolling();
+      await loadReview(newId, true);
+      if (reviewEntry) upsertReviewRow(previousId, reviewEntry);
+    } catch (e) {
+      if (selectedReviewId !== previousId) return;
+      showTransientMessage(messageOf(e));
+    }
+  }
+
+  /**
+   * "Delete" — removes the stored review. It is also the one currently
+   * displayed, so this reuses `clearReviewSelection()` (the same reset
+   * every other selection-clearing site in this file uses) rather than
+   * writing a second path back to CommitDetail's empty state.
+   */
+  async function handleReviewDelete(): Promise<void> {
+    if (!selectedReviewId) return;
+    const id = selectedReviewId;
+    try {
+      await bridge.send('review.delete', { id });
+      if (selectedReviewId !== id) return; // superseded while in flight
+      reviews = reviews.filter((row) => row.id !== id);
+      clearReviewSelection();
+    } catch (e) {
+      if (selectedReviewId !== id) return;
+      showTransientMessage(messageOf(e));
+    }
+  }
+
   async function handlePullRequestOpenExternal(): Promise<void> {
     if (!pullRequestDetail) return;
     try {
@@ -3129,6 +3188,8 @@
               body={reviewBody}
               files={reviewFiles}
               on:openAsFile={handleReviewOpenAsFile}
+              on:rerun={handleReviewRerun}
+              on:delete={handleReviewDelete}
             />
           {/if}
         {:else}
