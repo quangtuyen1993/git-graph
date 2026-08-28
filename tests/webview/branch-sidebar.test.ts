@@ -41,6 +41,15 @@ const pullRequests = [
   },
 ];
 
+const reviews = [
+  {
+    id: 'review-1', kind: 'branch' as const,
+    baseRef: 'main', baseSha: 'a'.repeat(40), headRef: 'feature/x', headSha: 'b'.repeat(40),
+    provider: 'claude', model: 'sonnet', status: 'done' as const,
+    startedAt: '2026-08-25T09:00:00Z', finishedAt: '2026-08-25T09:05:00Z',
+  },
+];
+
 /**
  * Only LOCAL is expanded by default, so any test that reaches into another
  * section has to open it first — the same click a user makes.
@@ -600,5 +609,104 @@ describe('PULL REQUESTS status filter', () => {
     });
 
     expect(getByRole('button', { name: /pull requests.*3/i })).toBeInTheDocument();
+  });
+});
+
+describe('REVIEWS section', () => {
+  afterEach(cleanup);
+
+  it('renders the REVIEWS header collapsed on first render, with no review rows in the DOM', async () => {
+    const { getByRole, queryByText } = render(BranchSidebar, {
+      branches, tags, stashes, worktrees, submodules, reviews,
+    });
+
+    expect(getByRole('button', { name: /reviews/i })).toBeInTheDocument();
+    expect(queryByText('main ← feature/x')).toBeNull();
+
+    // The header is real, not decorative: toggling it reveals the row.
+    await fireEvent.click(getByRole('button', { name: /reviews/i }));
+    expect(queryByText('main ← feature/x')).toBeInTheDocument();
+  });
+
+  // Unlike PULL REQUESTS, REVIEWS is not gated behind a forge provider — it
+  // is local review-store data, so the section behaves like TAGS/STASHES.
+  it('shows the REVIEWS header even with no forge provider registered', () => {
+    const { getByRole } = render(BranchSidebar, {
+      branches, tags, stashes, worktrees, submodules, reviews,
+    });
+
+    expect(getByRole('button', { name: /reviews/i })).toBeInTheDocument();
+  });
+
+  it('the section count badge follows whatever reviews it is handed', () => {
+    const many = [...reviews, { ...reviews[0], id: 'review-2' }];
+    const { getByRole } = render(BranchSidebar, {
+      branches, tags, stashes, worktrees, submodules, reviews: many,
+    });
+
+    expect(getByRole('button', { name: /reviews.*2/i })).toBeInTheDocument();
+  });
+
+  // Acceptance #4: the sidebar's existing search box filters review rows,
+  // on the same target label the row renders.
+  it('filters review rows through the sidebar search box, on the target label', async () => {
+    const { container, getByRole, queryByText } = render(BranchSidebar, {
+      branches, tags, stashes, worktrees, submodules, reviews,
+    });
+    await fireEvent.click(getByRole('button', { name: /reviews/i }));
+    expect(queryByText('main ← feature/x')).toBeInTheDocument();
+
+    const input = container.querySelector('.sidebar-search input') as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: 'nothing' } });
+
+    expect(queryByText('main ← feature/x')).toBeNull();
+  });
+
+  // reviewSelect, not select — BranchSidebar already forwards PullRequestList's
+  // 'select' as its own 'select', so ReviewList's row click is re-dispatched
+  // under its own name instead of colliding with the pull request handler.
+  it('emits reviewSelect with the review id when a row is clicked', async () => {
+    const rendered = render(BranchSidebar, {
+      branches, tags, stashes, worktrees, submodules, reviews,
+    });
+    const onReviewSelect = vi.fn();
+    rendered.component.$on('reviewSelect', onReviewSelect);
+
+    await fireEvent.click(rendered.getByRole('button', { name: /reviews/i }));
+    await fireEvent.click(rendered.getByRole('button', { name: /main ← feature\/x/ }));
+
+    expect(onReviewSelect).toHaveBeenCalledWith(expect.objectContaining({ detail: { id: 'review-1' } }));
+  });
+
+  it('persists its own expanded state in stateChange, independent of pullRequests', async () => {
+    const rendered = render(BranchSidebar, {
+      branches, tags, stashes, worktrees, submodules, reviews,
+    });
+    const onStateChange = vi.fn();
+    rendered.component.$on('stateChange', onStateChange);
+
+    await fireEvent.click(rendered.getByRole('button', { name: /reviews/i }));
+
+    expect(onStateChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detail: expect.objectContaining({ sections: expect.objectContaining({ reviews: true }) }),
+      }),
+    );
+  });
+
+  it('restores a persisted reviews expand state from initialState', () => {
+    const { queryByText } = render(BranchSidebar, {
+      branches, tags, stashes, worktrees, submodules, reviews,
+      initialState: {
+        sections: {
+          local: true, remote: false, tags: false, stashes: false,
+          worktrees: false, submodules: false, pullRequests: false, reviews: true,
+        },
+        expandedRemotes: {},
+        expandedGroups: {},
+      },
+    });
+
+    expect(queryByText('main ← feature/x')).toBeInTheDocument();
   });
 });

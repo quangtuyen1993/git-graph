@@ -100,6 +100,23 @@
   let worktrees: { path: string; head: string; branch: string | null; bare: boolean; isMain: boolean }[] = [];
   let submodules: SubmoduleEntry[] = [];
   /**
+   * Mirrors `ReviewEntry` (src/extension/services/review-store.ts) — see
+   * ReviewList.svelte's identical mirror. `review.list` never pushes
+   * updates (only `review.target` is broadcast, and that's unrelated), so
+   * this is only ever as fresh as the last `refreshGraph()`.
+   */
+  interface ReviewRow {
+    id: string;
+    kind: 'branch' | 'commit' | 'range' | 'pr';
+    baseRef: string; baseSha: string; headRef: string; headSha: string;
+    subject?: string;
+    prId?: string; prNumber?: number; providerId?: string;
+    provider: string; model: string;
+    status: 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
+    startedAt: string; finishedAt?: string; error?: string;
+  }
+  let reviews: ReviewRow[] = [];
+  /**
    * The banner text. Two kinds of message share it: transient notices, written
    * only through `showTransientMessage`, and the fatal startup failure, written
    * through `showFatalError` and never timed out.
@@ -749,6 +766,21 @@
     }
   }
 
+  /**
+   * Opens the review's body — an existing action (`review.open`, see
+   * review-method-handler.ts) that reads the already-written markdown file
+   * straight from disk as a text document. It never looks at forge state,
+   * so a stored `pr` review whose forge provider is gone still opens; it
+   * just carries no live pull request metadata (constraints.md).
+   */
+  async function handleReviewSelect(event: CustomEvent<{ id: string }>): Promise<void> {
+    try {
+      await bridge.send('review.open', { id: event.detail.id });
+    } catch (e) {
+      showTransientMessage(messageOf(e));
+    }
+  }
+
   async function handlePullRequestOpenExternal(): Promise<void> {
     if (!pullRequestDetail) return;
     try {
@@ -1358,12 +1390,16 @@
     graphRefreshesInFlight += 1;
 
     try {
-      const [nextBranches, nextTags, nextStashes, nextWorktrees, nextSubmodules, workingTreeStatus, build] = await Promise.all([
+      const [nextBranches, nextTags, nextStashes, nextWorktrees, nextSubmodules, nextReviews, workingTreeStatus, build] = await Promise.all([
         bridge.send('git.branches') as Promise<Branch[]>,
         bridge.send('git.tags') as Promise<typeof tags>,
         bridge.send('git.stashList') as Promise<typeof stashes>,
         bridge.send('git.worktreeList') as Promise<typeof worktrees>,
         bridge.send('git.submoduleList') as Promise<SubmoduleEntry[]>,
+        // review.list never pushes updates on its own — see the ReviewRow
+        // comment above — so this piggybacks on the same refresh cadence as
+        // every other sidebar list rather than polling separately.
+        bridge.send('review.list').catch(() => []) as Promise<ReviewRow[]>,
         bridge.send('git.status').catch(() => null) as Promise<WorkingTreeStatus | null>,
         bridge.send('graph.build', branchFilters.length > 0
           ? { branches: branchFilters, all: false }
@@ -1394,6 +1430,10 @@
       stashes = nextStashes;
       worktrees = nextWorktrees;
       submodules = nextSubmodules;
+      // Guards against more than a rejection: an unmocked bridge in tests
+      // resolves every unrecognised method to some placeholder value rather
+      // than an array, and that must not reach BranchSidebar's `.filter`.
+      reviews = Array.isArray(nextReviews) ? nextReviews : [];
       hasWorkingChanges = workingTreeStatus !== null
         && hasWorkingTreeChanges(workingTreeStatus);
       totalRows = build.totalRows;
@@ -2710,9 +2750,11 @@
             {pullRequests}
             {pullRequestsStale}
             {branchPullRequests}
+            {reviews}
             on:select={handlePullRequestSelect}
             on:signIn={handleForgeSignIn}
             on:pullRequestsFilterChange={handlePullRequestsFilterChange}
+            on:reviewSelect={handleReviewSelect}
           />
         {/key}
       </aside>
