@@ -2,10 +2,12 @@
   import { createEventDispatcher } from 'svelte';
   import BranchTreeList from './BranchTreeList.svelte';
   import PullRequestList from './PullRequestList.svelte';
+  import ReviewList, { type ReviewRow } from './ReviewList.svelte';
   import Icon from '../common/Icon.svelte';
   import { normalizePullRequestListFilter, type PullRequestListFilter, type SidebarPersistedState } from '../../lib/sidebar-state';
   import { activeBranchGroupPaths, buildBranchTree, type BranchTreeNode } from '../../lib/branch-tree';
   import { matchesPullRequestQuery } from '../../lib/branch-pull-requests';
+  import { reviewTargetLabel } from '../../lib/review-target-label';
 
   interface Branch {
     name: string;
@@ -84,6 +86,13 @@
   /** Source branch name → live pull request number, for the `#123` badge on a branch row — LOCAL or remote. */
   export let branchPullRequests: Map<string, number> = new Map();
 
+  /**
+   * REVIEWS is local review-store data, not forge data — unlike
+   * PULL REQUESTS it is never gated behind a provider. A repository with no
+   * forge still shows this section exactly like TAGS or STASHES.
+   */
+  export let reviews: ReviewRow[] = [];
+
   const dispatch = createEventDispatcher();
 
   let query = '';
@@ -103,6 +112,11 @@
   $: visiblePullRequests = searching
     ? pullRequests.filter((pr) => matchesPullRequestQuery(pr, needle))
     : pullRequests;
+  /* Same label the row renders is the label the search matches — see
+     ReviewList.svelte's identical filter. */
+  $: visibleReviews = searching
+    ? reviews.filter((entry) => matches(reviewTargetLabel(entry)))
+    : reviews;
 
   $: currentBranch = branches.find((b) => b.current) ?? null;
 
@@ -151,6 +165,7 @@
      * result, so a branch-name search must not fold it away.
      */
     pullRequests: searching ? (!forgeSignedIn || visiblePullRequests.length > 0) : pullRequestsExpanded,
+    reviews: searching ? visibleReviews.length > 0 : reviewsExpanded,
   };
   /* An empty section during a search is noise, so its header goes too. */
   $: sectionVisible = {
@@ -161,6 +176,7 @@
     worktrees: !searching || visibleWorktrees.length > 0,
     submodules: !searching || visibleSubmodules.length > 0,
     pullRequests: forgeAvailable && (!searching || !forgeSignedIn || visiblePullRequests.length > 0),
+    reviews: !searching || visibleReviews.length > 0,
   };
 
   // Group remote branches by remote name
@@ -189,6 +205,12 @@
   let worktreesExpanded = false;
   let submodulesExpanded = false;
   let pullRequestsExpanded = false;
+  /*
+   * REVIEWS is the eighth section. Same reasoning as the six above: it
+   * starts collapsed so it doesn't push the branch list further down the
+   * short bottom panel.
+   */
+  let reviewsExpanded = false;
   /**
    * Which pull request states the section shows. Defaults to `open` — a
    * long-lived repository can hold hundreds of merged pull requests, and
@@ -223,6 +245,7 @@
       submodulesExpanded = initialState.sections.submodules ?? false;
       pullRequestsExpanded = initialState.sections.pullRequests ?? false;
       pullRequestsFilter = normalizePullRequestListFilter(initialState.pullRequestsFilter);
+      reviewsExpanded = initialState.sections.reviews ?? false;
       expandedRemotes = { ...initialState.expandedRemotes };
       expandedGroups = { ...initialState.expandedGroups };
       branchGroupsInitialized = true;
@@ -235,6 +258,7 @@
       submodulesExpanded = false;
       pullRequestsExpanded = false;
       pullRequestsFilter = 'open';
+      reviewsExpanded = false;
       expandedRemotes = {};
       expandedGroups = {};
       branchGroupsInitialized = false;
@@ -251,6 +275,7 @@
         worktrees: worktreesExpanded,
         submodules: submodulesExpanded,
         pullRequests: pullRequestsExpanded,
+        reviews: reviewsExpanded,
       },
       expandedRemotes,
       expandedGroups,
@@ -678,6 +703,28 @@
         {query}
         on:select
         on:signIn
+      />
+    {/if}
+  </div>
+  {/if}
+
+  <!-- REVIEWS section -->
+  {#if sectionVisible.reviews}
+  <div class="section">
+    <button
+      class="section-header"
+      on:click={() => { reviewsExpanded = !reviewsExpanded; emitState(); }}
+    >
+      <span class="chevron" class:collapsed={!sectionOpen.reviews}><Icon name="chevron-right" /></span>
+      <span class="section-title">REVIEWS</span>
+      <span class="section-count">{visibleReviews.length}</span>
+    </button>
+
+    {#if sectionOpen.reviews}
+      <ReviewList
+        {reviews}
+        {query}
+        on:select={(event) => dispatch('reviewSelect', event.detail)}
       />
     {/if}
   </div>

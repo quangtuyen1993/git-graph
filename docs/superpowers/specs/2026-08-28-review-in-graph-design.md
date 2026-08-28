@@ -159,8 +159,8 @@ Removing the second host is worth naming on its own: it deletes the requirement 
 
 ## What is preserved
 
-- The handler's `review.*` methods, all thirteen, each accounted for rather than assumed:
-  - **Kept with callers:** `start`, `rerun`, `list`, `get`, `cancel`, `delete`, `open`, `compare` (the diff-only state), `saveTarget`.
+- The handler's `review.*` methods — thirteen today, fourteen once the review mode adds `review.body` — each accounted for rather than assumed:
+  - **Kept with callers:** `start`, `rerun`, `list`, `get`, `body`, `cancel`, `delete`, `open`, `compare` (the diff-only state), `saveTarget`.
   - **Removed with what they served:** `setTarget` (the panel handoff), `getRepos` and `getCommits` (the pickers), `getTarget` (the panel's restore).
 - The review store on disk. **Reviews saved by the current version must still load and open.** This is a hard constraint.
 - `review.saveTarget`'s write-behind semantics for whatever still persists a target.
@@ -187,6 +187,6 @@ Removing the second host is worth naming on its own: it deletes the requirement 
 | **2** | Entry points: the two new context-menu items, the three review gestures changed from navigate to run, and the two compare gestures pointed at the diff-only state | 1 | Yes | Each of the five review gestures runs a review that appears in the detail panel; both compare gestures open the diff-only state and run nothing; with no provider, each review gesture explains what is missing instead of offering a dead control |
 | **3** | The `worktree` kind, with the diff-content hash in the review id | 2 | Yes | Review, edit, review again runs a second time; the id differs between the two |
 | **4** | The two silences and the attributed errors: cache-hit disclosure, failure reasons, per-operation error placement, and `localBothPresent` travelling to the webview | 1 | Yes | A cache hit is visibly a cache hit; a pull request file row opens a diff when both commits are local |
-| **5** | Remove the old panel: `ReviewApp.svelte`, `review-main.ts`, the view container, `createReviewSession`, `review.setTarget`, the dead ui-state keys | 2, 4 | Yes | The extension registers one webview host; each of the thirteen `review.*` methods is either kept with a caller or removed with what it served; both compare gestures still work; the full suite passes with the second host gone |
+| **5** | Remove the old panel: `ReviewApp.svelte`, `review-main.ts`, the view container, `createReviewSession`, `review.setTarget`, the dead ui-state keys | 2, 4 | Yes | The extension registers one webview host; each of the fourteen `review.*` methods is either kept with a caller or removed with what it served; both compare gestures still work; the full suite passes with the second host gone |
 
 Phase 1 ships a second way to read reviews while the old panel still works, so nothing is lost if later phases stall. Phase 5 is the only irreversible step and it runs last, once every gesture it would strand has a replacement.

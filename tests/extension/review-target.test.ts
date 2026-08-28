@@ -50,6 +50,21 @@ describe('resolveReviewTarget', () => {
     await expect(resolveReviewTarget(git, { kind: 'branch', baseRef: 'gone', headRef: 'feat/x' }))
       .rejects.toThrow(/"feat\/x"|"gone"/);
   });
+
+  it('resolves a worktree target with base HEAD, never rev-parsing a head ref — there is no commit to parse', async () => {
+    const revParse = vi.fn(async (ref: string) => (ref === 'HEAD' ? SHA_A : SHA_B));
+    const git = fakeGit({ revParse });
+    const resolved = await resolveReviewTarget(git, { kind: 'worktree', baseRef: '', headRef: '' });
+
+    expect(resolved.kind).toBe('worktree');
+    // Acceptance row 5: the detail panel renders `baseRef` as plain text —
+    // it must be the literal 'HEAD', not the resolved sha, or the base is
+    // blank for the one case the Global Constraints say must always show it.
+    expect(resolved.baseRef).toBe('HEAD');
+    expect(resolved.baseSha).toBe(SHA_A);
+    expect(revParse).toHaveBeenCalledTimes(1);
+    expect(revParse).toHaveBeenCalledWith('HEAD');
+  });
 });
 
 describe('REVIEW_TARGET_KINDS', () => {
@@ -58,6 +73,7 @@ describe('REVIEW_TARGET_KINDS', () => {
     expect(REVIEW_TARGET_KINDS.has('commit')).toBe(true);
     expect(REVIEW_TARGET_KINDS.has('range')).toBe(true);
     expect(REVIEW_TARGET_KINDS.has('pr')).toBe(true);
+    expect(REVIEW_TARGET_KINDS.has('worktree')).toBe(true);
     expect(REVIEW_TARGET_KINDS.has('issue')).toBe(false);
   });
 });
@@ -170,6 +186,17 @@ describe('ReviewTargetState with storage', () => {
     const storage = fakeStorage({ 'review.target.repo-a': { nonsense: true } });
     const state = new ReviewTargetState(storage);
     expect(state.get('repo-a')).toBeNull();
+  });
+
+  it('survives a reload for a persisted worktree target — this is what REVIEW_TARGET_KINDS gates', () => {
+    // Acceptance row 3. isReviewTarget silently rejects any kind absent from
+    // REVIEW_TARGET_KINDS: without 'worktree' in that set, this stored target
+    // would come back null with no error, not a thrown one.
+    const storage = fakeStorage({
+      'review.target.repo-a': { kind: 'worktree', baseRef: 'HEAD', headRef: 'Working Tree' },
+    });
+    const state = new ReviewTargetState(storage);
+    expect(state.get('repo-a')).toEqual({ kind: 'worktree', baseRef: 'HEAD', headRef: 'Working Tree' });
   });
 
   it('works without storage exactly as before', () => {

@@ -1,6 +1,8 @@
+import { createHash } from 'crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { createReviewHandler } from '../../src/extension/controllers/review-method-handler';
 import { ReviewTargetState } from '../../src/extension/services/review-target';
+import { buildReviewId } from '../../src/extension/services/review-key';
 import type { Commit } from '../../src/extension/types/git.types';
 import { fakePullRequest, FAKE_PR_FILES } from '../helpers/fake-forge-provider';
 import type { ForgeComment, PullRequestDetail, PullRequestFile } from '../../src/extension/services/forge/forge.types';
@@ -11,6 +13,7 @@ function harness(over: Record<string, unknown> = {}) {
     get: vi.fn(async () => undefined),
     remove: vi.fn(async () => {}),
     bodyPath: vi.fn(() => '/tmp/body.md'),
+    readBody: vi.fn(async () => ''),
   };
   const runner = {
     start: vi.fn(async (_input: Record<string, unknown>) => 'new-id'),
@@ -27,6 +30,10 @@ function harness(over: Record<string, unknown> = {}) {
     // its own real existence check. Tests that care about local-vs-forge
     // routing override this per case.
     commitExists: vi.fn(async () => true),
+    // The working tree's raw diff text and its file list — the sibling pair
+    // of getDiff/diff for a kind with no head commit to diff against.
+    getWorkingTreeDiff: vi.fn(async () => 'diff --git a/x b/x'),
+    diffWorkingTree: vi.fn(async () => ({ files: [] })),
   };
   // A pull request that has never been fetched: forge is the only place that
   // knows about it, which is exactly the shape review.start's 'pr' branch
@@ -140,7 +147,7 @@ describe('review namespace', () => {
     expect(git.log).not.toHaveBeenCalled();
   });
 
-  it.each(['review.get', 'review.cancel', 'review.delete', 'review.open'])(
+  it.each(['review.get', 'review.cancel', 'review.delete', 'review.open', 'review.body'])(
     '%s refuses an id that would escape the store',
     async (method) => {
       const { handler, store, runner } = harness();
@@ -149,9 +156,29 @@ describe('review namespace', () => {
 
       expect(store.get).not.toHaveBeenCalled();
       expect(store.remove).not.toHaveBeenCalled();
+      expect(store.readBody).not.toHaveBeenCalled();
       expect(runner.cancel).not.toHaveBeenCalled();
     },
   );
+
+  it('review.body returns the stored review body for a valid id', async () => {
+    const { handler, store } = harness();
+    store.readBody.mockResolvedValue('# Review\n\nLooks good.');
+
+    const result = await handler('review.body', { id: 'aaaaaaa..bbbbbbb.claude.sonnet' });
+
+    expect(result).toBe('# Review\n\nLooks good.');
+    expect(store.readBody).toHaveBeenCalledWith('repo-a', 'aaaaaaa..bbbbbbb.claude.sonnet');
+  });
+
+  it('review.body returns an empty string when the body file is missing', async () => {
+    const { handler, store } = harness();
+    store.readBody.mockResolvedValue('');
+
+    const result = await handler('review.body', { id: 'aaaaaaa..bbbbbbb.claude.sonnet' });
+
+    expect(result).toBe('');
+  });
   it('restarts a `running` entry the runner is not actually working on', async () => {
     // I4: a run dies with the window. Trusting the persisted status hands back
     // an id nothing is working on — the row spins forever, the 1 Hz ticker
@@ -473,5 +500,128 @@ describe('review.start for a pull request', () => {
     const { handler } = harness();
     await expect(handler('review.start', { kind: 'issue', headRef: 'x', provider: 'claude', model: 'sonnet' }))
       .rejects.toThrow(/unknown review kind/i);
+  });
+});
+
+describe('review.start for the working tree', () => {
+  it('resolves base HEAD without a headRef in params, and diffs the working tree rather than two refs', async () => {
+    const { handler, git, runner } = harness();
+
+    const result = await handler('review.start', { kind: 'worktree', provider: 'claude', model: 'sonnet' });
+
+    expect(result).toMatchObject({ cached: false });
+    expect(git.getWorkingTreeDiff).toHaveBeenCalledWith('HEAD');
+    expect(git.diffWorkingTree).toHaveBeenCalledWith('HEAD');
+    expect(git.getDiff).not.toHaveBeenCalled();
+    expect(runner.start).toHaveBeenCalledOnce();
+    const input = runner.start.mock.calls[0][0] as Record<string, unknown>;
+    expect(input.kind).toBe('worktree');
+    expect(input.baseRef).toBe('HEAD');
+  });
+
+  it('acceptance row 1: review, edit a file, review again — the second run executes and the two ids differ', async () => {
+    // Watch this fail against an id built from HEAD alone: if it passes with
+    // a headSha that never varies, the test is wrong, not the code.
+    const { handler, git, runner } = harness();
+    git.getWorkingTreeDiff.mockResolvedValueOnce('diff --git a/x b/x\n-old\n+first edit');
+
+    const first = await handler('review.start', { kind: 'worktree', provider: 'claude', model: 'sonnet' });
+    expect(first).toMatchObject({ cached: false });
+
+    git.getWorkingTreeDiff.mockResolvedValueOnce('diff --git a/x b/x\n-old\n+second edit');
+    const second = await handler('review.start', { kind: 'worktree', provider: 'claude', model: 'sonnet' });
+
+    expect(second).toMatchObject({ cached: false });
+    expect(runner.start).toHaveBeenCalledTimes(2);
+    const firstId = (runner.start.mock.calls[0][0] as { headSha: string }).headSha;
+    const secondId = (runner.start.mock.calls[1][0] as { headSha: string }).headSha;
+    expect(firstId).not.toBe(secondId);
+  });
+
+  it('reuses a cached review when the working tree is unchanged since the last run — the diff hash matches', async () => {
+    const { handler, git, store, runner } = harness();
+    git.getWorkingTreeDiff.mockResolvedValue('diff --git a/x b/x\n-old\n+same edit');
+    const contentHash = createHash('sha256').update('diff --git a/x b/x\n-old\n+same edit').digest('hex');
+    const expectedId = buildReviewId({
+      kind: 'worktree', baseSha: 'b'.repeat(40), headSha: contentHash, provider: 'claude', model: 'sonnet',
+    });
+    store.get.mockImplementation((async (_repoId: string, id: string) =>
+      (id === expectedId ? { id, status: 'done' } : undefined)) as typeof store.get);
+
+    const result = await handler('review.start', { kind: 'worktree', provider: 'claude', model: 'sonnet' });
+
+    expect(result).toEqual({ id: expectedId, cached: true });
+    expect(runner.start).not.toHaveBeenCalled();
+  });
+
+  it('acceptance row 4: a clean working tree — nothing to review — is a clear message, not a crash or an empty review', async () => {
+    const { handler, git, runner } = harness();
+    git.getWorkingTreeDiff.mockResolvedValue('   ');
+
+    await expect(handler('review.start', { kind: 'worktree', provider: 'claude', model: 'sonnet' }))
+      .rejects.toThrow(/no uncommitted changes/i);
+    expect(runner.start).not.toHaveBeenCalled();
+    expect(git.diffWorkingTree).not.toHaveBeenCalled();
+  });
+
+  // Important finding 5 (final pre-merge review): setTarget exists only for
+  // the old standalone panel's handoff, and that panel's Mode type has no
+  // 'worktree' case — applyTarget's switch no-ops, getCompareParams()'s
+  // switch has no default, and a worktree mode set synchronously (not
+  // through init()'s awaited restore path) leaves canCompare stale from the
+  // previous mode until the next reactive flush, so compare() can slip past
+  // its `!canCompare` guard and call review.compare(undefined), which throws
+  // "Missing head ref". setTarget's worktree branch was never "kept for the
+  // old panel" — it's new support for something that cannot render it. This
+  // replaces the old expectation (a successful store-and-broadcast) with a
+  // rejection: store nothing, broadcast nothing.
+  it('setTarget rejects a worktree target instead of storing and broadcasting it', async () => {
+    const { handler, targets, broadcast } = harness();
+
+    await expect(handler('review.setTarget', { kind: 'worktree' })).rejects.toThrow(/worktree/i);
+
+    expect(targets.get('repo-a')).toBeFalsy();
+    expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it('saveTarget accepts a worktree target without requiring a headRef', async () => {
+    const { handler, targets, git } = harness();
+
+    const result = await handler('review.saveTarget', { kind: 'worktree' });
+
+    expect(result).toEqual({ success: true });
+    expect(targets.get('repo-a')).toMatchObject({ kind: 'worktree' });
+    expect(git.revParse).not.toHaveBeenCalled();
+  });
+
+  it('rerun re-diffs the working tree rather than trusting the stored headSha', async () => {
+    const { handler, store, runner, git } = harness();
+    store.get.mockResolvedValueOnce({
+      id: 'old-id', kind: 'worktree', baseRef: 'HEAD', baseSha: 'b'.repeat(40),
+      headRef: 'Working Tree', headSha: 'stale-hash', provider: 'claude', model: 'sonnet',
+      status: 'done', startedAt: '2026-08-01T00:00:00.000Z',
+    } as never);
+
+    const result = await handler('review.rerun', { id: 'old-id' });
+
+    expect(store.remove).toHaveBeenCalledWith('repo-a', 'old-id');
+    expect(git.getWorkingTreeDiff).toHaveBeenCalledWith('HEAD');
+    expect(runner.start).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ cached: false });
+  });
+
+  it('fix round 1: compare returns the working tree\'s changed files instead of diffing HEAD against the literal ref "Working Tree"', async () => {
+    // App.svelte's fetchReviewFiles (added in Task 3, landed after this
+    // worktree branched) routes every non-'pr' kind through review.compare,
+    // which used to call git.diff(resolved.baseRef, resolved.headRef) —
+    // git.diff('HEAD', 'Working Tree') is not a valid ref pair and throws.
+    const { handler, git } = harness();
+    git.diffWorkingTree.mockResolvedValue({ files: [{ path: 'src/x.ts' }] } as never);
+
+    const result = await handler('review.compare', { kind: 'worktree' });
+
+    expect(result).toEqual({ files: [{ path: 'src/x.ts' }] });
+    expect(git.diffWorkingTree).toHaveBeenCalledWith('HEAD');
+    expect(git.diff).not.toHaveBeenCalled();
   });
 });

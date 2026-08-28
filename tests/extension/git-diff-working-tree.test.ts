@@ -62,3 +62,34 @@ describe('GitService.diffWorkingTree', () => {
       .toContainEqual(['diff', '-M', '-C', 'develop']);
   });
 });
+
+describe('GitService.getWorkingTreeDiff', () => {
+  it('gets raw diff text against the working tree with no range operator — getDiff\'s working-tree sibling', async () => {
+    const service = new GitService('/repo');
+    const calls: string[][] = [];
+    const exec = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      return 'diff --git a/src/app.ts b/src/app.ts\n-old\n+new\n';
+    });
+    (service as unknown as { cli: { exec: typeof exec } }).cli = { exec };
+
+    const result = await service.getWorkingTreeDiff('HEAD');
+
+    expect(result).toContain('diff --git');
+    expect(calls).toEqual([['diff', '-M', '-C', 'HEAD']]);
+    expect(calls[0].some((arg) => arg.includes('...'))).toBe(false);
+  });
+
+  it('strips null bytes and control characters exactly like getDiff, so the text survives JSON serialization', async () => {
+    const service = new GitService('/repo');
+    const dirty = 'diff --git a/x b/x\n+clean\u0000er\u0007 text\n';
+    const exec = vi.fn(async () => dirty);
+    (service as unknown as { cli: { exec: typeof exec } }).cli = { exec };
+
+    const result = await service.getWorkingTreeDiff('HEAD');
+
+    expect(result).not.toContain('\u0000');
+    expect(result).not.toContain('\u0007');
+    expect(result).toContain('cleaner text');
+  });
+});

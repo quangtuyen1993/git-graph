@@ -28,9 +28,21 @@ export function assertSafeReviewId(id: unknown): string {
 
 /**
  * `kind` is required so every call site states it deliberately, but it only
- * ever changes the id for `'pr'`: a pull-request review and a `'range'`
- * review of the same sha pair must not collide (they used to — the entry's
- * kind was whichever ran first, and rerun would rerun it as that kind), but
+ * ever changes the id for two kinds. `'pr'` was the first: a pull-request
+ * review and a `'range'` review of the same sha pair must not collide (they
+ * used to — the entry's kind was whichever ran first, and rerun would rerun
+ * it as that kind), so it gets its own suffix.
+ *
+ * `'worktree'` is the second, sibling exception. The working tree has no sha
+ * of its own — `headSha` here is the content hash of its diff, computed by
+ * the caller (review-method-handler.ts's `review.start`) before this id is
+ * known, since that is what makes *review → edit a file → review again*
+ * produce two different ids instead of silently replaying the first result.
+ * A content hash could in principle land on the same seven hex characters as
+ * some unrelated commit's sha, so it gets the same kind of suffix `'pr'` has,
+ * for the same reason: two different things that happen to share a sha pair
+ * must not share an id.
+ *
  * `'branch' | 'commit' | 'range'` ids must stay byte-for-byte what they
  * always were, so every review stored before this change still loads under
  * the same id it was written with.
@@ -46,7 +58,7 @@ export function buildReviewId(input: {
   const target = input.headSha.slice(0, 7);
   const provider = slugSegment(input.provider);
   const model = slugSegment(input.model || 'default') || 'default';
-  const kindSegment = input.kind === 'pr' ? '.pr' : '';
+  const kindSegment = input.kind === 'pr' ? '.pr' : input.kind === 'worktree' ? '.worktree' : '';
   return `${source}..${target}${kindSegment}.${provider}.${model}`;
 }
 

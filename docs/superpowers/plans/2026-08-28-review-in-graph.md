@@ -106,12 +106,19 @@ Nothing is removed in this phase. It adds a second way to read reviews, so if th
 
 ## Task 2: The detail panel's review mode
 
-**Files:** create `src/webview/components/detail/ReviewDetail.svelte`; modify `App.svelte`.
+**Files:** create `src/webview/components/detail/ReviewDetail.svelte`; modify `App.svelte`, `src/extension/controllers/review-method-handler.ts` and its test.
+
+**Three gaps the pre-flight scan found, with their rulings. Each is verified in the tree, not suspected:**
+
+- **Nothing returns the review body.** `ReviewStore.readBody()` exists at `review-store.ts:125`, but no `review.*` method exposes it: `review.get` returns a `ReviewEntry`, which is metadata only, and `review.open` opens the file in an editor. *Ruling:* add a `review.body` method returning `store.readBody`, id-validated with `assertSafeReviewId` exactly as its neighbours are. Without it, "the body renders inline" is unbuildable.
+- **`ReviewEntry` carries no file list.** *Ruling:* source it from `review.compare {kind, baseRef, headRef}` for git-based kinds and `forge.pr.files` for kind `pr`, mirroring the split `ReviewApp.svelte:422` already makes. Phase 4 Task 2 replaces that kind test with `localBothPresent`; until then this preserves existing behaviour rather than inventing a new proxy.
+- **No push channel exists for progress.** The runner appends chunks to the body file and notifies nobody; the only broadcast in the review path is `review.target`, which is unrelated. *Ruling:* poll while the selected review's status is `running`, and stop when it settles.
 
 **Read first:** `CommitDetail.svelte` and `PullRequestDetail.svelte` — the two modes this joins, for structure, naming and styling idiom — and how `App.svelte` switches the right-hand panel between them. Also `review-store.ts` for what a stored entry actually contains, and `review-runner.ts` for how a running review streams.
 
 **Interfaces:**
-- Consumes `review.get` and `review.open`; `ReviewEntry` as declared in `review-store.ts`.
+- Consumes `review.get`, `review.open`, the new `review.body`, and `review.compare` / `forge.pr.files`; `ReviewEntry` as declared in `review-store.ts`.
+- Produces `review.body` — id in, body text out, `''` when the file is missing.
 - Produces `ReviewDetail.svelte` with events for re-running, opening as a file, and deleting.
 
 **Requirements:**
@@ -119,7 +126,7 @@ Nothing is removed in this phase. It adds a second way to read reviews, so if th
 1. A header naming what was reviewed, with the provider, model and when it ran.
 2. **The resolved base and head are shown as text**, each with its short sha and its human name. This is the plan's load-bearing display requirement: the base is derived in three of five cases, and the worst outcome of removing the tabs is a review whose base the user cannot see.
 3. The review body renders inline.
-4. **The changed-file list renders, and its rows open a diff.** This is not decoration carried over from the old panel: `review.compare` feeds it, the compare gestures depend on it, and phase 2 points them here.
+4. **The changed-file list renders.** This is not decoration carried over from the old panel: `review.compare` feeds it, the compare gestures depend on it, and phase 2 points them here. The rows do **not** open a diff in this phase — that needs `localBothPresent` from phase 4, so they render inert rather than as controls that do nothing.
 5. **A diff-only state** — base, head and files, no AI body, no progress. It is what compare opens and what a review shows before its run produces anything, so it is one state rather than two.
 6. A failed review shows its reason here in full.
 7. `Open as file` keeps the existing path to the review as markdown in an editor — a long review still needs search, folding and copy.
@@ -136,7 +143,7 @@ Nothing is removed in this phase. It adds a second way to read reviews, so if th
 | 3 | A failed review shows its reason without opening the file |
 | 4 | `Open as file` still opens the markdown |
 | 5 | Rendering with no review selected produces nothing, not a broken frame |
-| 6 | The changed-file list renders and a row dispatches a diff-open |
+| 6 | The changed-file list renders. **The rows are deliberately inert this phase** — opening a diff needs `localBothPresent`, which phase 4 delivers, and a button that dispatches into no listener is the failure this repo has already shipped once. Assert the rows are not interactive, so the day phase 4 wires them the change is visible |
 | 7 | The diff-only state renders base, head and files with no AI body and no progress affordance |
 
 ## Task 3: Wire the two together
@@ -332,7 +339,10 @@ Nothing is removed in this phase. It adds a second way to read reviews, so if th
 **Requirements:**
 
 1. **A cache hit is visible.** Starting a review on an identical target, provider and model opens the existing one; the review mode must say it is showing an existing result, when it was produced, and offer to re-run. Moving the trigger into a context menu makes this sharper than it was: a click that instantly yields a week-old review reads as an impossibly fast model, or one that ignored the changes.
-2. **An error is rendered where it happened.** The old panel routed eight unrelated operations into one anonymous slot with no label, no dismissal, and clearing on only two of the eight successes — so a failed pull request fetch at startup sat on screen while the user worked elsewhere, attributed to nothing. A history-load failure belongs to the `REVIEWS` section; a review failure belongs to that review.
+2. **A cache hit must stop opening an editor.** `review.start`'s cached path calls `deps.openBody` at `review-method-handler.ts:173` before returning. Once phase 2 makes a context-menu gesture call `review.start`, every cache hit throws a markdown tab over the graph. The disclosure replaces it: say it is an existing result in the panel, and let `Open as file` stay the explicit action it already is.
+3. **A poll tick must not tear the panel down.** `loadReview`'s catch is shared between the initial load and every poll tick, so one transient `review.get` rejection mid-run calls `clearReviewSelection()` and wipes the panel — at the most attention-invested moment the feature has, while the user watches a stream. Switching repositories while a review runs reaches it. A poll-tick failure retries or stops quietly; only an initial load clears the selection. This is the same mandate as the clause above: an error belongs to what failed.
+4. **`Delete` needs a confirmation.** It was a small row icon in the old panel and is now a primary button beside `Re-run`; it destroys the output of a paid AI run and the store has no undo.
+5. **An error is rendered where it happened.** The old panel routed eight unrelated operations into one anonymous slot with no label, no dismissal, and clearing on only two of the eight successes — so a failed pull request fetch at startup sat on screen while the user worked elsewhere, attributed to nothing. A history-load failure belongs to the `REVIEWS` section; a review failure belongs to that review.
 
 **Acceptance:**
 
@@ -340,12 +350,17 @@ Nothing is removed in this phase. It adds a second way to read reviews, so if th
 |---|---|
 | 1 | A cache hit renders as an existing result, with its age and a way to re-run |
 | 2 | Re-running after a cache hit executes a real run |
-| 3 | A history-load failure appears in the section, and does not appear in the detail panel |
-| 4 | An error from one operation does not survive into an unrelated success |
+| 3 | A cache hit opens no editor |
+| 4 | A failed poll tick leaves the review on screen; only an initial load clears the selection |
+| 5 | Deleting a review asks first |
+| 6 | A history-load failure appears in the section, and does not appear in the detail panel |
+| 7 | An error from one operation does not survive into an unrelated success |
 
 ## Task 2: `localBothPresent` on the wire
 
-**Files:** modify `review-method-handler.ts`, `App.svelte`, `PullRequestDetail.svelte`.
+**Files:** create `src/webview/lib/review-wire.ts`; modify `review-method-handler.ts`, `App.svelte`, `PullRequestDetail.svelte`, `ReviewList.svelte`, `ReviewDetail.svelte`, `review-target-label.ts`.
+
+**Do the type consolidation first, before touching the wire.** Phase 1 shipped a defect where `'worktree'` was missing from four separate webview mirrors of the same union — in `App.svelte`, `ReviewList.svelte`, `ReviewDetail.svelte` and `review-target-label.ts` — and no type gate could catch it, because every hop into the webview is an `as` cast. It was fixed by editing all four. The structure that produced it is untouched, and this task adds `localBothPresent` to the same wire, which means editing all four again, ungated again. Consolidate to one webview-side declaration the components import, then add the field once.
 
 **Read first:** where `localBothPresent` is computed in `review-target.ts`, and the three places the review UI currently uses `mode === 'pr'` as a proxy for "the diff came from the API".
 
@@ -360,6 +375,7 @@ Nothing is removed in this phase. It adds a second way to read reviews, so if th
 | # | Test obligation |
 |---|---|
 | 1 | A pull request whose commits are local has live file rows |
+| 1b | The review detail panel's file rows become interactive here — phase 1 left them inert deliberately, and this is where that debt is paid |
 | 2 | A pull request whose commits are not local still opens a file's diff, reconstructed |
 | 3 | No code path decides diff provenance from the target's kind |
 
@@ -371,6 +387,7 @@ Nothing is removed in this phase. It adds a second way to read reviews, so if th
 | Errors attributed to their operation | 1 |
 | Failure reasons visible | 1 |
 | `localBothPresent` travels; proxy removed | 2 |
+| Review detail file rows become interactive | 2 |
 
 ---
 
@@ -393,9 +410,9 @@ Nothing is removed in this phase. It adds a second way to read reviews, so if th
 2. Remove `review.setTarget` and its focus-and-broadcast machinery. With one panel there is no handoff between panels.
 3. Remove the `review.mode` and `review.repo` ui-state keys. The second is written and never read — the defect that mislabelled reviews by repository.
 4. **`review.saveTarget` and its write-behind semantics survive** for whatever still persists a target. It is easy to delete by association — it sits beside `review.setTarget`, which does go — but the two are unrelated: `setTarget` was a handoff between two panels, and `saveTarget` is persistence.
-5. **All thirteen `review.*` methods are accounted for, one by one.** The count matters: the spec originally named seven and read as complete. A method left with no caller is dead code someone will maintain without knowing it is dead; a method whose only caller was deleted is a feature silently removed. The expected disposition:
+5. **All fourteen `review.*` methods are accounted for, one by one.** The count matters: the spec first named seven and read as complete, the handler had thirteen, and phase 1 adds `review.body` as the fourteenth. A method left with no caller is dead code someone will maintain without knowing it is dead; a method whose only caller was deleted is a feature silently removed. The expected disposition:
 
-   - **Keep, with a caller in the graph:** `start`, `rerun`, `list`, `get`, `cancel`, `delete`, `open`, `compare`, `saveTarget`.
+   - **Keep, with a caller in the graph:** `start`, `rerun`, `list`, `get`, `body`, `cancel`, `delete`, `open`, `compare`, `saveTarget`.
    - **Remove with what it served:** `setTarget` (the panel handoff), `getRepos` and `getCommits` (the pickers), `getTarget` (the panel's restore).
 
    Verify this against the code rather than trusting the list; report any method whose real disposition differs.
@@ -408,7 +425,7 @@ Nothing is removed in this phase. It adds a second way to read reviews, so if th
 | # | Test obligation |
 |---|---|
 | 1 | The extension registers exactly one webview host |
-| 2 | Each of the thirteen `review.*` methods is kept with a caller or removed with what it served |
+| 2 | Each of the fourteen `review.*` methods is kept with a caller or removed with what it served |
 | 2b | `review.compare` still has a caller — both compare gestures work with the old panel gone |
 | 3 | Reviews stored before this plan began still load and open |
 | 4 | The full suite passes with the second host gone |
@@ -422,7 +439,7 @@ Nothing is removed in this phase. It adds a second way to read reviews, so if th
 | `createReviewSession` removed | 1 |
 | `review.setTarget` removed, `review.saveTarget` preserved | 1 |
 | Dead ui-state keys removed, including `aiReview.*` | 1 |
-| Thirteen methods each accounted for | 1 |
+| Fourteen methods each accounted for | 1 |
 | Stored reviews still load | 1 |
 
 ---
@@ -434,7 +451,13 @@ Nothing is removed in this phase. It adds a second way to read reviews, so if th
 | **1** | Review mode in the detail panel; `REVIEWS` sidebar section | nothing | Yes | A stored review is selectable in `REVIEWS` and readable in the detail panel, with its derived base and, when failed, its reason |
 | **2** | Five gestures run reviews; two compare gestures open the diff-only state; the provider settings become live | 1 | Yes | Each review gesture runs a review with no second press; both compare gestures run nothing; `defaultProvider` selects the provider; with no provider, each review gesture explains what is missing |
 | **3** | The `worktree` kind | 2 | Yes | Review, edit, review again executes a second time with a different id; the four existing kinds' ids are unchanged |
-| **4** | Cache-hit disclosure, attributed errors, `localBothPresent` | 1 | Yes | A cache hit is visibly a cache hit; a pull request file row opens a diff when both commits are local |
-| **5** | The old panel removed | 2, 4 | Yes | One webview host; each of the thirteen `review.*` methods kept with a caller or removed with what it served; both compare gestures still work; reviews stored before this plan still load |
+| **4** | Cache-hit disclosure, attributed errors, `localBothPresent` | 1 | Yes — **and runs before phase 2** | A cache hit is visibly a cache hit and pops no editor; a pull request file row opens a diff when both commits are local; the review detail panel's file rows become interactive |
+| **5** | The old panel removed | 2, 4 | Yes | One webview host; each of the fourteen `review.*` methods kept with a caller or removed with what it served; both compare gestures still work; reviews stored before this plan still load |
 
-Phase 1 adds a second way to read reviews while the old panel still works, so a stall costs nothing. Phase 4 depends only on phase 1 and can run beside 2 and 3 if that suits. Phase 5 is the only step that cannot be undone, and it runs after every gesture it would strand has a replacement.
+**Execution order is 1, 3, 4, 2, 5 — phase 4 runs BEFORE phase 2.** The dependency graph permits 2 before 4; shipping in that order regresses working behaviour three ways, so the graph is not the whole story:
+
+1. **Compare loses its file rows.** Phase 2 points `Compare with selected` and `Compare with '<current>'` at the diff-only state, and the point of a compare surface is clicking a file to open its diff. Phase 1 shipped those rows deliberately inert with the debt booked to phase 4. Ship 2 first and compare goes from working — the old panel's rows are clickable today — to a list you can read but not open. That breaks the Global Constraint that both compare gestures keep working.
+2. **The cache-hit silence gets its worst window.** The spec's own argument is that moving the trigger into a context menu makes the silence worse. Phase 2 is the move; phase 4 is the disclosure. Between them is exactly the failure the spec describes.
+3. **A concrete side effect, not just a principle.** `review.start`'s cached path calls `deps.openBody(repoId, id)` at `review-method-handler.ts:173` before returning `cached: true` — it pops a markdown editor. Tolerable when the user pressed a button in a panel; once a context-menu gesture calls `review.start`, every cache hit throws an editor tab over the graph. Phase 4's cache-disclosure task is the natural owner of removing it, so running 2 first either inherits the bug or does phase 4's work early anyway.
+
+Phase 1 adds a second way to read reviews while the old panel still works, so a stall costs nothing. Phase 3 is extension-side and can run beside phase 1. Phase 5 is the only step that cannot be undone, and it runs after every gesture it would strand has a replacement.
