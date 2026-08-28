@@ -853,13 +853,24 @@
   }
 
   /**
-   * Fetches one review's entry and body, and — only on the selection's first
-   * load, not on every poll tick, since the file list does not change while
-   * a review runs — its changed-file list. Reschedules itself while the
-   * entry's status is `running`: there is no push channel for review
-   * progress (ruling R3, progress.md), so this is the polling that stands in
-   * for one, stopping the moment the status settles or a later selection or
-   * failure supersedes it.
+   * Fetches one review's entry and body — which come straight off disk
+   * (review-store.ts) and cannot fail for the reasons the file list can —
+   * and, only on the selection's first load, not on every poll tick, its
+   * changed-file list. Reschedules itself while the entry's status is
+   * `running`: there is no push channel for review progress (ruling R3,
+   * progress.md), so this is the polling that stands in for one, stopping
+   * the moment the status settles or a later selection or failure
+   * supersedes it.
+   *
+   * Fix round 2 (Critical): the file-list fetch used to share a `Promise.all`
+   * and a catch block with the entry/body fetch, so a stale ref (a deleted
+   * or GC'd branch — `review.compare`'s `revParseNamed`) or a gone forge
+   * provider (`forge.pr.files`) took the whole review down, including
+   * `handleReviewOpenAsFile` (it early-returns on `!selectedReviewId`) —
+   * silently breaking the plan's binding constraint that a stored review
+   * must keep loading and opening. The file list is now fetched and caught
+   * separately: its failure degrades to an empty files section and a
+   * transient message, never `clearReviewSelection()`.
    */
   async function loadReview(id: string, fetchFiles: boolean): Promise<void> {
     try {
@@ -867,15 +878,22 @@
       if (selectedReviewId !== id) return; // superseded while fetching
       if (!entry) throw new Error('This review could not be found.');
 
-      const [bodyResult, filesResult] = await Promise.all([
-        bridge.send('review.body', { id }) as Promise<string>,
-        fetchFiles ? fetchReviewFiles(entry) : Promise.resolve(reviewFiles),
-      ]);
+      const body = await bridge.send('review.body', { id }) as string;
       if (selectedReviewId !== id) return; // superseded while fetching
 
       reviewEntry = entry;
-      reviewBody = bodyResult;
-      reviewFiles = filesResult;
+      reviewBody = body;
+
+      if (fetchFiles) {
+        try {
+          reviewFiles = await fetchReviewFiles(entry);
+        } catch (filesError) {
+          if (selectedReviewId !== id) return; // superseded while fetching
+          reviewFiles = [];
+          showTransientMessage(`Couldn't load the changed-file list: ${messageOf(filesError)}`);
+        }
+      }
+      if (selectedReviewId !== id) return; // superseded while fetching the files
 
       if (entry.status === 'running') {
         reviewPollTimer = setTimeout(() => { void loadReview(id, false); }, REVIEW_POLL_MS);
@@ -886,7 +904,9 @@
       // nothing to show and no way to leave it. Falling back to the same
       // empty CommitDetail state `openCreatePullRequestForm`'s own failure
       // path uses — which always owns a close button — is what avoids
-      // repeating PullRequestDetail's pre-fix dead end here.
+      // repeating PullRequestDetail's pre-fix dead end here. Only
+      // `review.get`/`review.body` failures reach this catch now — a
+      // missing/corrupt stored entry, not a recomputable file list.
       clearReviewSelection();
       showTransientMessage(messageOf(e));
     } finally {

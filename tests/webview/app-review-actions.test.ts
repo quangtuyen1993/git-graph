@@ -26,6 +26,17 @@ const reviewEntry = {
   startedAt: '2026-08-25T09:00:00.000Z', finishedAt: '2026-08-25T09:02:00.000Z',
 };
 
+const prReviewEntry = {
+  id: 'pr..pr-77.claude.claude-opus-5',
+  kind: 'pr' as const,
+  baseRef: 'main', baseSha: 'd'.repeat(40),
+  headRef: 'feature/y', headSha: 'e'.repeat(40),
+  prId: 'pr-77', prNumber: 77, subject: 'Add widgets',
+  provider: 'Claude', model: 'claude-opus-5',
+  status: 'done' as const,
+  startedAt: '2026-08-25T09:00:00.000Z', finishedAt: '2026-08-25T09:02:00.000Z',
+};
+
 function stubApp(overrides: Partial<Record<string, unknown>> = {}) {
   vi.stubGlobal('acquireVsCodeApi', () => ({ postMessage: vi.fn(), getState: () => null, setState: vi.fn() }));
   send.mockImplementation(async (method: string, params?: unknown) => {
@@ -65,22 +76,32 @@ async function waitForAppReady(rendered: ReturnType<typeof render>): Promise<voi
   await waitFor(() => expect(rendered.container.querySelector('.commit-row')).toBeTruthy());
 }
 
-async function selectReview(rendered: ReturnType<typeof render>): Promise<void> {
+async function selectReviewByLabel(rendered: ReturnType<typeof render>, label: string): Promise<void> {
   await waitForAppReady(rendered);
   await waitFor(() => expect(rendered.getByText('REVIEWS')).toBeInTheDocument());
   // The section may already be expanded from an earlier selection in the
   // same test — clicking the header again would collapse it back.
-  if (!rendered.queryByText('develop ← feature/x')) {
+  if (!rendered.queryByText(label)) {
     await fireEvent.click(rendered.getByText('REVIEWS'));
   }
-  const row = await waitFor(() => rendered.getByText('develop ← feature/x'));
+  const row = await waitFor(() => rendered.getByText(label));
   await fireEvent.click(row.closest('button')!);
+}
+
+async function selectReview(rendered: ReturnType<typeof render>): Promise<void> {
+  await selectReviewByLabel(rendered, 'develop ← feature/x');
 }
 
 async function selectCommit(rendered: ReturnType<typeof render>): Promise<void> {
   await waitForAppReady(rendered);
   const row = rendered.container.querySelector('.commit-row');
   await fireEvent.click(row!);
+}
+
+// Base/head names (e.g. 'main') collide with the branch sidebar's own rows,
+// so assertions about the review panel's own content are scoped to it.
+function rightPanel(rendered: ReturnType<typeof render>) {
+  return within(rendered.container.querySelector('.right-panel')!);
 }
 
 describe('Selecting a review in the sidebar', () => {
@@ -162,4 +183,97 @@ describe('Re-running and deleting a review from the detail panel', () => {
     await waitFor(() => expect(rendered.getByText('Select a commit to view details')).toBeInTheDocument());
     expect(rendered.queryByText('Looks good overall.')).not.toBeInTheDocument();
   });
+});
+
+// Fix round 2 (Critical): loadReview shared a Promise.all and a catch block
+// between the entry/body fetch and the changed-file-list fetch, so a stale
+// ref (a deleted or GC'd branch) or a gone forge provider took the whole
+// review down — clearReviewSelection() nulled selectedReviewId, which also
+// made "Open as file" unreachable (it early-returns on !selectedReviewId).
+// This is the constraints.md guarantee that predates this task: a stored
+// review must keep loading and opening in all four kinds, even one whose
+// ref or forge provider is now gone.
+describe('A stale changed-file list does not take the review down', () => {
+  it('still renders the review, its body and Open as file when review.compare rejects (a git-based kind)', async () => {
+    stubApp({
+      'review.compare': () => { throw new Error("fatal: bad revision 'feature/x'"); },
+    });
+    const rendered = render(App);
+
+    await selectReview(rendered);
+
+    await waitFor(() => expect(rendered.getByText('Looks good overall.')).toBeInTheDocument());
+    expect(rightPanel(rendered).getByText('develop')).toBeInTheDocument();
+    expect(rightPanel(rendered).getByText('feature/x')).toBeInTheDocument();
+    await waitFor(() => expect(
+      rendered.container.querySelector('.error-banner')?.textContent,
+    ).toContain("fatal: bad revision 'feature/x'"));
+    // The review itself is still selected and open — a degraded file list
+    // must not be indistinguishable from the load having failed outright.
+    expect(rendered.queryByText('Select a commit to view details')).not.toBeInTheDocument();
+
+    send.mockClear();
+    await fireEvent.click(rendered.getByRole('button', { name: /open as file/i }));
+    await waitFor(() => expect(send).toHaveBeenCalledWith('review.open', { id: reviewEntry.id }));
+  });
+
+  it('still renders the review and Open as file when forge.pr.files rejects (kind pr)', async () => {
+    stubApp({
+      'review.list': () => [prReviewEntry],
+      'review.get': () => prReviewEntry,
+      'forge.pr.files': () => { throw new Error('Not signed in to Bitbucket.'); },
+    });
+    const rendered = render(App);
+
+    await selectReviewByLabel(rendered, 'PR #77 Add widgets');
+
+    await waitFor(() => expect(rendered.getByText('Looks good overall.')).toBeInTheDocument());
+    expect(rightPanel(rendered).getByText('main')).toBeInTheDocument();
+    expect(rightPanel(rendered).getByText('feature/y')).toBeInTheDocument();
+    await waitFor(() => expect(
+      rendered.container.querySelector('.error-banner')?.textContent,
+    ).toContain('Not signed in to Bitbucket.'));
+    expect(rendered.queryByText('Select a commit to view details')).not.toBeInTheDocument();
+
+    send.mockClear();
+    await fireEvent.click(rendered.getByRole('button', { name: /open as file/i }));
+    await waitFor(() => expect(send).toHaveBeenCalledWith('review.open', { id: prReviewEntry.id }));
+  });
+});
+
+// Important finding: the only test near the poll loop re-rendered
+// ReviewDetail directly with a bigger `body` prop, which proves Svelte
+// re-renders and nothing about whether App.svelte itself re-fetches on a
+// timer, at what interval, or stops once the status settles. This drives it
+// through real timers (short enough to keep the file fast) rather than fake
+// ones, since the polling interacts with several chained bridge round trips
+// that are awkward to keep in lockstep with a faked clock.
+describe('Polling a running review', () => {
+  it('re-fetches on a timer while running, and stops once the status settles', async () => {
+    let getCalls = 0;
+    const runningEntry = { ...reviewEntry, status: 'running' as const, finishedAt: undefined };
+    const doneEntry = { ...reviewEntry, status: 'done' as const };
+    stubApp({
+      // Calls 1 and 2 ('running') prove the timer fires and re-fetches;
+      // call 3 onward ('done') proves the loop stops once settled — not
+      // just once, since a loop that fires exactly one poll and then always
+      // stops regardless of status would also pass a weaker assertion.
+      'review.get': () => { getCalls += 1; return getCalls <= 2 ? runningEntry : doneEntry; },
+    });
+    const rendered = render(App);
+
+    await selectReview(rendered);
+    await waitFor(() => expect(rendered.getAllByText(/claude-opus-5/).length).toBeGreaterThan(0));
+    expect(getCalls).toBe(1);
+
+    // The first poll tick: still running, so a second review.get lands.
+    await waitFor(() => expect(getCalls).toBeGreaterThanOrEqual(2), { timeout: 3000 });
+    // The second poll tick: now done, so a third review.get lands and no
+    // further timer is armed.
+    await waitFor(() => expect(getCalls).toBeGreaterThanOrEqual(3), { timeout: 3000 });
+
+    const callsAtSettle = getCalls;
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(getCalls).toBe(callsAtSettle);
+  }, 10000);
 });
