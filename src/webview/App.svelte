@@ -21,6 +21,7 @@
   import { calculateDensity, calculatePanelLayout, defaultPanelWidths, type PanelSide } from './lib/panel-layout';
   import CommitDetail from './components/detail/CommitDetail.svelte';
   import PullRequestDetail from './components/detail/PullRequestDetail.svelte';
+  import ReviewDetail from './components/detail/ReviewDetail.svelte';
   import CreatePullRequestForm from './components/detail/CreatePullRequestForm.svelte';
   import BranchSidebar from './components/sidebar/BranchSidebar.svelte';
   import { deriveBranchPullRequests } from './lib/branch-pull-requests';
@@ -116,6 +117,57 @@
     startedAt: string; finishedAt?: string; error?: string;
   }
   let reviews: ReviewRow[] = [];
+
+  // Review detail panel state — the third mode of the right-hand panel,
+  // sibling to the commit and pull request state above. `reviewEntry` is a
+  // `ReviewRow` (the same shape `review.get` returns — see the mirrored
+  // interface above), and `reviewTarget`/`reviewRun` below are pure
+  // reshapes of it into ReviewDetail's own prop contract.
+  let selectedReviewId: string | null = null;
+  let reviewEntry: ReviewRow | null = null;
+  let reviewBody = '';
+  let reviewFiles: ForgeChangedFile[] = [];
+  let reviewDetailLoading = false;
+  /** How often to re-poll `review.get`/`review.body` while a review is `running` — see `loadReview`'s comment on why polling, not a push channel. */
+  const REVIEW_POLL_MS = 1000;
+  let reviewPollTimer: ReturnType<typeof setTimeout> | undefined;
+
+  $: reviewTarget = reviewEntry ? {
+    kind: reviewEntry.kind,
+    baseRef: reviewEntry.baseRef, baseSha: reviewEntry.baseSha,
+    headRef: reviewEntry.headRef, headSha: reviewEntry.headSha,
+    ...(reviewEntry.subject ? { subject: reviewEntry.subject } : {}),
+    ...(reviewEntry.prNumber !== undefined ? { prNumber: reviewEntry.prNumber } : {}),
+  } : null;
+  $: reviewRun = reviewEntry ? {
+    id: reviewEntry.id, provider: reviewEntry.provider, model: reviewEntry.model,
+    status: reviewEntry.status, startedAt: reviewEntry.startedAt,
+    ...(reviewEntry.finishedAt ? { finishedAt: reviewEntry.finishedAt } : {}),
+    ...(reviewEntry.error ? { error: reviewEntry.error } : {}),
+  } : null;
+
+  function stopReviewPolling(): void {
+    if (reviewPollTimer !== undefined) clearTimeout(reviewPollTimer);
+    reviewPollTimer = undefined;
+  }
+
+  /**
+   * The panel's one reset for review state — the sibling of
+   * `clearPullRequestSelection` above. Called from every site that switches
+   * the right panel to something else (see App.svelte's own reset-path
+   * enumeration in the task 3 report), and from the failed-load path in
+   * `loadReview`, where it is what turns a would-be blank frame back into
+   * CommitDetail's own dismissible empty state.
+   */
+  function clearReviewSelection(): void {
+    stopReviewPolling();
+    selectedReviewId = null;
+    reviewEntry = null;
+    reviewBody = '';
+    reviewFiles = [];
+    reviewDetailLoading = false;
+  }
+
   /**
    * The banner text. Two kinds of message share it: transient notices, written
    * only through `showTransientMessage`, and the fatal startup failure, written
@@ -731,6 +783,9 @@
   async function handlePullRequestSelect(event: CustomEvent<{ id: string }>): Promise<void> {
     const id = event.detail.id;
     clearBranchHighlight();
+    // A review selected before this always loses the panel to the pull
+    // request being opened, the same way a commit selection does below.
+    clearReviewSelection();
     selectedPullRequestId = id;
     rightPanelOpen = true;
     detailCommit = null;
@@ -767,15 +822,108 @@
   }
 
   /**
-   * Opens the review's body — an existing action (`review.open`, see
-   * review-method-handler.ts) that reads the already-written markdown file
-   * straight from disk as a text document. It never looks at forge state,
-   * so a stored `pr` review whose forge provider is gone still opens; it
-   * just carries no live pull request metadata (constraints.md).
+   * Selects a review from the REVIEWS sidebar section and shows it in the
+   * detail panel — the third mode, alongside a commit and a pull request.
+   * `review.open` (reading the review as a markdown file) was this handler's
+   * entire body until now, standing in for the panel this replaces it with;
+   * it is kept below as the explicit "Open as file" action ReviewDetail
+   * still offers, per constraints.md.
    */
   async function handleReviewSelect(event: CustomEvent<{ id: string }>): Promise<void> {
+    const id = event.detail.id;
+    clearBranchHighlight();
+    // Every other selection this panel can show is cleared here, the same
+    // way selecting a pull request or a commit clears its siblings below.
+    clearPullRequestSelection();
+    selectedHash = null;
+    selectedHashes = new Set();
+    detailCommit = null;
+    detailFiles = null;
+    createPullRequestState = null;
+
+    selectedReviewId = id;
+    rightPanelOpen = true;
+    reviewEntry = null;
+    reviewBody = '';
+    reviewFiles = [];
+    reviewDetailLoading = true;
+    stopReviewPolling();
+
+    await loadReview(id, true);
+  }
+
+  /**
+   * Fetches one review's entry and body, and — only on the selection's first
+   * load, not on every poll tick, since the file list does not change while
+   * a review runs — its changed-file list. Reschedules itself while the
+   * entry's status is `running`: there is no push channel for review
+   * progress (ruling R3, progress.md), so this is the polling that stands in
+   * for one, stopping the moment the status settles or a later selection or
+   * failure supersedes it.
+   */
+  async function loadReview(id: string, fetchFiles: boolean): Promise<void> {
     try {
-      await bridge.send('review.open', { id: event.detail.id });
+      const entry = await bridge.send('review.get', { id }) as ReviewRow | null;
+      if (selectedReviewId !== id) return; // superseded while fetching
+      if (!entry) throw new Error('This review could not be found.');
+
+      const [bodyResult, filesResult] = await Promise.all([
+        bridge.send('review.body', { id }) as Promise<string>,
+        fetchFiles ? fetchReviewFiles(entry) : Promise.resolve(reviewFiles),
+      ]);
+      if (selectedReviewId !== id) return; // superseded while fetching
+
+      reviewEntry = entry;
+      reviewBody = bodyResult;
+      reviewFiles = filesResult;
+
+      if (entry.status === 'running') {
+        reviewPollTimer = setTimeout(() => { void loadReview(id, false); }, REVIEW_POLL_MS);
+      }
+    } catch (e) {
+      if (selectedReviewId !== id) return; // superseded while fetching
+      // Requirement 3: a failed load must not leave the panel open with
+      // nothing to show and no way to leave it. Falling back to the same
+      // empty CommitDetail state `openCreatePullRequestForm`'s own failure
+      // path uses — which always owns a close button — is what avoids
+      // repeating PullRequestDetail's pre-fix dead end here.
+      clearReviewSelection();
+      showTransientMessage(messageOf(e));
+    } finally {
+      if (selectedReviewId === id) reviewDetailLoading = false;
+    }
+  }
+
+  /**
+   * The changed-file list for one review entry, sourced the way review's own
+   * plan ruling (R2, progress.md) requires: `forge.pr.files` for a `pr`
+   * review, `review.compare` for every git-based kind — mirroring the split
+   * the old standalone review panel already made, until phase 4 replaces
+   * the kind test with `localBothPresent`.
+   */
+  async function fetchReviewFiles(entry: ReviewRow): Promise<ForgeChangedFile[]> {
+    if (entry.kind === 'pr') {
+      if (!entry.prId) return [];
+      const result = await bridge.send('forge.pr.files', { id: entry.prId }) as { files: ForgeChangedFile[] };
+      return result.files;
+    }
+    const result = await bridge.send('review.compare', {
+      kind: entry.kind, baseRef: entry.baseRef, headRef: entry.headRef,
+    }) as { files: ForgeChangedFile[] };
+    return result.files;
+  }
+
+  /**
+   * `Open as file` — the one action ReviewDetail still exposes explicitly
+   * rather than doing by default (constraints.md): the pre-existing
+   * `review.open`, reading the already-written markdown straight from disk
+   * into an editor. Never looks at forge state, so a stored `pr` review
+   * whose forge provider is gone still opens.
+   */
+  async function handleReviewOpenAsFile(): Promise<void> {
+    if (!selectedReviewId) return;
+    try {
+      await bridge.send('review.open', { id: selectedReviewId });
     } catch (e) {
       showTransientMessage(messageOf(e));
     }
@@ -952,6 +1100,7 @@
   async function openCreatePullRequestForm(branch: Branch): Promise<void> {
     clearBranchHighlight();
     clearPullRequestSelection();
+    clearReviewSelection();
     selectedHash = null;
     selectedHashes = new Set();
     detailCommit = null;
@@ -1187,6 +1336,7 @@
       if (panelStateSaveTimer) clearTimeout(panelStateSaveTimer);
       if (columnStateSaveTimer) clearTimeout(columnStateSaveTimer);
       cancelTransientMessage();
+      stopReviewPolling();
       refreshScheduler.cancel();
       invalidatedUnsubscribe?.();
       forgeChangedUnsubscribe?.();
@@ -1353,6 +1503,7 @@
       detailCommit = null;
       detailFiles = null;
       clearPullRequestSelection();
+      clearReviewSelection();
       void refreshForgeStatus();
       await refreshGraph();
     } catch (e) {
@@ -1525,8 +1676,10 @@
 
   function handleRowClick(hash: string, event?: MouseEvent) {
     clearBranchHighlight();
-    // A commit row click always wins the right panel back from a pull request.
+    // A commit row click always wins the right panel back from a pull
+    // request or a review.
     clearPullRequestSelection();
+    clearReviewSelection();
     if (event?.shiftKey && lastClickedHash && graphWindow) {
       const allNodes = graphWindow.nodes;
       const lastIdx = allNodes.findIndex(n => n.hash === lastClickedHash);
@@ -1565,6 +1718,7 @@
     detailCommit = null;
     detailFiles = null;
     clearPullRequestSelection();
+    clearReviewSelection();
   }
 
   async function fetchCommitDetail(hash: string) {
@@ -1896,10 +2050,11 @@
     rightPanelOpen = false;
     detailCommit = null;
     detailFiles = null;
-    // A pull request selected before the filter changed must not resurface
-    // stale: its row indexes belonged to the layout being replaced, same as
-    // the commit selection above.
+    // A pull request or review selected before the filter changed must not
+    // resurface stale: its row indexes belonged to the layout being
+    // replaced, same as the commit selection above.
     clearPullRequestSelection();
+    clearReviewSelection();
     scrollTop = 0;
     if (scrollContainer) scrollContainer.scrollTop = 0;
 
@@ -2956,6 +3111,24 @@
               on:requestChanges={handlePullRequestRequestChanges}
               on:merge={handlePullRequestMerge}
               on:close={closeRightPanel}
+            />
+          {/if}
+        {:else if selectedReviewId}
+          {#if reviewDetailLoading && !reviewEntry}
+            <div class="pr-detail-loading">
+              <LoadingSpinner label="Loading review…" />
+            </div>
+          {:else}
+            <!-- The third sibling of CommitDetail and PullRequestDetail —
+                 one AI code review. reviewTarget stays null only while a
+                 failed load is being reported (loadReview's catch clears the
+                 selection before this branch would ever render it null). -->
+            <ReviewDetail
+              {reviewTarget}
+              run={reviewRun}
+              body={reviewBody}
+              files={reviewFiles}
+              on:openAsFile={handleReviewOpenAsFile}
             />
           {/if}
         {:else}
