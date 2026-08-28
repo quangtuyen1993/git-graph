@@ -60,6 +60,29 @@
     state: 'initialized' | 'uninitialized' | 'modified' | 'conflicted';
   }
 
+  /**
+   * Mirrors `ShortStat` (src/extension/types/git.types.ts). Hand-copied, like
+   * every other type on this side of the bridge — the webview cannot import
+   * from `src/extension`.
+   */
+  interface ShortStat {
+    filesChanged: number;
+    additions: number;
+    deletions: number;
+  }
+
+  /**
+   * Mirrors `GraphNode` (src/extension/types/graph.types.ts). Hand-copied, so a
+   * field added on the extension side does not reach here on its own: every hop
+   * across the bridge is an `as` cast and neither `tsc` nor `svelte-check` can
+   * see the mismatch. A missing field here fails silently, by simply never
+   * rendering.
+   *
+   * `filesChanged`/`additions`/`deletions` are `null` until `graph.getStats`
+   * answers for the hash. `null` is "not known yet"; `0` is "known to have
+   * changed no files" — collapsing the two would flash a row dim while its
+   * stats were still in flight.
+   */
   interface GraphNode {
     hash: string;
     abbreviatedHash: string;
@@ -72,6 +95,9 @@
     lane: number;
     row: number;
     color: number;
+    filesChanged: number | null;
+    additions: number | null;
+    deletions: number | null;
   }
 
   interface GraphEdge {
@@ -1704,6 +1730,90 @@
     }
   }
 
+  /**
+   * Stats the host has already answered for, keyed by hash. A `null` value is a
+   * real answer — "git printed no stat line for this commit" — and stops the
+   * hash being asked about again, exactly like a numeric one.
+   *
+   * Never cleared on a repository switch: a hash is content-addressed, so the
+   * same hash in another repository is the same commit with the same stats.
+   */
+  const commitStatsCache = new Map<string, ShortStat | null>();
+  /**
+   * Hashes with a `graph.getStats` request outstanding. The host caches by hash
+   * but has no in-flight de-duplication, and this caller fires on window
+   * arrival *and* on scroll — overlapping windows share rows, so without this
+   * two requests would each spawn a `git log`. `GitCLI.exec` serialises git
+   * behind one queue, so the duplicate delays every later git call in the
+   * session, not only itself.
+   */
+  const commitStatsInFlight = new Set<string>();
+
+  /**
+   * A copy of the window with every stat the cache already knows filled in.
+   * Pure: the nodes it changes are replaced rather than written through, so a
+   * node Svelte has already rendered from is never mutated behind its back.
+   */
+  function withKnownCommitStats(window: GraphWindow): GraphWindow {
+    return {
+      ...window,
+      nodes: window.nodes.map((node) => {
+        const stat = commitStatsCache.get(node.hash);
+        if (!stat || node.filesChanged === stat.filesChanged) return node;
+        return {
+          ...node,
+          filesChanged: stat.filesChanged,
+          additions: stat.additions,
+          deletions: stat.deletions,
+        };
+      }),
+    };
+  }
+
+  /**
+   * Republishes the rendered window with whatever stats have arrived since.
+   *
+   * Svelte 4 reactivity is assignment-based: writing `node.filesChanged = …`
+   * onto an object already inside the assigned `graphWindow.nodes` updates
+   * nothing. The nodes are replaced and `graphWindow` reassigned so the
+   * compiler can see it; the `{#each}` is keyed by hash, so rows are patched
+   * rather than torn down.
+   */
+  function applyCommitStatsToWindow(): void {
+    if (!graphWindow) return;
+    graphWindow = withKnownCommitStats(graphWindow);
+  }
+
+  /**
+   * Asks the host for the stats of rows it does not already know about.
+   *
+   * Fire-and-forget by contract: stats are decoration and the graph is the
+   * feature, so a rejection leaves the affected rows at their default `null` —
+   * no retry loop, no banner, nothing surfaced. The hashes are left out of the
+   * cache so a later window may try again.
+   */
+  function requestCommitStats(nodes: GraphNode[]): void {
+    const hashes = [...new Set(nodes.map((node) => node.hash))]
+      .filter((hash) => !commitStatsCache.has(hash) && !commitStatsInFlight.has(hash));
+    if (hashes.length === 0) return;
+
+    for (const hash of hashes) commitStatsInFlight.add(hash);
+    void (bridge.send('graph.getStats', { hashes }) as Promise<Record<string, ShortStat | null>>)
+      .then((stats) => {
+        for (const hash of hashes) {
+          commitStatsCache.set(hash, stats?.[hash] ?? null);
+        }
+        // Applied to the window on screen now, which need not be the one the
+        // request was issued for: an overlapping window can render while the
+        // request is still out.
+        applyCommitStatsToWindow();
+      })
+      .catch(() => {})
+      .finally(() => {
+        for (const hash of hashes) commitStatsInFlight.delete(hash);
+      });
+  }
+
   async function refreshGraph() {
     const refreshToken = graphRefreshGate.issue();
     const branchFilters = selectedBranchFilters;
@@ -1773,7 +1883,8 @@
       const queryToReRun = layoutChanged ? searchQuery : '';
       layoutVersion = build.layoutVersion;
       if (layoutChanged) clearCommitSearch();
-      graphWindow = nextWindow;
+      graphWindow = withKnownCommitStats(nextWindow);
+      requestCommitStats(nextWindow.nodes);
       currentStartRow = nextWindow.startRow;
       loading = false;
       status = formatFilterStatus(build.totalRows, branchFilters, nextBranches.length);
@@ -1819,7 +1930,8 @@
           layoutVersion: requestedLayoutVersion,
         }) as Promise<GraphWindow>,
         apply: (requestedWindow) => {
-          graphWindow = requestedWindow;
+          graphWindow = withKnownCommitStats(requestedWindow);
+          requestCommitStats(requestedWindow.nodes);
           currentStartRow = requestedWindow.startRow;
         },
         setLoading: (value) => { loading = value; },
@@ -3234,6 +3346,9 @@
                 class:search-match={searchMatchSet.has(node.hash)}
                 class:search-match-active={activeSearchHash === node.hash}
                 class:compare-selected={selectedForCompare === node.hash}
+                data-files-changed={node.filesChanged}
+                data-additions={node.additions}
+                data-deletions={node.deletions}
                 on:click={(e) => handleRowClick(node.hash, e)}
                 on:keydown={(e) => { if (e.key === 'Enter') handleRowClick(node.hash); }}
                 on:contextmenu={(e) => handleRowContextMenu(e, node.hash)}
