@@ -336,12 +336,29 @@ focused, single-purpose `GitService` test file and the `serviceWith()` seam it u
 6. The three listed test files no longer reference `getShortStats` — stubs and assertions
    updated or removed so nothing points at a method that no longer exists.
 
-**Named trap:** `git log --no-walk --shortstat` prints no stat line for a merge commit — the
-spec's own table documents this. `shortStatsFor` must not synthesize a
-`{ filesChanged: 0, ... }` entry for a hash git said nothing about; a hash with no stat line is
-simply absent from the returned `Map`. Deciding what an absent entry *means* belongs to Task 2's
-cache, not here — doing it in this method would collapse the "genuinely empty" and "merge" cases
-that the rest of Part 2 exists to keep apart.
+**Named trap — SUPERSEDED, and this instruction is the one that made the dimming rule
+unreachable.** It said `shortStatsFor` must not synthesize a `{ filesChanged: 0, ... }` entry
+for a hash git said nothing about, and that a hash with no stat line is simply absent from the
+returned `Map`. Following it exactly is what shipped a feature that could never fire.
+
+The error is in the premise. `git log --no-walk --shortstat` does not say *nothing* about a
+merge or an empty commit — it prints their hash line and omits only the stat line. So three
+states reach the parser, and the instruction collapsed the first two:
+
+| git printed | meaning | maps to |
+|---|---|---|
+| hash line, then a stat line | a real change | the parsed `ShortStat` |
+| hash line, no stat line | nothing changed | `{ filesChanged: 0, additions: 0, deletions: 0 }` |
+| no hash line at all | git did not answer | absent from the map |
+
+`shortStatsFor` therefore **must** synthesize the zero for the middle state — that is the only
+way an empty commit is distinguishable from an unanswered one. The "genuinely empty" and
+"merge" cases the original trap wanted kept apart are kept apart by the dimming rule's
+`parents.length` guard, on the webview side, where the spec always intended them to be.
+
+The real trap is one layer up: `null` means **not answered** and nothing else. A failed request
+returns it for every hash it covered, so reading it as "empty" would dim every non-merge row on
+screen the moment git errored.
 
 **Acceptance:**
 
@@ -350,7 +367,7 @@ that the rest of Part 2 exists to keep apart.
 | 1 | `shortStatsFor(['aa'.repeat(20), 'bb'.repeat(20)])` calls `exec` with `['log', '--no-walk', '--shortstat', '--format=%H', 'aa'.repeat(20), 'bb'.repeat(20)]` — argv assertion, not parsed-output assertion |
 | 2 | `shortStatsFor([])` returns an empty map and never calls `exec` |
 | 3 | A shortstat line missing an insertions or deletions clause parses the present number(s) and defaults the absent one to `0` |
-| 4 | A hash git returned no stat line for is absent from the returned map, not present with zeroed stats |
+| 4 | **SUPERSEDED** — see the named trap above. A hash git *listed* without a stat line is present with zeroed stats; only a hash git did not list at all is absent from the map |
 | 5 | `npm run typecheck` passes with `getShortStats` gone from `GitService` and the three listed test files updated |
 
 ## Task 2: The hash-keyed cache, `graph.getStats`, and null stat defaults
@@ -429,7 +446,7 @@ catch every event that could have invalidated it.
 | 2 | `graph.getWindow` returns nodes with `filesChanged`/`additions`/`deletions` at `null` and issues no git call itself |
 | 3 | Two `graph.getStats` calls for the same hash set issue exactly one `shortStatsFor` call |
 | 4 | A `graph.getStats` call mixing already-cached and new hashes fetches only the new ones |
-| 5 | A hash `shortStatsFor` returns no entry for (a merge) is cached as `null` after one call and is never requested again on a later `graph.getStats` for the same hash |
+| 5 | A hash `shortStatsFor` returns no entry for is cached as `null` after one call and is never requested again on a later `graph.getStats` for the same hash. **Not a merge** — a merge is listed and holds a real `{0,0,0}`; this row needs a hash git genuinely does not list |
 | 6 | A `repo.switch` invalidates the cache — a hash cached under the old repository is re-fetched after the switch |
 | 7 | An ordinary `invalidate()` that is not a repo switch (the file-watcher path) leaves a previously cached hash cached — no `shortStatsFor` call for it on the next `graph.getStats` |
 
