@@ -129,9 +129,11 @@ describe('GitService.shortStatsFor', () => {
   });
 
   it('leaves a hash git never listed out of the map entirely', async () => {
-    // An unresolvable or garbage-collected revision. This is the state the
-    // error contract rests on: absent becomes `null` upstream, and `null`
-    // never dims — so a git failure cannot fade the whole screen.
+    // Defensive parsing, not something git does: an unresolvable revision
+    // makes git fail the whole command (exit 128, no output), which arrives
+    // upstream as a rejection covering the batch. The state still matters as
+    // the parser's contract — absent becomes `null` upstream, and `null` never
+    // dims — so no shape of missing answer can fade the whole screen.
     const { service } = serviceWith(async () => `${B}\n 1 file changed, 1 insertion(+)\n`);
 
     const stats = await service.shortStatsFor([A, B]);

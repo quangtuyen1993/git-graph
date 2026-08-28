@@ -41,9 +41,15 @@ function quoteEditorArgument(value: string): string {
  *   says nothing changed" is an answer. Callers that must not treat a merge as
  *   empty exclude it by its parent count, which is the only correct test — git
  *   prints no stat line for a merge whether or not it touched anything.
- * - **Hash never listed** — git did not answer for it at all (an unresolvable
- *   or garbage-collected revision). Absent from the map, so a caller can tell
- *   "no answer" apart from "nothing changed".
+ * - **Hash never listed** — no answer for it. Absent from the map, so a caller
+ *   can tell "no answer" apart from "nothing changed". Parsed for defensively
+ *   rather than observed: git does not quietly omit a revision it cannot
+ *   resolve, it rejects the *whole* invocation — `fatal: bad object`, exit 128,
+ *   no output at all — so in practice the missing answer arrives as a thrown
+ *   `exec` covering every hash in the batch, and one pruned or amended-away
+ *   hash costs the entire window its stats. `shortStatsFor` does not catch
+ *   that; the caller decides what a failed batch means, and must not record it
+ *   as an answer for the hashes it covered.
  *
  * Zeroing the middle state used to be conflated with the third, which made a
  * genuinely empty commit indistinguishable from one git never answered for.
@@ -578,6 +584,14 @@ export class GitService {
    * absent, so "git did not answer" stays distinguishable from "git says
    * nothing changed". Callers that must not treat a merge as empty exclude it
    * by its parent count, the only test that is correct for a merge.
+   *
+   * The third state is defensive, not the failure mode to plan for. Git does
+   * not drop a revision it cannot resolve from the listing — it fails the whole
+   * command (`fatal: bad object`, exit 128, no output), so this method
+   * *rejects* rather than returning a short map. One pruned, amended-away or
+   * otherwise unresolvable hash therefore takes down the answer for every hash
+   * batched with it, which is why a caller must leave a rejected batch's hashes
+   * unrecorded instead of caching "no stats" for a window of good commits.
    *
    * Preconditions the caller owns:
    *
