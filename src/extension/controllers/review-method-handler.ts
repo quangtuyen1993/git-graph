@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { assertSafeReviewId, buildReviewId } from '../services/review-key';
 import { buildReviewPayload } from '../services/review-payload';
 import type { PriorDiscussionEntry } from '../services/review-payload';
@@ -17,6 +18,10 @@ interface GitLike {
   log(options: { revisions?: string[]; maxCount: number }): Promise<{ hash: string; abbreviatedHash: string; subject: string; authorDate: string }[]>;
   getParents(hash: string): Promise<string[]>;
   commitExists(sha: string): Promise<boolean>;
+  /** `getDiff`'s working-tree sibling — raw diff text for `ref` versus what is on disk. */
+  getWorkingTreeDiff(ref: string): Promise<string>;
+  /** `diff`'s working-tree sibling — the changed-file list for the same comparison. */
+  diffWorkingTree(ref: string): Promise<{ files: unknown[] }>;
 }
 
 /**
@@ -75,6 +80,14 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
       return { kind, baseRef: '', headRef: '', prId, ...(providerId ? { providerId } : {}) };
     }
 
+    // No picker fields: base is always HEAD (derived, never supplied) and
+    // head is the working tree itself — resolveReviewTarget ignores whatever
+    // baseRef/headRef land here for this kind, the same way it ignores
+    // target.baseRef for 'commit'.
+    if (kind === 'worktree') {
+      return { kind, baseRef: '', headRef: '' };
+    }
+
     const baseRef = (p.baseRef as string) ?? '';
     const headRef = p.headRef as string;
     if (typeof headRef !== 'string' || !headRef) throw new Error('Missing head ref');
@@ -130,6 +143,23 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
           ? await resolvePullRequestTarget(git, deps.forge, target.prId as string)
           : await resolveReviewTarget(git, target);
 
+        // 'worktree' has no head commit, so its identity cannot wait for the
+        // id like every other kind's does — the diff itself IS the identity
+        // (buildReviewId's comment on the 'worktree' case explains why: keyed
+        // on HEAD alone, review → edit a file → review again would silently
+        // replay the first result). The diff is pulled forward here, before
+        // the id is built, which costs nothing extra: reviewing needs it
+        // anyway. Every other kind's `headSha` is untouched.
+        let headSha = resolved.headSha;
+        let worktreeDiff: string | undefined;
+        if (resolved.kind === 'worktree') {
+          worktreeDiff = await git.getWorkingTreeDiff(resolved.baseRef);
+          if (!worktreeDiff.trim()) {
+            throw new Error('No uncommitted changes to review');
+          }
+          headSha = createHash('sha256').update(worktreeDiff).digest('hex');
+        }
+
         // Same commits, same model, same kind: serve the stored answer. A
         // completed review is reusable as-is; a review still running is
         // reusable too, but only by pointing the caller at the same id —
@@ -137,7 +167,7 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
         // wasted work that ReviewRunner would just deduplicate again. Only a
         // finished, successful entry may be opened; a failure or a
         // cancellation must be retried, not served.
-        const id = buildReviewId({ kind: resolved.kind, baseSha: resolved.baseSha, headSha: resolved.headSha, provider, model });
+        const id = buildReviewId({ kind: resolved.kind, baseSha: resolved.baseSha, headSha, provider, model });
         const existing = await deps.store.get(repoId, id);
         if (existing?.status === 'done') {
           await deps.openBody(repoId, id);
@@ -188,6 +218,12 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
           commits = commitSubjects;
           priorDiscussion = toPriorDiscussion(comments);
           providerId = resolvedProviderId;
+        } else if (resolved.kind === 'worktree') {
+          // The diff itself was already pulled forward above, to build the
+          // id. No commit range exists for uncommitted changes, so — like
+          // kind 'commit' — there is nothing to summarise into `commits`.
+          diff = worktreeDiff as string;
+          changed = (await git.diffWorkingTree(resolved.baseRef).catch(() => undefined))?.files;
         } else {
           diff = await git.getDiff(resolved.baseRef, resolved.headRef);
           if (!diff.trim()) {
@@ -220,7 +256,7 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
           repoId,
           kind: resolved.kind,
           baseRef: resolved.baseRef, baseSha: resolved.baseSha,
-          headRef: resolved.headRef, headSha: resolved.headSha,
+          headRef: resolved.headRef, headSha,
           ...(resolved.subject ? { subject: resolved.subject } : {}),
           ...(resolved.prId ? { prId: resolved.prId } : {}),
           ...(resolved.prNumber !== undefined ? { prNumber: resolved.prNumber } : {}),
@@ -266,6 +302,13 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
         const kind = p.kind as ReviewTargetKind;
         if (!REVIEW_TARGET_KINDS.has(kind)) {
           throw new Error('Invalid review target');
+        }
+
+        // Nothing to half-type for a worktree target — there is no picker
+        // field for it, only the base HEAD it is always resolved against.
+        if (kind === 'worktree') {
+          deps.targets.set(repoId, { kind, baseRef: 'HEAD', headRef: 'Working Tree' });
+          return { success: true };
         }
 
         if (kind === 'pr') {
@@ -328,7 +371,14 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
         const git = deps.getGitService();
         if (!git) throw new Error('No git repository found');
         const resolved = await resolveReviewTarget(git, targetFromParams(p));
-        const result = await git.diff(resolved.baseRef, resolved.headRef);
+        // 'worktree' has no headRef to diff against — App.svelte's
+        // fetchReviewFiles routes every non-'pr' kind here, including a
+        // selected worktree review, so this must not fall through to
+        // git.diff(resolved.baseRef, resolved.headRef): 'Working Tree' is
+        // not a ref. Same working-tree path resolution already uses.
+        const result = resolved.kind === 'worktree'
+          ? await git.diffWorkingTree(resolved.baseRef)
+          : await git.diff(resolved.baseRef, resolved.headRef);
         return { files: result.files };
       }
 

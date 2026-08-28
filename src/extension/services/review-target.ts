@@ -6,7 +6,7 @@ export const EMPTY_TREE_SHA = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 
 export interface ReviewTarget {
   kind: ReviewTargetKind;
-  /** Branch name or sha. Empty for kind 'commit' and 'pr' — computed or fetched instead. */
+  /** Branch name or sha. Empty for kind 'commit', 'pr' and 'worktree' — computed or fetched instead. */
   baseRef: string;
   headRef: string;
   subject?: string;
@@ -73,8 +73,23 @@ async function revParseNamed(git: TargetGit, ref: string): Promise<string> {
  * the base is derived, never supplied: first parent, or the empty tree for a
  * root commit. A merge commit reviews against its first parent — the change it
  * brought into the mainline — and says so in the subject.
+ *
+ * For a `'worktree'` target the base is derived too — always `HEAD` — but
+ * there is no head *commit* at all: the head is whatever is on disk right
+ * now, so it is never rev-parsed. `headSha` comes back empty here; the real
+ * identity of a worktree review is the content hash of its diff, computed by
+ * the caller once the diff is known (`buildReviewId`'s comment explains why).
  */
 export async function resolveReviewTarget(git: TargetGit, target: ReviewTarget): Promise<ResolvedTarget> {
+  if (target.kind === 'worktree') {
+    const baseSha = await revParseNamed(git, 'HEAD');
+    return {
+      kind: 'worktree',
+      baseRef: 'HEAD', baseSha,
+      headRef: 'Working Tree', headSha: '',
+    };
+  }
+
   const headSha = await revParseNamed(git, target.headRef);
 
   if (target.kind === 'commit') {
@@ -145,7 +160,7 @@ export interface TargetStorage {
  * list, which is how a new kind silently stops being rejected in one of them
  * and starts being rejected in another.
  */
-export const REVIEW_TARGET_KINDS: ReadonlySet<string> = new Set(['branch', 'commit', 'range', 'pr']);
+export const REVIEW_TARGET_KINDS: ReadonlySet<string> = new Set(['branch', 'commit', 'range', 'pr', 'worktree']);
 
 function isReviewTarget(value: unknown): value is ReviewTarget {
   const t = value as ReviewTarget | null;

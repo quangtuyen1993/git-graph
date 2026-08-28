@@ -4,7 +4,7 @@ import { assertSafeReviewId } from './review-key';
 
 export type ReviewStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
 
-export type ReviewTargetKind = 'branch' | 'commit' | 'range' | 'pr';
+export type ReviewTargetKind = 'branch' | 'commit' | 'range' | 'pr' | 'worktree';
 
 export interface ReviewEntry {
   id: string;
