@@ -1843,7 +1843,11 @@
    * back. A root commit has no parents and is an ordinary commit here.
    *
    * `filesChanged === null` never dims — unknown is not empty — and whatever
-   * the user is currently looking at is never dimmed, whatever its stats.
+   * the user is currently looking at is never dimmed, whatever its stats: the
+   * selection, a find match, the branch-focused row, and the pending compare
+   * base. The last is a live user pick whose only affordance is a 1px dashed
+   * outline, so fading the row under it is exactly the case the rule exists to
+   * prevent, even though the spec's list names only the first three.
    *
    * The state flags are parameters rather than reads of the component's own
    * variables so the template's `class:` binding lists them as dependencies:
@@ -1855,9 +1859,10 @@
     rowSelected: boolean,
     rowSearchMatch: boolean,
     rowBranchFocused: boolean,
+    rowCompareSelected: boolean,
   ): boolean {
     if (node.filesChanged !== 0 || node.parents.length > 1) return false;
-    return !rowSelected && !rowSearchMatch && !rowBranchFocused;
+    return !rowSelected && !rowSearchMatch && !rowBranchFocused && !rowCompareSelected;
   }
 
   async function refreshGraph() {
@@ -3397,6 +3402,7 @@
                   selectedHash === node.hash || selectedHashes.has(node.hash),
                   searchMatchSet.has(node.hash),
                   focusedBranchHash === node.hash,
+                  selectedForCompare === node.hash,
                 )}
                 data-files-changed={node.filesChanged}
                 on:click={(e) => handleRowClick(node.hash, e)}
@@ -3987,6 +3993,16 @@
   .commit-row.dimmed .col-sha,
   .commit-row.dimmed .col-author {
     opacity: 0.55;
+  }
+
+  /* `.author-name` fades itself to 0.7 on every row, and opacity composes
+     multiplicatively: 0.55 x 0.7 lands the dimmed row's author at 0.385, well
+     under the one value above that was chosen and checked by eye. Dropping the
+     inner fade inside a dimmed row leaves exactly the 0.55 the column asked
+     for. `.col-author` keeps the rule rather than the name so the avatar fades
+     with the text. */
+  .commit-row.dimmed .col-author .author-name {
+    opacity: 1;
   }
 
   .commit-row .col-graph {

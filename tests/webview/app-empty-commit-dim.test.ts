@@ -194,6 +194,24 @@ describe('Dimming a commit that changed no files', () => {
     expect(rowFor(container, 'a')).not.toHaveClass('dimmed');
   });
 
+  it('does not dim the row picked as the compare base', async () => {
+    // A pending compare base is a live user pick whose only affordance is a
+    // 1px dashed outline. Fading its subject and sha underneath that breaks the
+    // same rule the other three exclusions exist for: whatever the user is
+    // currently looking at does not quietly fade.
+    const { container, getByRole } = await renderApp();
+    await waitFor(() => expect(rowFor(container, 'a')).toHaveClass('dimmed'));
+
+    await fireEvent.contextMenu(rowFor(container, 'a'));
+    await waitFor(() => expect(getByRole('menuitem', { name: 'Select for compare' })).toBeInTheDocument());
+    await fireEvent.click(getByRole('menuitem', { name: 'Select for compare' }));
+
+    await waitFor(() => expect(rowFor(container, 'a')).toHaveClass('compare-selected'));
+    // Not merely undimmed because the right-click selected it.
+    expect(rowFor(container, 'a')).not.toHaveClass('selected');
+    expect(rowFor(container, 'a')).not.toHaveClass('dimmed');
+  });
+
   it('does not dim the branch-focused row', async () => {
     const { container, getByRole } = await renderApp();
     await waitFor(() => expect(rowFor(container, 'a')).toHaveClass('dimmed'));
@@ -230,6 +248,39 @@ describe('The dim rule itself', () => {
     expect(selectors).toContain('.commit-row.dimmed');
     // The lane and its edges must stay readable through an empty commit.
     expect(selectors).not.toContain('.col-graph');
+  });
+
+  /** The rules, comments stripped, of the component's own <style> block. */
+  const styleBlock = source
+    .slice(source.lastIndexOf('<style>'), source.lastIndexOf('</style>'))
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+
+  /**
+   * The opacity declared by the last rule whose selector list contains exactly
+   * `selector`, or `null` when no rule declares one for it.
+   */
+  function declaredOpacity(selector: string): number | null {
+    let found: number | null = null;
+    for (const [, selectors, body] of styleBlock.matchAll(/([^{}]*)\{([^{}]*)\}/g)) {
+      if (!selectors.split(',').map((one) => one.trim()).includes(selector)) continue;
+      const declaration = /(?:^|[;\s])opacity:\s*([\d.]+)/.exec(body);
+      if (declaration) found = Number(declaration[1]);
+    }
+    return found;
+  }
+
+  it('lands a dimmed row author at 0.55 rather than compounding two fades', () => {
+    // `.author-name` carries its own 0.7 so the name recedes behind the
+    // subject. Opacity composes multiplicatively, so without an override the
+    // dimmed row renders it at 0.385 — a value nobody chose, and one the manual
+    // legibility check would sign off believing it saw 0.55.
+    const column = declaredOpacity('.commit-row.dimmed .col-author');
+    expect(column).toBe(0.55);
+    expect(declaredOpacity('.author-name')).toBe(0.7);
+
+    const name = declaredOpacity('.commit-row.dimmed .col-author .author-name');
+    expect(name).not.toBeNull();
+    expect((column as number) * (name as number)).toBeCloseTo(0.55, 5);
   });
 
   it('fades with opacity rather than repainting the text colour', () => {
