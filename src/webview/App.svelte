@@ -2339,6 +2339,21 @@
     }
   }
 
+  /**
+   * Both reasons are reachable here, contrary to the assumption that a search
+   * hit is always in the graph. `searchCommits` resolves a hash-shaped query
+   * with `rev-parse --verify <hash>^{commit}`, which finds any commit object in
+   * the database whether or not a ref reaches it, while the graph is built by
+   * `loadAllCommits` over `git log --all`, which walks refs only. A commit
+   * amended away is findable and has no row, with no filter involved — so
+   * `absent` needs its own sentence, or the search box blames a filter that is
+   * not even on.
+   */
+  const SEARCH_MISSING_ROW_MESSAGE: Record<MissingRowReason, string> = {
+    filtered: 'Commit is outside the current branch filter',
+    absent: "This commit isn't in the loaded graph.",
+  };
+
   async function revealSearchMatch() {
     // Read the cursor directly rather than through `activeSearchHash`: callers
     // move it in the same tick, and the reactive alias only catches up on flush.
@@ -2351,20 +2366,9 @@
       }) as { row: number | null };
       if (requestedLayoutVersion !== layoutVersion) return;
       if (result.row === null) {
-        // NOT yet routed through `missingRowReason`, unlike the other two
-        // `getRow`-null sites, and deliberately so. The spec assumed `absent`
-        // is unreachable here because a search hit comes from the repository;
-        // that assumption is wrong. `searchCommits` resolves a hash-shaped
-        // query with `rev-parse --verify <hash>^{commit}`, which succeeds for
-        // any commit object in the database, reachable or not, while the graph
-        // is built by `loadAllCommits` over `git log --all`, which walks only
-        // what refs reach. Paste the sha of a commit you just amended away,
-        // with no filter on, and the row is missing for the `absent` reason
-        // while the sentence below blames a filter that is not even active.
-        // Calling the helper and printing this regardless would discard its
-        // answer, so the call waits on a decision about the wording — which is
-        // pinned, along with its test, by Part 4's requirement 3.
-        searchMessage = 'Commit is outside the current branch filter';
+        searchMessage = SEARCH_MISSING_ROW_MESSAGE[
+          missingRowReason({ branchFilterActive: selectedBranchFilters.length > 0 })
+        ];
         return;
       }
       searchMessage = '';
