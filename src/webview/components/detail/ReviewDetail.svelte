@@ -10,7 +10,7 @@
 <script context="module" lang="ts">
   // svelte-check: `export` of a type-only declaration is only valid in
   // `<script context="module">` — see PullRequestDetail.svelte's identical note.
-  export type ReviewDetailKind = 'branch' | 'commit' | 'range' | 'pr';
+  export type ReviewDetailKind = 'branch' | 'commit' | 'range' | 'pr' | 'worktree';
   export type ReviewDetailStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
 
   /**
@@ -75,6 +75,7 @@
     rerun: void;
     openAsFile: void;
     delete: void;
+    cancel: void;
   }>();
 
   function shortSha(sha: string): string {
@@ -103,10 +104,27 @@
     <header class="review-header">
       <span class="review-title">Review · {reviewTargetLabel(reviewTarget)}</span>
       {#if run}
+        <!-- Critical fix: this bar used to be gated on `{#if run}` alone —
+             whether a run exists at all — not on its status, so a review
+             that was still `running` offered the same Re-run/Delete buttons
+             as a settled one. Re-run deletes the store entry
+             (review-method-handler.ts's review.rerun) and restarts, but
+             ReviewRunner.start's in-flight dedup means the entry is never
+             recreated for the still-running process, orphaning it; Delete
+             orphans the same way. Mirrors the old panel's either/or
+             (ReviewApp.svelte:807-818): Cancel while running, Re-run/Delete
+             only once settled. "Open as file" stays available regardless —
+             it only reads the body file already on disk, never destructive. -->
         <span class="review-actions">
-          <button type="button" on:click={() => dispatch('rerun')}>Re-run</button>
+          {#if run.status === 'running'}
+            <button type="button" on:click={() => dispatch('cancel')}>Cancel</button>
+          {:else}
+            <button type="button" on:click={() => dispatch('rerun')}>Re-run</button>
+          {/if}
           <button type="button" on:click={() => dispatch('openAsFile')}>Open as file</button>
-          <button type="button" class="review-delete" on:click={() => dispatch('delete')}>Delete</button>
+          {#if run.status !== 'running'}
+            <button type="button" class="review-delete" on:click={() => dispatch('delete')}>Delete</button>
+          {/if}
         </span>
       {/if}
     </header>

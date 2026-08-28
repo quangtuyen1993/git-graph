@@ -564,14 +564,24 @@ describe('review.start for the working tree', () => {
     expect(git.diffWorkingTree).not.toHaveBeenCalled();
   });
 
-  it('setTarget resolves base HEAD for a worktree target and stores it', async () => {
+  // Important finding 5 (final pre-merge review): setTarget exists only for
+  // the old standalone panel's handoff, and that panel's Mode type has no
+  // 'worktree' case — applyTarget's switch no-ops, getCompareParams()'s
+  // switch has no default, and a worktree mode set synchronously (not
+  // through init()'s awaited restore path) leaves canCompare stale from the
+  // previous mode until the next reactive flush, so compare() can slip past
+  // its `!canCompare` guard and call review.compare(undefined), which throws
+  // "Missing head ref". setTarget's worktree branch was never "kept for the
+  // old panel" — it's new support for something that cannot render it. This
+  // replaces the old expectation (a successful store-and-broadcast) with a
+  // rejection: store nothing, broadcast nothing.
+  it('setTarget rejects a worktree target instead of storing and broadcasting it', async () => {
     const { handler, targets, broadcast } = harness();
 
-    const result = await handler('review.setTarget', { kind: 'worktree' });
+    await expect(handler('review.setTarget', { kind: 'worktree' })).rejects.toThrow(/worktree/i);
 
-    expect(result).toEqual({ success: true });
-    expect(targets.get('repo-a')).toMatchObject({ kind: 'worktree', baseRef: 'HEAD' });
-    expect(broadcast).toHaveBeenCalledWith('review.target', expect.objectContaining({ kind: 'worktree' }));
+    expect(targets.get('repo-a')).toBeFalsy();
+    expect(broadcast).not.toHaveBeenCalled();
   });
 
   it('saveTarget accepts a worktree target without requiring a headRef', async () => {

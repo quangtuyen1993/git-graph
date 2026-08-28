@@ -6,6 +6,12 @@ vi.mock('../../src/webview/lib/message-bridge', () => ({ bridge: { send, on } })
 
 import App from '../../src/webview/App.svelte';
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => { resolve = res; });
+  return { promise, resolve };
+}
+
 const branches = [
   { name: 'main', current: true, hash: 'a'.repeat(40), remote: null, upstream: null, ahead: 0, behind: 0 },
 ];
@@ -185,6 +191,59 @@ describe('Re-running and deleting a review from the detail panel', () => {
   });
 });
 
+// Critical finding (final pre-merge review): the action bar was gated on
+// `{#if run}` (whether a run exists at all), not on its status, so a review
+// that was still `running` offered the same Re-run/Delete buttons as a
+// settled one. Re-run deletes the store entry and restarts — but
+// ReviewRunner.start's in-flight dedup means the entry is never recreated,
+// so the running child process becomes unreachable and its eventual
+// `finish()` is a silent no-op (review-store.ts's `if (index === -1)
+// return;`). Delete orphans the same way. The old panel
+// (ReviewApp.svelte:807-818) gets this right: Cancel while running,
+// Re-run/Delete only once settled — mirrored here.
+describe('Live review actions are gated on run status, not on run presence', () => {
+  const runningEntry = { ...reviewEntry, status: 'running' as const, finishedAt: undefined };
+
+  it('offers Cancel, not Re-run or Delete, while the review is running', async () => {
+    stubApp({
+      'review.list': () => [runningEntry],
+      'review.get': () => runningEntry,
+    });
+    const rendered = render(App);
+    await selectReview(rendered);
+
+    await waitFor(() => expect(rendered.getByRole('button', { name: /cancel/i })).toBeInTheDocument());
+    expect(rendered.queryByRole('button', { name: /re-run/i })).not.toBeInTheDocument();
+    expect(rendered.queryByRole('button', { name: /^delete$/i })).not.toBeInTheDocument();
+  });
+
+  it('offers Re-run and Delete, not Cancel, once the review has settled', async () => {
+    stubApp();
+    const rendered = render(App);
+    await selectReview(rendered);
+
+    await waitFor(() => expect(rendered.getByRole('button', { name: /re-run/i })).toBeInTheDocument());
+    expect(rendered.getByRole('button', { name: /^delete$/i })).toBeInTheDocument();
+    expect(rendered.queryByRole('button', { name: /cancel/i })).not.toBeInTheDocument();
+  });
+
+  it('sends review.cancel with the selected review\'s id when Cancel is clicked', async () => {
+    stubApp({
+      'review.list': () => [runningEntry],
+      'review.get': () => runningEntry,
+      'review.cancel': () => ({ cancelled: true }),
+    });
+    const rendered = render(App);
+    await selectReview(rendered);
+    await waitFor(() => expect(rendered.getByRole('button', { name: /cancel/i })).toBeInTheDocument());
+    send.mockClear();
+
+    await fireEvent.click(rendered.getByRole('button', { name: /cancel/i }));
+
+    await waitFor(() => expect(send).toHaveBeenCalledWith('review.cancel', { id: reviewEntry.id }));
+  });
+});
+
 // Fix round 2 (Critical): loadReview shared a Promise.all and a catch block
 // between the entry/body fetch and the changed-file-list fetch, so a stale
 // ref (a deleted or GC'd branch) or a gone forge provider took the whole
@@ -276,4 +335,99 @@ describe('Polling a running review', () => {
     await new Promise((resolve) => setTimeout(resolve, 1500));
     expect(getCalls).toBe(callsAtSettle);
   }, 10000);
+});
+
+// Important finding: loadReview's file-list assignment
+// (`reviewFiles = await fetchReviewFiles(entry)`) had no
+// `selectedReviewId !== id` guard, unlike every other assignment in the same
+// function (the catch branch even guards before assigning). Selecting review
+// A, then B before A's slow file fetch resolves, let A's file list land on
+// top of B's once selected — B renders with A's changed files. A deferred
+// promise makes the interleaving deterministic rather than timing-dependent.
+describe('A slow file-list fetch cannot land after a newer review is selected', () => {
+  it('does not let review A\'s superseded file list overwrite review B\'s', async () => {
+    const reviewEntryB = {
+      ...reviewEntry,
+      id: 'branch..develop..feature-b.claude.claude-opus-5',
+      baseRef: 'develop', headRef: 'feature/b',
+    };
+    const filesA = deferred<{ files: unknown[] }>();
+    const fileOf = (path: string) => ({
+      path, oldPath: null, status: 'modified', additions: 1, deletions: 0, binary: false,
+    });
+    stubApp({
+      'review.list': () => [reviewEntry, reviewEntryB],
+      'review.get': (params?: unknown) => {
+        const id = (params as { id: string }).id;
+        return id === reviewEntryB.id ? reviewEntryB : reviewEntry;
+      },
+      'review.compare': (params?: unknown) => {
+        const { headRef } = params as { headRef: string };
+        return headRef === 'feature/x' ? filesA.promise : Promise.resolve({ files: [fileOf('b-only.ts')] });
+      },
+    });
+    const rendered = render(App);
+
+    // Review A ('feature/x'): its file fetch is left pending.
+    await selectReviewByLabel(rendered, 'develop ← feature/x');
+    // Review B ('feature/b'): its own file fetch resolves immediately.
+    await selectReviewByLabel(rendered, 'develop ← feature/b');
+    await waitFor(() => expect(rightPanel(rendered).getByText('b-only.ts')).toBeInTheDocument());
+
+    // A's fetch finally lands, after B is already on screen.
+    filesA.resolve({ files: [fileOf('a-only.ts')] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(rightPanel(rendered).getByText('b-only.ts')).toBeInTheDocument();
+    expect(rightPanel(rendered).queryByText('a-only.ts')).not.toBeInTheDocument();
+  });
+});
+
+// Important finding: `extension.ts` broadcasts `review.changed` on every
+// ReviewRunner start/finish, and router-registry.ts documents that this
+// event exists precisely for "every attached webview (graph and the review
+// tab)" — but App.svelte only ever subscribed to `graph.invalidated` and
+// `forge.changed`. Without this, the REVIEWS sidebar list only refreshes via
+// refreshGraph(), which the `.git` watcher drives and a review run never
+// touches — so a review started elsewhere never appears, and a `Running` row
+// never updates until something unrelated (a branch filter change, a repo
+// switch) happens to trigger a full graph refresh.
+describe('review.changed refreshes the reviews list', () => {
+  afterEach(() => {
+    // Restore the generic default so later tests in this file (and this
+    // suite's own module-scoped `on` mock) aren't left wired to this test's
+    // handler-capturing implementation.
+    on.mockImplementation(() => vi.fn());
+  });
+
+  it('re-fetches review.list when a review.changed event arrives', async () => {
+    const handlers = new Map<string, (data?: unknown) => void>();
+    on.mockImplementation((event: string, handler: (data?: unknown) => void) => {
+      handlers.set(event, handler);
+      return vi.fn();
+    });
+    let listCalls = 0;
+    const failedEntry = { ...reviewEntry, status: 'failed' as const, error: 'It broke' };
+    stubApp({
+      'review.list': () => {
+        listCalls += 1;
+        return listCalls === 1 ? [reviewEntry] : [failedEntry];
+      },
+    });
+    const rendered = render(App);
+
+    await waitForAppReady(rendered);
+    await waitFor(() => expect(listCalls).toBeGreaterThanOrEqual(1));
+    await waitFor(() => expect(handlers.has('review.changed')).toBe(true));
+
+    handlers.get('review.changed')!({ id: reviewEntry.id });
+
+    await waitFor(() => expect(listCalls).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(rendered.getByText('REVIEWS')).toBeInTheDocument());
+    if (!rendered.queryByLabelText('Failed')) {
+      await fireEvent.click(rendered.getByText('REVIEWS'));
+    }
+    await waitFor(() => expect(rendered.getByLabelText('Failed')).toBeInTheDocument());
+  });
 });

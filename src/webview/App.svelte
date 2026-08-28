@@ -108,7 +108,7 @@
    */
   interface ReviewRow {
     id: string;
-    kind: 'branch' | 'commit' | 'range' | 'pr';
+    kind: 'branch' | 'commit' | 'range' | 'pr' | 'worktree';
     baseRef: string; baseSha: string; headRef: string; headSha: string;
     subject?: string;
     prId?: string; prNumber?: number; providerId?: string;
@@ -886,7 +886,9 @@
 
       if (fetchFiles) {
         try {
-          reviewFiles = await fetchReviewFiles(entry);
+          const nextFiles = await fetchReviewFiles(entry);
+          if (selectedReviewId !== id) return; // superseded while fetching
+          reviewFiles = nextFiles;
         } catch (filesError) {
           if (selectedReviewId !== id) return; // superseded while fetching
           reviewFiles = [];
@@ -1002,6 +1004,27 @@
       if (selectedReviewId !== id) return; // superseded while in flight
       reviews = reviews.filter((row) => row.id !== id);
       clearReviewSelection();
+    } catch (e) {
+      if (selectedReviewId !== id) return;
+      showTransientMessage(messageOf(e));
+    }
+  }
+
+  /**
+   * "Cancel" — the destructive-review-actions fix's counterpart to Re-run
+   * and Delete: `review.cancel` (review-method-handler.ts) aborts the
+   * runner's in-flight `AbortController` for this id without touching the
+   * store entry, so — unlike Re-run/Delete on a running review — there is
+   * nothing here to orphan. No local status flip: the entry settles to
+   * 'cancelled' on the runner's own `finish()`, which the running poll
+   * already in flight for this selection (loadReview's reschedule while
+   * `status === 'running'`) picks up on its next tick.
+   */
+  async function handleReviewCancel(): Promise<void> {
+    if (!selectedReviewId) return;
+    const id = selectedReviewId;
+    try {
+      await bridge.send('review.cancel', { id });
     } catch (e) {
       if (selectedReviewId !== id) return;
       showTransientMessage(messageOf(e));
@@ -1358,6 +1381,23 @@
 
   let invalidatedUnsubscribe: (() => void) | undefined;
   let forgeChangedUnsubscribe: (() => void) | undefined;
+  let reviewChangedUnsubscribe: (() => void) | undefined;
+
+  /**
+   * The REVIEWS sidebar list's own refetch, split out of `refreshGraph()` so
+   * `review.changed` doesn't have to pay for a full graph rebuild just to
+   * pick up one row's status. Tolerates a rejection the same way
+   * `refreshGraph()`'s own `review.list` call does — a stale list beats a
+   * banner over a purely additive feature.
+   */
+  async function refreshReviewsList(): Promise<void> {
+    try {
+      const next = await bridge.send('review.list') as ReviewRow[];
+      reviews = Array.isArray(next) ? next : [];
+    } catch {
+      // Keep the stale list visible rather than showing empty.
+    }
+  }
 
   const refreshScheduler = createRefreshScheduler({
     run: () => refreshGraph(),
@@ -1375,6 +1415,22 @@
     invalidatedUnsubscribe = stopInvalidated;
     const stopForgeChanged = bridge.on('forge.changed', () => { void refreshForgeStatus(); });
     forgeChangedUnsubscribe = stopForgeChanged;
+    // router-registry.ts's own comment: `review.changed` exists precisely
+    // because a review's status transition "concerns every attached webview
+    // (graph and the review tab)" — extension.ts broadcasts it from
+    // ReviewRunner's start/finish. Without this the REVIEWS list only
+    // refreshes via refreshGraph(), which the `.git` watcher drives and a
+    // review run never touches: a review started elsewhere never appears,
+    // and a `running` row never settles until something unrelated forces a
+    // full graph refresh. The 1 Hz poll in loadReview stays — it covers body
+    // growth during a run, which this event does not report — this only
+    // moves the status transition itself onto a push channel.
+    const stopReviewChanged = bridge.on('review.changed', (data) => {
+      void refreshReviewsList();
+      const changedId = (data as { id?: string } | undefined)?.id;
+      if (changedId && changedId === selectedReviewId) void loadReview(changedId, false);
+    });
+    reviewChangedUnsubscribe = stopReviewChanged;
     // Fire-and-forget, issued before the graph's own startup sequence rather
     // than after it: `refreshForgeStatus` swallows its own errors, and a slow
     // or failing forge host must never delay the graph coming up or turn into
@@ -1419,6 +1475,7 @@
       refreshScheduler.cancel();
       invalidatedUnsubscribe?.();
       forgeChangedUnsubscribe?.();
+      reviewChangedUnsubscribe?.();
     };
   });
 
@@ -3210,6 +3267,7 @@
               on:openAsFile={handleReviewOpenAsFile}
               on:rerun={handleReviewRerun}
               on:delete={handleReviewDelete}
+              on:cancel={handleReviewCancel}
             />
           {/if}
         {:else}

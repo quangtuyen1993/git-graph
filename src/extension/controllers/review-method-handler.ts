@@ -272,6 +272,21 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
         if (!git) throw new Error('No git repository found');
         const target = targetFromParams(p);
 
+        // setTarget exists only to hand a target off to the old standalone
+        // review panel (ReviewApp.svelte), which phase 5 deletes — its Mode
+        // type has no 'worktree' case, applyTarget's switch on it no-ops,
+        // and getCompareParams()'s switch has no default, so a target set
+        // this way (mode assigned synchronously, not through init()'s
+        // awaited restore) can slip past the `!canCompare` guard while it is
+        // still stale from the previous mode and call
+        // review.compare(undefined), throwing "Missing head ref" into the
+        // panel. This is not "kept for the old panel" — it is new support
+        // for something that cannot render it, so it is rejected here
+        // rather than stored and broadcast.
+        if (target.kind === 'worktree') {
+          throw new Error("review.setTarget does not support kind 'worktree'");
+        }
+
         // A pull request's sha pair comes from PullRequestDetail, never from
         // revParse — targetFromParams leaves baseRef/headRef empty for kind
         // 'pr', so falling through to the git-based resolver here would
@@ -306,6 +321,18 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
 
         // Nothing to half-type for a worktree target — there is no picker
         // field for it, only the base HEAD it is always resolved against.
+        //
+        // Kept, unlike setTarget above: saveTarget never broadcasts or
+        // focuses, so it cannot trigger the old panel's synchronous
+        // `mode = t.kind` path that setTarget's rejection guards against.
+        // The one other way this reaches the old panel — a persisted target
+        // restored on window reload, ReviewApp.svelte's init() — resolves
+        // safely: init() `await`s refreshReviews() between setting `mode`
+        // and calling compare(), which lets Svelte's reactive `canCompare`
+        // recompute to falsy for the unmatched 'worktree' mode first, so
+        // compare() never reaches getCompareParams(). The tab just shows as
+        // deselected, which is an acceptable degradation for a panel phase 5
+        // deletes — not the crash setTarget's broadcast path risks.
         if (kind === 'worktree') {
           deps.targets.set(repoId, { kind, baseRef: 'HEAD', headRef: 'Working Tree' });
           return { success: true };

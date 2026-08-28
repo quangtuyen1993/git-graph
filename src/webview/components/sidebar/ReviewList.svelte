@@ -2,7 +2,7 @@
   // svelte-check: `export` of a type-only declaration is only valid in
   // `<script context="module">` — see PullRequestList.svelte's identical note.
   export type ReviewRowStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
-  export type ReviewRowKind = 'branch' | 'commit' | 'range' | 'pr';
+  export type ReviewRowKind = 'branch' | 'commit' | 'range' | 'pr' | 'worktree';
 
   /**
    * Mirrors `ReviewEntry` (src/extension/services/review-store.ts) — the

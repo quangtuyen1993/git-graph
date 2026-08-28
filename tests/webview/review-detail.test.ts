@@ -129,6 +129,44 @@ describe('ReviewDetail', () => {
     expect(fired).toBe(true);
   });
 
+  // Critical fix: the action bar used to be gated on `run` being present at
+  // all, not on its status — a running review offered the same destructive
+  // Re-run/Delete buttons a settled one does. Re-run deletes the store entry
+  // and restarts, but ReviewRunner.start's in-flight dedup means the entry
+  // is never recreated for the still-running process, orphaning it; Delete
+  // orphans the same way. Mirrors the old panel's either/or
+  // (ReviewApp.svelte:807-818).
+  it('offers Cancel, not Re-run or Delete, while running', () => {
+    const runningRun = { ...doneRun, status: 'running' as const, finishedAt: undefined };
+    render(ReviewDetail, { reviewTarget: branchTarget, run: runningRun, body: 'so far…' });
+
+    expect(screen.getByRole('button', { name: /cancel/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /re-run/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^delete$/i })).not.toBeInTheDocument();
+    // Not destructive — reads the body file already on disk — so it stays
+    // available regardless of run status.
+    expect(screen.getByRole('button', { name: /open as file/i })).toBeInTheDocument();
+  });
+
+  it('offers Re-run and Delete, not Cancel, once settled', () => {
+    render(ReviewDetail, { reviewTarget: branchTarget, run: doneRun, body: 'ok' });
+
+    expect(screen.getByRole('button', { name: /re-run/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^delete$/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /cancel/i })).not.toBeInTheDocument();
+  });
+
+  it('dispatches cancel when the button is clicked on a running review', async () => {
+    const runningRun = { ...doneRun, status: 'running' as const, finishedAt: undefined };
+    const { component } = render(ReviewDetail, { reviewTarget: branchTarget, run: runningRun, body: '' });
+    let fired = false;
+    component.$on('cancel', () => { fired = true; });
+
+    await fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
+
+    expect(fired).toBe(true);
+  });
+
   // Acceptance 6 (revised, fix round 1): the changed-file list renders, but
   // as plain, non-interactive rows — opening a diff needs `localBothPresent`
   // (phase 4's scope), which doesn't reach the webview yet. A row that looks
