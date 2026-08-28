@@ -157,9 +157,7 @@ describe('App commit stats', () => {
     await waitFor(() => {
       expect(rowFor(container, 'a')?.getAttribute('data-files-changed')).toBe('3');
     });
-    expect(rowFor(container, 'a')?.getAttribute('data-additions')).toBe('10');
-    expect(rowFor(container, 'a')?.getAttribute('data-deletions')).toBe('2');
-    // `null` from the host is "git printed no stat line", not "zero files".
+    // `null` from the host is "git gave no answer", not "zero files".
     expect(rowFor(container, 'b')?.hasAttribute('data-files-changed')).toBe(false);
   });
 
@@ -205,13 +203,28 @@ describe('App commit stats', () => {
   });
 
   it('leaves the rows at their default when graph.getStats rejects, surfacing nothing', async () => {
-    const { container } = await renderApp(async () => { throw new Error('git exploded'); });
+    // The rejection must be handled, not merely unobserved: an unhandled one
+    // reaches the runtime, and a reader who meets it later has no way to tell
+    // it from unrelated flake. Asserted by name rather than left to vitest's
+    // own unhandled-rejection reporting.
+    const unhandled: unknown[] = [];
+    const capture = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', capture);
+    try {
+      const { container } = await renderApp(async () => { throw new Error('git exploded'); });
 
-    await waitFor(() => expect(statsCalls()).toHaveLength(1));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+      await waitFor(() => expect(statsCalls()).toHaveLength(1));
+      // Two macrotasks: node reports an unhandled rejection at the end of the
+      // tick that left it unhandled, so one tick alone could pass vacuously.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(rowFor(container, 'a')).toBeTruthy();
-    expect(rowFor(container, 'a')?.hasAttribute('data-files-changed')).toBe(false);
-    expect(container.textContent).not.toContain('git exploded');
+      expect(unhandled).toEqual([]);
+      expect(rowFor(container, 'a')).toBeTruthy();
+      expect(rowFor(container, 'a')?.hasAttribute('data-files-changed')).toBe(false);
+      expect(container.textContent).not.toContain('git exploded');
+    } finally {
+      process.off('unhandledRejection', capture);
+    }
   });
 });

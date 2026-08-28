@@ -64,6 +64,14 @@
    * Mirrors `ShortStat` (src/extension/types/git.types.ts). Hand-copied, like
    * every other type on this side of the bridge — the webview cannot import
    * from `src/extension`.
+   *
+   * `graph.getStats` answers each hash with one of these or with `null`, and
+   * the two are different facts. A `ShortStat` means git answered, so
+   * `filesChanged: 0` is the real answer "nothing changed" — an empty commit,
+   * or a merge, which `--no-walk` never prints a stat line for either way.
+   * `null` means git gave no answer: the hash was not listed, or the request
+   * failed. `null` therefore never dims; a failed request returns it for every
+   * hash it covered, and reading it as "empty" would fade the whole screen.
    */
   interface ShortStat {
     filesChanged: number;
@@ -3379,8 +3387,6 @@
                   focusedBranchHash === node.hash,
                 )}
                 data-files-changed={node.filesChanged}
-                data-additions={node.additions}
-                data-deletions={node.deletions}
                 on:click={(e) => handleRowClick(node.hash, e)}
                 on:keydown={(e) => { if (e.key === 'Enter') handleRowClick(node.hash); }}
                 on:contextmenu={(e) => handleRowContextMenu(e, node.hash)}
