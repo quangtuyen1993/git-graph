@@ -2260,8 +2260,8 @@
    * gets a true sentence instead of a wrong one.
    */
   const BRANCH_JUMP_MISSING_ROW_MESSAGE: Record<MissingRowReason, string> = {
-    filtered: "This branch's head commit is outside the current branch filter.",
-    absent: "This branch's head commit isn't in the loaded graph.",
+    filtered: "This branch's head commit isn't in the loaded graph.",
+    absent: "This branch's head commit is outside the current branch filter.",
   };
 
   async function handleBranchSelect(event: CustomEvent<{ name: string }>) {

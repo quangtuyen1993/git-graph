@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { GraphMethodHandler } from '../../src/extension/controllers/graph-method-handler';
 import { GraphService } from '../../src/extension/services/graph.service';
-import type { Commit, GitLogOptions } from '../../src/extension/types/git.types';
+import type { Commit, GitLogOptions, ShortStat } from '../../src/extension/types/git.types';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -29,7 +29,11 @@ function commit(subject: string): Commit {
   };
 }
 
-function graphSource(repoPath: string, log: (options: GitLogOptions) => Promise<Commit[]>) {
+function graphSource(
+  repoPath: string,
+  log: (options: GitLogOptions) => Promise<Commit[]>,
+  shortStats: (hashes: string[]) => Promise<Map<string, ShortStat>> = async () => new Map(),
+) {
   return {
     getRepoPath: () => repoPath,
     snapshotLogOptions: vi.fn(async (options: GitLogOptions) => ({
@@ -38,7 +42,17 @@ function graphSource(repoPath: string, log: (options: GitLogOptions) => Promise<
       revisions: [`${repoPath}-snapshot`],
     })),
     log: vi.fn(log),
+    shortStatsFor: vi.fn(shortStats),
   };
+}
+
+const STAT: ShortStat = { filesChanged: 2, additions: 9, deletions: 3 };
+
+/** Answers every requested hash except the ones named — merges print no stat line. */
+function statsExcept(...silent: string[]) {
+  return async (hashes: string[]) => new Map(
+    hashes.filter((hash) => !silent.includes(hash)).map((hash) => [hash, STAT] as const),
+  );
 }
 
 describe('GraphMethodHandler', () => {
@@ -141,5 +155,124 @@ describe('GraphMethodHandler', () => {
       message: 'Graph build superseded',
       code: 'GRAPH_BUILD_SUPERSEDED',
     });
+  });
+});
+
+describe('GraphMethodHandler stats cache', () => {
+  const A = commit('a').hash;
+  const B = commit('b').hash;
+  const MERGE = commit('m').hash;
+
+  async function built(source: ReturnType<typeof graphSource>) {
+    const handler = new GraphMethodHandler(new GraphService(), () => source);
+    const build = await handler.handle('graph.build', { all: true }) as { layoutVersion: number };
+    return { handler, layoutVersion: build.layoutVersion };
+  }
+
+  it('builds the graph without asking git for any shortstat', async () => {
+    const source = graphSource('/repo', async () => [commit('a'), commit('b')]);
+    const { handler, layoutVersion } = await built(source);
+
+    expect(source.log).toHaveBeenCalled();
+    expect(source.snapshotLogOptions).toHaveBeenCalled();
+    expect(source.shortStatsFor).not.toHaveBeenCalled();
+
+    // A window is served straight from the layout: stats unknown, no git call.
+    const window = await handler.handle('graph.getWindow', {
+      startRow: 0, count: 20, layoutVersion,
+    }) as { nodes: { filesChanged: number | null; additions: number | null; deletions: number | null }[] };
+    expect(window.nodes[0]).toMatchObject({ filesChanged: null, additions: null, deletions: null });
+    expect(source.shortStatsFor).not.toHaveBeenCalled();
+  });
+
+  it('fetches a hash set once and serves the repeat from cache', async () => {
+    const source = graphSource('/repo', async () => [commit('a')], statsExcept());
+    const { handler } = await built(source);
+
+    const first = await handler.handle('graph.getStats', { hashes: [A, B] });
+    expect(first).toEqual({ [A]: STAT, [B]: STAT });
+    expect(source.shortStatsFor).toHaveBeenCalledTimes(1);
+
+    const second = await handler.handle('graph.getStats', { hashes: [A, B] });
+    expect(second).toEqual({ [A]: STAT, [B]: STAT });
+    expect(source.shortStatsFor).toHaveBeenCalledTimes(1);
+  });
+
+  it('fetches only the uncached hashes of a mixed request, answering both together', async () => {
+    const source = graphSource('/repo', async () => [commit('a')], statsExcept());
+    const { handler } = await built(source);
+
+    await handler.handle('graph.getStats', { hashes: [A] });
+    const mixed = await handler.handle('graph.getStats', { hashes: [A, B] });
+
+    expect(mixed).toEqual({ [A]: STAT, [B]: STAT });
+    expect(source.shortStatsFor).toHaveBeenCalledTimes(2);
+    expect(source.shortStatsFor.mock.calls[1][0]).toEqual([B]);
+  });
+
+  it('caches a merge negatively so it is never requested twice', async () => {
+    // `log --no-walk --shortstat` prints no stat line for a merge, so the hash
+    // is absent from the map. Caching only what git answered for would re-ask
+    // for every merge on screen, forever.
+    const source = graphSource('/repo', async () => [commit('a')], statsExcept(MERGE));
+    const { handler } = await built(source);
+
+    expect(await handler.handle('graph.getStats', { hashes: [MERGE] })).toEqual({ [MERGE]: null });
+    expect(source.shortStatsFor).toHaveBeenCalledTimes(1);
+
+    expect(await handler.handle('graph.getStats', { hashes: [MERGE] })).toEqual({ [MERGE]: null });
+    expect(source.shortStatsFor).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the cache across an ordinary invalidate(), which is not a repo switch', async () => {
+    // invalidate() runs on the 500ms-debounced git file watcher — on every
+    // commit, checkout and index change. A commit's shortstat is immutable, so
+    // dropping the cache here would leave it worthless.
+    const source = graphSource('/repo', async () => [commit('a')], statsExcept());
+    const { handler } = await built(source);
+
+    await handler.handle('graph.getStats', { hashes: [A] });
+    handler.invalidate();
+    await handler.handle('graph.build', { all: true });
+
+    expect(await handler.handle('graph.getStats', { hashes: [A] })).toEqual({ [A]: STAT });
+    expect(source.shortStatsFor).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops the cache when the repository identity behind it changes', async () => {
+    const oldSource = graphSource('/old', async () => [commit('a')], statsExcept());
+    const newSource = graphSource('/new', async () => [commit('a')], statsExcept());
+    let currentSource = oldSource;
+    const handler = new GraphMethodHandler(new GraphService(), () => currentSource);
+    await handler.handle('graph.build', { all: true });
+
+    await handler.handle('graph.getStats', { hashes: [A] });
+    expect(oldSource.shortStatsFor).toHaveBeenCalledTimes(1);
+
+    // What repo.switch does: invalidate(), then swap the git service.
+    handler.invalidate();
+    currentSource = newSource;
+
+    expect(await handler.handle('graph.getStats', { hashes: [A] })).toEqual({ [A]: STAT });
+    expect(newSource.shortStatsFor).toHaveBeenCalledTimes(1);
+    expect(oldSource.shortStatsFor).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves rows unknown when the stats call fails, and retries them later', async () => {
+    // Stats are decoration; the graph is the feature. A failure surfaces
+    // nothing — and must not be cached as null, which would mean "known
+    // empty" forever.
+    let fail = true;
+    const source = graphSource('/repo', async () => [commit('a')], async (hashes) => {
+      if (fail) throw new Error('git exploded');
+      return new Map(hashes.map((hash) => [hash, STAT] as const));
+    });
+    const { handler } = await built(source);
+
+    expect(await handler.handle('graph.getStats', { hashes: [A] })).toEqual({ [A]: null });
+
+    fail = false;
+    expect(await handler.handle('graph.getStats', { hashes: [A] })).toEqual({ [A]: STAT });
+    expect(source.shortStatsFor).toHaveBeenCalledTimes(2);
   });
 });

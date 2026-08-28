@@ -178,7 +178,7 @@ describe('App sidebar primary actions', () => {
     ).toBeGreaterThan(buildCount));
   });
 
-  it('ignores a branch HEAD that is absent from the current graph', async () => {
+  it('says a branch HEAD is missing from the graph, and does not move, when no filter is active', async () => {
     const { container, getByRole } = await renderApp({ branchRow: null });
     const scrollArea = container.querySelector('.scroll-area') as HTMLElement;
     scrollArea.scrollTop = 64;
@@ -188,6 +188,15 @@ describe('App sidebar primary actions', () => {
       hash: branch.hash,
       layoutVersion: 1,
     }));
+
+    // With no filter on there is no filter to blame, so this pins the other
+    // half of BRANCH_JUMP_MISSING_ROW_MESSAGE. Without it the two sentences
+    // could be swapped, or `absent` emptied, and the suite would stay green.
+    await waitFor(() => expect(
+      container.querySelector('.error-banner')?.textContent ?? '',
+    ).toContain("isn't in the loaded graph"));
+    expect(container.querySelector('.error-banner')?.textContent ?? '')
+      .not.toContain('outside the current branch filter');
 
     expect(scrollArea.scrollTop).toBe(64);
     expect(getByRole('button', { name: 'main' })).toHaveAttribute('aria-pressed', 'false');

@@ -107,9 +107,9 @@ export class GraphService {
         lane,
         row,
         color,
-        filesChanged: 0,
-        additions: 0,
-        deletions: 0,
+        filesChanged: null,
+        additions: null,
+        deletions: null,
       });
     }
 
