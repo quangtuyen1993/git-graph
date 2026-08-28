@@ -97,6 +97,14 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
       case 'review.get':
         return (await deps.store.get(repoId, assertSafeReviewId(p.id))) ?? null;
 
+      // review.get returns metadata only; this is the one method that hands
+      // back the reviewed markdown itself, for rendering inline rather than
+      // opening an editor. store.readBody already resolves '' for a missing
+      // file — see review-store.ts:125 — so there is nothing more to guard
+      // here beyond the id.
+      case 'review.body':
+        return deps.store.readBody(repoId, assertSafeReviewId(p.id));
+
       case 'review.cancel':
         return { cancelled: deps.runner.cancel(repoId, assertSafeReviewId(p.id)) };
 

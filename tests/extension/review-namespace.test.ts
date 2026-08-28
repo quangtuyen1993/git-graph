@@ -11,6 +11,7 @@ function harness(over: Record<string, unknown> = {}) {
     get: vi.fn(async () => undefined),
     remove: vi.fn(async () => {}),
     bodyPath: vi.fn(() => '/tmp/body.md'),
+    readBody: vi.fn(async () => ''),
   };
   const runner = {
     start: vi.fn(async (_input: Record<string, unknown>) => 'new-id'),
@@ -140,7 +141,7 @@ describe('review namespace', () => {
     expect(git.log).not.toHaveBeenCalled();
   });
 
-  it.each(['review.get', 'review.cancel', 'review.delete', 'review.open'])(
+  it.each(['review.get', 'review.cancel', 'review.delete', 'review.open', 'review.body'])(
     '%s refuses an id that would escape the store',
     async (method) => {
       const { handler, store, runner } = harness();
@@ -149,9 +150,29 @@ describe('review namespace', () => {
 
       expect(store.get).not.toHaveBeenCalled();
       expect(store.remove).not.toHaveBeenCalled();
+      expect(store.readBody).not.toHaveBeenCalled();
       expect(runner.cancel).not.toHaveBeenCalled();
     },
   );
+
+  it('review.body returns the stored review body for a valid id', async () => {
+    const { handler, store } = harness();
+    store.readBody.mockResolvedValue('# Review\n\nLooks good.');
+
+    const result = await handler('review.body', { id: 'aaaaaaa..bbbbbbb.claude.sonnet' });
+
+    expect(result).toBe('# Review\n\nLooks good.');
+    expect(store.readBody).toHaveBeenCalledWith('repo-a', 'aaaaaaa..bbbbbbb.claude.sonnet');
+  });
+
+  it('review.body returns an empty string when the body file is missing', async () => {
+    const { handler, store } = harness();
+    store.readBody.mockResolvedValue('');
+
+    const result = await handler('review.body', { id: 'aaaaaaa..bbbbbbb.claude.sonnet' });
+
+    expect(result).toBe('');
+  });
   it('restarts a `running` entry the runner is not actually working on', async () => {
     // I4: a run dies with the window. Trusting the persisted status hands back
     // an id nothing is working on — the row spins forever, the 1 Hz ticker
