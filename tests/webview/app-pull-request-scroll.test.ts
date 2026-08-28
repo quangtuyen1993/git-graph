@@ -120,6 +120,24 @@ async function clickPullRequest(rendered: ReturnType<typeof render>, title: stri
   await fireEvent.click(row.closest('button')!);
 }
 
+/** Filters the graph down to `main` through the toolbar dropdown a user uses. */
+async function filterGraphToMain(rendered: ReturnType<typeof render>): Promise<void> {
+  // The dropdown lists whatever `git.branches` last delivered, which lands
+  // with the first graph refresh -- opening it earlier shows an empty list.
+  await waitFor(() => expect(rendered.getByRole('button', { name: 'main' })).toBeInTheDocument());
+  await fireEvent.click(rendered.getByLabelText('Filter graph by branch'));
+  await fireEvent.click(rendered.getByRole('checkbox', { name: 'main' }));
+  await waitFor(() => expect(send).toHaveBeenCalledWith(
+    'graph.build', { branches: ['main'], all: false },
+  ));
+}
+
+function resolvedBuild(layoutVersion = 1) {
+  const d = deferred<{ totalRows: number; maxLane: number; layoutVersion: number }>();
+  d.resolve({ totalRows: 500, maxLane: 0, layoutVersion });
+  return d;
+}
+
 describe('Pull request head-commit scroll: graph still building', () => {
   it('does not show the not-fetched message while the graph build is in flight', async () => {
     const { graphBuild } = stubApp({ getRow: () => ({ row: null }) });
@@ -297,5 +315,52 @@ describe('Pull request head-commit scroll: build already completed', () => {
       (rendered.container.querySelector('.scroll-area') as HTMLElement).scrollTop,
     ).toBeGreaterThan(0));
     expect(bannerText(rendered.container)).toBe('');
+  });
+});
+
+describe('Pull request head-commit scroll: a branch filter is hiding the row', () => {
+  it('names the filter and offers Clear filter, not Fetch, when a filter is active', async () => {
+    stubApp({ graphBuild: resolvedBuild(), getRow: () => ({ row: null }) });
+    const rendered = render(App);
+    await openPullRequestsSection(rendered);
+    await filterGraphToMain(rendered);
+    await clickPullRequest(rendered, 'Add widgets');
+
+    await waitFor(() => expect(bannerText(rendered.container)).toContain(
+      'outside the current branch filter',
+    ));
+    expect(bannerText(rendered.container)).not.toContain('fetched locally');
+    expect(rendered.getByRole('button', { name: /clear filter/i })).toBeInTheDocument();
+    expect(rendered.queryByRole('button', { name: /^fetch$/i })).toBeNull();
+    // Fetching cannot help when the commit is already local, so it must not
+    // even be offered.
+    expect(send).not.toHaveBeenCalledWith('git.fetch', expect.anything());
+  });
+
+  it('clears the filter and retries the scroll when the Clear filter action is used', async () => {
+    stubApp({
+      graphBuild: resolvedBuild(),
+      // The filtered layout (version 2) has no row for the head commit; the
+      // unfiltered rebuild that Clear filter triggers does.
+      getRow: ({ layoutVersion }) => ({ row: layoutVersion >= 3 ? 42 : null }),
+    });
+    const rendered = render(App);
+    await openPullRequestsSection(rendered);
+    await filterGraphToMain(rendered);
+    await clickPullRequest(rendered, 'Add widgets');
+    await waitFor(() => expect(bannerText(rendered.container)).toContain(
+      'outside the current branch filter',
+    ));
+
+    await fireEvent.click(rendered.getByRole('button', { name: /clear filter/i }));
+
+    await waitFor(() => expect(
+      send.mock.calls.filter(([method]) => method === 'graph.build').at(-1),
+    ).toEqual(['graph.build', { all: true }]));
+    await waitFor(() => expect(
+      (rendered.container.querySelector('.scroll-area') as HTMLElement).scrollTop,
+    ).toBeGreaterThan(0));
+    expect(bannerText(rendered.container)).toBe('');
+    expect(send).not.toHaveBeenCalledWith('git.fetch', expect.anything());
   });
 });

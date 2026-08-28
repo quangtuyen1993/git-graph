@@ -31,6 +31,7 @@
   import ResizeHandle from './components/layout/ResizeHandle.svelte';
   import CommitSearch from './components/toolbar/CommitSearch.svelte';
   import { classifyQuery, nextMatchIndex } from './lib/commit-search';
+  import { missingRowReason, type MissingRowReason } from './lib/missing-row';
   import {
     autoGraphColumnWidth,
     clampColumnWidth,
@@ -751,6 +752,16 @@
       }) as { row: number | null };
       if (requestedLayoutVersion !== layoutVersion || selectedPullRequestId !== pullRequestId) return;
       if (result.row === null) {
+        // The two causes want opposite remedies, and offering the wrong one is
+        // worse than offering none: a Fetch under an active filter downloads
+        // nothing that helps, because the commit is already local.
+        if (missingRowReason({ branchFilterActive: selectedBranchFilters.length > 0 }) === 'filtered') {
+          showTransientMessage(
+            "This pull request's head commit is outside the current branch filter.",
+            { label: 'Clear filter', run: () => { void clearFilterAndScrollToPullRequestHead(pullRequestId, hash); } },
+          );
+          return;
+        }
         showTransientMessage(
           "This pull request's head commit isn't in the loaded graph — the branch may not be fetched locally.",
           { label: 'Fetch', run: () => { void fetchAndScrollToPullRequestHead(pullRequestId, hash); } },
@@ -761,6 +772,30 @@
     } catch {
       // The layout moved on mid-lookup; the next selection starts clean.
     }
+  }
+
+  /**
+   * The action offered alongside the filtered notice. Drops the branch filter,
+   * which rebuilds the graph over every branch, then retries the lookup on the
+   * layout that rebuild produced.
+   *
+   * It does not go through `handleGraphBranchFilters`: that clears the
+   * pull-request selection along with the rest of the filter-dependent view
+   * state, and the selection is the one thing this retry has to keep — every
+   * guard below, and inside `scrollToPullRequestHead`, is written against it.
+   */
+  async function clearFilterAndScrollToPullRequestHead(pullRequestId: string, hash: string): Promise<void> {
+    selectedBranchFilters = [];
+    clearBranchHighlight();
+    try {
+      await refreshGraph();
+    } catch (e) {
+      if (selectedPullRequestId !== pullRequestId) return;
+      showTransientMessage(messageOf(e));
+      return;
+    }
+    if (selectedPullRequestId !== pullRequestId) return;
+    await scrollToPullRequestHead(pullRequestId, hash);
   }
 
   /**
@@ -2218,6 +2253,17 @@
     );
   }
 
+  /**
+   * A sidebar branch's hash comes from the local ref list, so `absent` should
+   * be unreachable here — the wording is kept anyway rather than assumed away,
+   * so a future source of branches that can name a commit the repository lacks
+   * gets a true sentence instead of a wrong one.
+   */
+  const BRANCH_JUMP_MISSING_ROW_MESSAGE: Record<MissingRowReason, string> = {
+    filtered: "This branch's head commit is outside the current branch filter.",
+    absent: "This branch's head commit isn't in the loaded graph.",
+  };
+
   async function handleBranchSelect(event: CustomEvent<{ name: string }>) {
     const branch = branches.find(candidate => candidate.name === event.detail.name);
     const requestedLayoutVersion = layoutVersion;
@@ -2228,7 +2274,16 @@
         hash: branch.hash,
         layoutVersion: requestedLayoutVersion,
       }) as { row: number | null };
-      if (result.row === null || requestedLayoutVersion !== layoutVersion) return;
+      if (requestedLayoutVersion !== layoutVersion) return;
+      if (result.row === null) {
+        // Returning silently here was the drift this helper exists to close:
+        // the same `null` explained itself in the pull-request panel and in
+        // commit search, and said nothing at all from the sidebar.
+        showTransientMessage(BRANCH_JUMP_MISSING_ROW_MESSAGE[
+          missingRowReason({ branchFilterActive: selectedBranchFilters.length > 0 })
+        ]);
+        return;
+      }
 
       clearBranchHighlight();
       selectedSidebarBranch = branch.name;
@@ -2284,6 +2339,20 @@
     }
   }
 
+  /**
+   * Both reasons read the same sentence, deliberately. `runCommitSearch` gets
+   * its hashes from `git.searchCommits`, i.e. from the repository itself, so
+   * the commit exists and the layout is the only thing that can be missing it;
+   * with no filter active the lookup should not have missed at all. Rather than
+   * invent a second wording for a state with no user-facing meaning, this site
+   * keeps today's sentence and still asks the shared helper, so the three
+   * `getRow`-null sites move together if that reasoning ever stops holding.
+   */
+  const SEARCH_MISSING_ROW_MESSAGE: Record<MissingRowReason, string> = {
+    filtered: 'Commit is outside the current branch filter',
+    absent: 'Commit is outside the current branch filter',
+  };
+
   async function revealSearchMatch() {
     // Read the cursor directly rather than through `activeSearchHash`: callers
     // move it in the same tick, and the reactive alias only catches up on flush.
@@ -2296,7 +2365,9 @@
       }) as { row: number | null };
       if (requestedLayoutVersion !== layoutVersion) return;
       if (result.row === null) {
-        searchMessage = 'Commit is outside the current branch filter';
+        searchMessage = SEARCH_MISSING_ROW_MESSAGE[
+          missingRowReason({ branchFilterActive: selectedBranchFilters.length > 0 })
+        ];
         return;
       }
       searchMessage = '';

@@ -193,6 +193,22 @@ describe('App sidebar primary actions', () => {
     expect(getByRole('button', { name: 'main' })).toHaveAttribute('aria-pressed', 'false');
   });
 
+  it('says why a branch HEAD is missing instead of doing nothing visible', async () => {
+    const { container, getByLabelText, getByRole } = await renderApp({ branchRow: null });
+
+    await fireEvent.click(getByLabelText('Filter graph by branch'));
+    await fireEvent.click(getByRole('checkbox', { name: 'main' }));
+    await waitFor(() => expect(send).toHaveBeenCalledWith(
+      'graph.build', { branches: ['main'], all: false },
+    ));
+
+    await fireEvent.click(getByRole('button', { name: 'main' }));
+
+    await waitFor(() => expect(
+      container.querySelector('.error-banner')?.textContent ?? '',
+    ).toContain('outside the current branch filter'));
+  });
+
   it('clears the branch filter when switching repositories', async () => {
     const repos = [
       { name: 'repo', path: '/repo', active: true },
