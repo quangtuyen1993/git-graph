@@ -7,13 +7,53 @@ import {
   LOG_FORMAT, BRANCH_FORMAT, TAG_FORMAT
 } from '../utils/git-parser';
 import { transformRebaseTodo, type RebaseTodoPlan } from '../utils/rebase-todo';
-import type { Commit, Branch, Tag, FileChange, GitStatus, GitLogOptions, DiffResult, StashEntry, SubmoduleEntry, WorktreeEntry } from '../types/git.types';
+import type { Commit, Branch, Tag, FileChange, GitStatus, GitLogOptions, DiffResult, ShortStat, StashEntry, SubmoduleEntry, WorktreeEntry } from '../types/git.types';
 
 const REBASE_TIMEOUT_MS = 120000;
 const REBASE_TEMP_PREFIX = path.join(os.tmpdir(), 'git-graph-rebase-');
 
 function quoteEditorArgument(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * Parses `git log --shortstat --format=%H` output into hash → ShortStat.
+ *
+ * Hash lines are the bare 40-hex `%H`; the stat line that follows a commit
+ * reads " 3 files changed, 10 insertions(+), 5 deletions(-)", with either the
+ * insertions or the deletions clause omitted when it is zero. A hash with no
+ * stat line under it (a merge) is left out of the map entirely.
+ */
+function parseShortStats(output: string): Map<string, ShortStat> {
+  const stats = new Map<string, ShortStat>();
+  let currentHash = '';
+
+  for (const line of output.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // Hash line (40 hex chars)
+    if (/^[0-9a-f]{40}$/.test(trimmed)) {
+      currentHash = trimmed;
+      continue;
+    }
+
+    // Shortstat line: " 3 files changed, 10 insertions(+), 5 deletions(-)"
+    if (currentHash && trimmed.includes('changed')) {
+      const filesMatch = trimmed.match(/(\d+) file/);
+      const addMatch = trimmed.match(/(\d+) insertion/);
+      const delMatch = trimmed.match(/(\d+) deletion/);
+
+      stats.set(currentHash, {
+        filesChanged: filesMatch ? parseInt(filesMatch[1], 10) : 0,
+        additions: addMatch ? parseInt(addMatch[1], 10) : 0,
+        deletions: delMatch ? parseInt(delMatch[1], 10) : 0,
+      });
+      currentHash = '';
+    }
+  }
+
+  return stats;
 }
 
 function sequenceEditorSource(): string {
@@ -492,46 +532,20 @@ export class GitService {
   }
 
   /**
-   * Get shortstat (files changed, additions, deletions) for commits.
-   * Returns a map of hash → { filesChanged, additions, deletions }
+   * Aggregate diff size for a specific set of commits.
+   *
+   * The hashes are passed as revisions, so the answer is pinned to exactly the
+   * commits asked about — unlike a walk, it cannot drift with `--all` or the
+   * branch filter. `--no-walk` stops git following parents from each one.
+   *
+   * A merge commit prints no stat line under `--no-walk`; such a hash is
+   * absent from the map rather than present with zeroes, so callers can tell
+   * "nothing to report" apart from "genuinely changed nothing".
    */
-  public async getShortStats(maxCount: number = 500, all: boolean = true): Promise<Map<string, { filesChanged: number; additions: number; deletions: number }>> {
-    const args = ['log', '--shortstat', '--format=%H'];
-    if (all) args.push('--all');
-    args.push(`--max-count=${maxCount}`);
-
-    const output = await this.cli.exec(args);
-    const stats = new Map<string, { filesChanged: number; additions: number; deletions: number }>();
-
-    const lines = output.split('\n');
-    let currentHash = '';
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-
-      // Hash line (40 hex chars)
-      if (/^[0-9a-f]{40}$/.test(trimmed)) {
-        currentHash = trimmed;
-        continue;
-      }
-
-      // Shortstat line: " 3 files changed, 10 insertions(+), 5 deletions(-)"
-      if (currentHash && trimmed.includes('changed')) {
-        const filesMatch = trimmed.match(/(\d+) file/);
-        const addMatch = trimmed.match(/(\d+) insertion/);
-        const delMatch = trimmed.match(/(\d+) deletion/);
-
-        stats.set(currentHash, {
-          filesChanged: filesMatch ? parseInt(filesMatch[1], 10) : 0,
-          additions: addMatch ? parseInt(addMatch[1], 10) : 0,
-          deletions: delMatch ? parseInt(delMatch[1], 10) : 0,
-        });
-        currentHash = '';
-      }
-    }
-
-    return stats;
+  public async shortStatsFor(hashes: string[]): Promise<Map<string, ShortStat>> {
+    if (hashes.length === 0) return new Map();
+    const output = await this.cli.exec(['log', '--no-walk', '--shortstat', '--format=%H', ...hashes]);
+    return parseShortStats(output);
   }
 
   /**

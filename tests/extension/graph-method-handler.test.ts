@@ -38,7 +38,6 @@ function graphSource(repoPath: string, log: (options: GitLogOptions) => Promise<
       revisions: [`${repoPath}-snapshot`],
     })),
     log: vi.fn(log),
-    getShortStats: vi.fn(async () => new Map()),
   };
 }
 

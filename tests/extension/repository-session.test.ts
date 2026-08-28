@@ -30,7 +30,7 @@ function fakeGitServiceFactory(repositoryPath: string): GitService {
       revisions: [repositoryPath],
     }),
     log: async () => [commit(repositoryPath)],
-    getShortStats: async () => new Map(),
+    shortStatsFor: async () => new Map(),
     branches: async () => [{ name: repositoryPath }],
     submoduleList: async () => [],
   } as unknown as GitService;

@@ -5,7 +5,7 @@ import type { GraphOptions } from '../types/graph.types';
 
 type GraphGitService = Pick<
   GitService,
-  'getRepoPath' | 'snapshotLogOptions' | 'log' | 'getShortStats'
+  'getRepoPath' | 'snapshotLogOptions' | 'log'
 >;
 
 export class GraphMethodHandler {
@@ -74,19 +74,6 @@ export class GraphMethodHandler {
     this.assertCurrent(generation, gitService, repoPath);
 
     const layout = this.graphService.createLayout(commits);
-    try {
-      const stats = await gitService.getShortStats(500, logOptions.all);
-      for (const node of layout.nodes) {
-        const stat = stats.get(node.hash);
-        if (stat) {
-          node.filesChanged = stat.filesChanged;
-          node.additions = stat.additions;
-          node.deletions = stat.deletions;
-        }
-      }
-    } catch {
-      // Stats are optional — don't fail the build if this errors.
-    }
 
     this.assertCurrent(generation, gitService, repoPath);
     const layoutVersion = ++this.nextLayoutVersion;
