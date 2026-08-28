@@ -17,9 +17,11 @@ export class GraphMethodHandler {
   // against its parent cannot change. The only thing that invalidates an entry
   // is the hash meaning something else, i.e. a different repository; hence the
   // identity fields below rather than layout-version invalidation.
-  // `null` is a real cached answer: "git reported no stat line", which is what
-  // a merge produces under --no-walk. Without it every merge on screen would
-  // be re-requested on every window.
+  // `null` is a real cached answer: "git listed nothing for this hash at all",
+  // which `parseShortStats` reports by leaving it out of the map. (A merge is
+  // not this case: git lists it, prints no stat line, and it maps to {0,0,0}.)
+  // Without the negative entry such a hash would be re-requested on every
+  // window, forever.
   private readonly statsCache = new Map<string, ShortStat | null>();
   private statsCacheGitService: GraphGitService | null = null;
   private statsCacheRepoPath: string | null = null;
@@ -113,17 +115,22 @@ export class GraphMethodHandler {
    *   or a merge (`--no-walk` prints no stat line for a merge whether or not it
    *   touched anything). A caller that must not treat a merge as empty excludes
    *   it by its parent count, never by these numbers.
-   * - **`null`** — no answer. Either git never listed the hash (unresolvable or
-   *   garbage-collected) or the call failed. Callers render it as "unknown" and
-   *   must not read it as "nothing changed" — a failed request returns `null`
-   *   for every hash it covered, so treating `null` as empty would repaint the
-   *   whole screen on one transient git failure.
+   * - **`null`** — git answered the batch and listed nothing for this hash.
+   *   Callers render it as "unknown" and must not read it as "nothing changed".
+   *   It is a settled answer and is cached as one.
+   * - **absent from the record** — no answer yet, because the fetch covering
+   *   that hash failed. The distinction from `null` is the whole point of the
+   *   record's shape: the host leaves a failed hash out of its cache so a later
+   *   call retries, and a caller that cannot see which hashes those were caches
+   *   the failure itself and puts that retry out of reach.
    *
    * Failure is silent by contract: stats are decoration and the graph is the
-   * feature, so a rejected git call returns `null` for the hashes it covered
-   * rather than surfacing an error. Those hashes are deliberately left out of
-   * the cache — caching them as `null` would freeze a transient failure into
-   * the permanent answer "known to have no stats".
+   * feature, so a rejected git call omits the hashes it covered rather than
+   * surfacing an error. Omission, not `null`, because one unresolvable revision
+   * makes git reject the whole batch (`fatal: bad object`, exit 128), so a
+   * single pruned hash in a window fails every hash beside it — answering
+   * `null` there would turn one transient failure into a screen of commits
+   * permanently "known to have no stats".
    *
    * `shortStatsFor`'s preconditions are inherited and matter more here, because
    * the cache makes a violation permanent rather than merely repeated:
@@ -162,9 +169,12 @@ export class GraphMethodHandler {
       }
     }
 
+    // Keyed off `has`, not off the value: a hash the fetch failed for is
+    // absent from the cache and must stay absent from the response, so the
+    // caller re-asks for it instead of recording the failure as an answer.
     const stats: Record<string, ShortStat | null> = {};
     for (const hash of hashes) {
-      stats[hash] = this.statsCache.get(hash) ?? null;
+      if (this.statsCache.has(hash)) stats[hash] = this.statsCache.get(hash) ?? null;
     }
     return stats;
   }

@@ -1796,9 +1796,20 @@
    * Asks the host for the stats of rows it does not already know about.
    *
    * Fire-and-forget by contract: stats are decoration and the graph is the
-   * feature, so a rejection leaves the affected rows at their default `null` —
-   * no retry loop, no banner, nothing surfaced. The hashes are left out of the
-   * cache so a later window may try again.
+   * feature, so a failure leaves the affected rows at their default `null` —
+   * no retry loop, no banner, nothing surfaced.
+   *
+   * Failure has two shapes and neither is cached, so a later window covering
+   * the same hashes asks again:
+   *
+   * - The send rejects (transport), handled by the `.catch` below.
+   * - The host resolves with the hash **missing from the record**, which is how
+   *   it reports "the fetch covering this hash failed". A present `null` is the
+   *   opposite — a settled answer, "git listed nothing for this commit" — and
+   *   is cached. Only the keys the record actually carries are cached, because
+   *   git rejects a whole `--no-walk` batch on its first unresolvable revision,
+   *   so the missing-key case covers a full window at a time and caching it as
+   *   `null` would kill stats for the session.
    */
   function requestCommitStats(nodes: GraphNode[]): void {
     const hashes = [...new Set(nodes.map((node) => node.hash))]
@@ -1809,7 +1820,8 @@
     void (bridge.send('graph.getStats', { hashes }) as Promise<Record<string, ShortStat | null>>)
       .then((stats) => {
         for (const hash of hashes) {
-          commitStatsCache.set(hash, stats?.[hash] ?? null);
+          if (!stats || !Object.prototype.hasOwnProperty.call(stats, hash)) continue;
+          commitStatsCache.set(hash, stats[hash] ?? null);
         }
         // Applied to the window on screen now, which need not be the one the
         // request was issued for: an overlapping window can render while the

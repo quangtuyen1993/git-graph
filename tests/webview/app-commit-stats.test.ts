@@ -202,6 +202,57 @@ describe('App commit stats', () => {
     await waitFor(() => expect(statsCalls()).toHaveLength(2));
   });
 
+  it('retries a hash the host omitted, and paints the stats the retry brings back', async () => {
+    // The host leaves a hash it could not fetch *out* of the record so a later
+    // window retries it; a hash it answered null for is present and is the
+    // final answer. Caching a null for every hash asked about erases that
+    // difference and freezes one transient git failure — a whole batch, since
+    // git rejects the batch on the first unresolvable revision — into "no
+    // stats" for the rest of the session.
+    const { container } = await renderApp(async (hashes, call) => (
+      call === 1
+        ? {}
+        : Object.fromEntries(hashes.map((hash) => [hash, { filesChanged: 7, additions: 2, deletions: 1 }]))
+    ));
+
+    await waitFor(() => expect(statsCalls()).toHaveLength(1));
+    expect(statsCalls()[0]).toEqual([HASH_A, HASH_B]);
+
+    await scrollTo(container, 1_600);
+    await waitFor(() => expect(rowFor(container, 'c')).toBeTruthy());
+    await waitFor(() => expect(statsCalls()).toHaveLength(2));
+    // HASH_B was covered by the failed call, so it is asked about again.
+    expect(statsCalls()[1]).toEqual([HASH_B, HASH_C]);
+    await waitFor(() => {
+      expect(rowFor(container, 'b')?.getAttribute('data-files-changed')).toBe('7');
+    });
+
+    // And HASH_A, which the failure also covered, is retried on its window too.
+    await scrollTo(container, 0);
+    await waitFor(() => expect(rowFor(container, 'a')).toBeTruthy());
+    await waitFor(() => expect(statsCalls()).toHaveLength(3));
+    expect(statsCalls()[2]).toEqual([HASH_A]);
+    await waitFor(() => {
+      expect(rowFor(container, 'a')?.getAttribute('data-files-changed')).toBe('7');
+    });
+  });
+
+  it('takes a null the host did carry as the final answer, and never re-asks', async () => {
+    // Present-and-null is "git listed nothing for this commit" — an answer.
+    // Only an absent key means "no answer yet".
+    const { container } = await renderApp(async (hashes) => Object.fromEntries(
+      hashes.map((hash) => [hash, hash === HASH_B ? null : { filesChanged: 1, additions: 1, deletions: 0 }]),
+    ));
+
+    await waitFor(() => expect(statsCalls()).toHaveLength(1));
+
+    await scrollTo(container, 1_600);
+    await waitFor(() => expect(rowFor(container, 'c')).toBeTruthy());
+    await waitFor(() => expect(statsCalls()).toHaveLength(2));
+    expect(statsCalls()[1]).toEqual([HASH_C]);
+    expect(rowFor(container, 'b')?.hasAttribute('data-files-changed')).toBe(false);
+  });
+
   it('leaves the rows at their default when graph.getStats rejects, surfacing nothing', async () => {
     // The rejection must be handled, not merely unobserved: an unhandled one
     // reaches the runtime, and a reader who meets it later has no way to tell
