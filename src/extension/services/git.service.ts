@@ -271,6 +271,20 @@ export class GitService {
     return output.replace(/\u0000/g, '').replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F]/g, '');
   }
 
+  /**
+   * Raw diff text for `ref` versus the working tree — `getDiff`'s sibling for
+   * a comparison with no second revision (see `diffWorkingTree` above for why
+   * there is no three-dot range here). A review of uncommitted changes needs
+   * this text verbatim, the same way a review of two refs needs `getDiff`'s;
+   * stripped identically, for the same reason — this is what a review's diff
+   * payload is built from, and it is serialised across `postMessage` on the
+   * way there.
+   */
+  public async getWorkingTreeDiff(ref: string): Promise<string> {
+    const output = await this.cli.exec(['diff', '-M', '-C', ref]);
+    return output.replace(/\u0000/g, '').replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+  }
+
   public async revParse(ref: string): Promise<string> {
     return (await this.cli.exec(['rev-parse', ref])).trim();
   }

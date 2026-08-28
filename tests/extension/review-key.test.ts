@@ -60,6 +60,35 @@ describe('buildReviewId', () => {
     expect(pr).not.toBe(range);
     expect(pr).toBe('aaaaaaa..bbbbbbb.pr.claude.sonnet');
   });
+
+  it('distinguishes a worktree review from a "range" review sharing the same shas — the second exception, sibling of "pr"', () => {
+    // 'worktree's headSha is a content hash, not a commit sha (the caller
+    // computes it from the diff before this id is known — see
+    // review-method-handler.ts's review.start). The marker keeps it out of
+    // the same namespace as a 'range'/'branch' review that happens to land on
+    // the same seven hex characters, exactly as '.pr' does for 'pr'.
+    const range = buildReviewId({ ...shas, kind: 'range', provider: 'claude', model: 'sonnet' });
+    const worktree = buildReviewId({ ...shas, kind: 'worktree', provider: 'claude', model: 'sonnet' });
+    expect(worktree).not.toBe(range);
+    expect(worktree).toBe('aaaaaaa..bbbbbbb.worktree.claude.sonnet');
+  });
+
+  it('the working tree — edit a file, review again — produces a different id because headSha (the diff hash) changed', () => {
+    // This is the requirement the whole phase turns on: buildReviewId itself
+    // has no notion of "the working tree changed", it only ever sees
+    // whatever headSha its caller passes. Watch this fail against a headSha
+    // that never varies (e.g. always HEAD's own sha) — if it passes with a
+    // fixed headSha, the test is wrong, not the code.
+    const firstEditHash = 'd'.repeat(64);
+    const secondEditHash = 'e'.repeat(64);
+    const first = buildReviewId({
+      kind: 'worktree', baseSha: shas.baseSha, headSha: firstEditHash, provider: 'claude', model: 'sonnet',
+    });
+    const second = buildReviewId({
+      kind: 'worktree', baseSha: shas.baseSha, headSha: secondEditHash, provider: 'claude', model: 'sonnet',
+    });
+    expect(first).not.toBe(second);
+  });
 });
 
 describe('repoIdFor', () => {
