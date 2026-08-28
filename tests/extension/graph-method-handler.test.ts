@@ -258,6 +258,35 @@ describe('GraphMethodHandler stats cache', () => {
     expect(oldSource.shortStatsFor).toHaveBeenCalledTimes(1);
   });
 
+  it('discards stats that arrive after the repository they belong to is gone', async () => {
+    // The switch lands *during* the fetch, not between two calls. Writing the
+    // old repository's answer into a cache that has since been re-keyed to the
+    // new one would serve repo A's numbers for hash X under repo B for the
+    // rest of the session — a cache hit, so nothing ever re-asks.
+    const OLD_STAT: ShortStat = { filesChanged: 99, additions: 99, deletions: 99 };
+    const oldStats = deferred<Map<string, ShortStat>>();
+    const oldSource = graphSource('/old', async () => [commit('a')], () => oldStats.promise);
+    const newSource = graphSource('/new', async () => [commit('a')], statsExcept());
+    let currentSource = oldSource;
+    const handler = new GraphMethodHandler(new GraphService(), () => currentSource);
+    await handler.handle('graph.build', { all: true });
+
+    const inFlight = handler.handle('graph.getStats', { hashes: [A] });
+    await Promise.resolve();
+
+    // What repo.switch does, while the fetch above is still outstanding.
+    handler.invalidate();
+    currentSource = newSource;
+    // A call on the new repository re-keys the cache to the new identity.
+    await handler.handle('graph.getStats', { hashes: [B] });
+
+    oldStats.resolve(new Map([[A, OLD_STAT]]));
+    await inFlight;
+
+    expect(await handler.handle('graph.getStats', { hashes: [A] })).toEqual({ [A]: STAT });
+    expect(newSource.shortStatsFor.mock.calls.map((call) => call[0])).toEqual([[B], [A]]);
+  });
+
   it('leaves rows unknown when the stats call fails, and retries them later', async () => {
     // Stats are decoration; the graph is the feature. A failure surfaces
     // nothing — and must not be cached as null, which would mean "known

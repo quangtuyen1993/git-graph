@@ -111,6 +111,17 @@ export class GraphMethodHandler {
    * rather than surfacing an error. Those hashes are deliberately left out of
    * the cache — caching them as `null` would freeze a transient failure into
    * the permanent answer "known to have no stats".
+   *
+   * `shortStatsFor`'s preconditions are inherited and matter more here, because
+   * the cache makes a violation permanent rather than merely repeated:
+   *
+   * - Hashes must be full and lowercase — the layout's `%H`, which is what the
+   *   webview sends back. An abbreviation git resolves fine still comes back
+   *   under a key nobody asked for, so it caches as `null` and reads as a merge
+   *   for the rest of the session.
+   * - A call should cover a window's worth of hashes (tens), not a whole
+   *   repository: they all go onto one `git log` argv, which stops being
+   *   spawnable somewhere near 780 hashes on Windows.
    */
   private async getStats(
     gitService: GraphGitService,

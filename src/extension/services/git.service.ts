@@ -19,8 +19,18 @@ function quoteEditorArgument(value: string): string {
 /**
  * Parses `git log --shortstat --format=%H` output into hash → ShortStat.
  *
- * Hash lines are the bare 40-hex `%H`; the stat line that follows a commit
- * reads " 3 files changed, 10 insertions(+), 5 deletions(-)", with either the
+ * Keyed off the `%H` line rather than the position of the revision in argv:
+ * `--no-walk` defaults to `--no-walk=sorted`, so git may emit the commits in
+ * an order other than the one they were asked for. Reading the hash back out
+ * of the output is what makes that reordering harmless.
+ *
+ * `%H` is the full lowercase object name — 40 hex in a SHA-1 repository, 64
+ * in a SHA-256 one — so the hash line matches either length rather than
+ * hard-coding SHA-1's. Matching only 40 would silently yield an empty map for
+ * every commit in a SHA-256 repository.
+ *
+ * The stat line that follows a commit reads
+ * " 3 files changed, 10 insertions(+), 5 deletions(-)", with either the
  * insertions or the deletions clause omitted when it is zero. A hash with no
  * stat line under it (a merge) is left out of the map entirely.
  */
@@ -32,8 +42,8 @@ function parseShortStats(output: string): Map<string, ShortStat> {
     const trimmed = line.trim();
     if (!trimmed) continue;
 
-    // Hash line (40 hex chars)
-    if (/^[0-9a-f]{40}$/.test(trimmed)) {
+    // Hash line: full object name, 40 hex (SHA-1) or 64 hex (SHA-256)
+    if (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(trimmed)) {
       currentHash = trimmed;
       continue;
     }
@@ -541,6 +551,19 @@ export class GitService {
    * A merge commit prints no stat line under `--no-walk`; such a hash is
    * absent from the map rather than present with zeroes, so callers can tell
    * "nothing to report" apart from "genuinely changed nothing".
+   *
+   * Preconditions the caller owns:
+   *
+   * - **Full, lowercase hashes.** The map is keyed by the `%H` git prints back,
+   *   which is always the full lowercase object name. Git resolves an
+   *   abbreviated or uppercase revision happily, but the answer then comes back
+   *   under a key the caller did not ask for, so its lookup misses and the
+   *   commit looks like a merge. Callers that cache a miss make that permanent.
+   * - **Bounded batches.** Every hash goes onto one `git log` argv at ~41 bytes
+   *   each, so Windows' 32767-character command line is reached near 780
+   *   hashes. Request a window's worth (tens), not a whole repository; this
+   *   method deliberately does not chunk, because the argv it builds is part of
+   *   its contract.
    */
   public async shortStatsFor(hashes: string[]): Promise<Map<string, ShortStat>> {
     if (hashes.length === 0) return new Map();

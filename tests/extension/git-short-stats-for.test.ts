@@ -58,6 +58,37 @@ describe('GitService.shortStatsFor', () => {
     ]));
   });
 
+  it('parses a SHA-256 repository, whose %H is 64 hex not 40', async () => {
+    // A hash-line match hard-coded to SHA-1's 40 characters never fires here,
+    // so every commit looks like a merge and the map comes back empty — and a
+    // caller that caches misses negatively would keep that answer forever.
+    const wide = 'ab'.repeat(32);
+    const { service } = serviceWith(async () => (
+      `${wide}\n 5 files changed, 6 insertions(+), 7 deletions(-)\n`
+    ));
+
+    expect(await service.shortStatsFor([wide])).toEqual(new Map([
+      [wide, { filesChanged: 5, additions: 6, deletions: 7 }],
+    ]));
+  });
+
+  it('keys on the hash git printed, not on argv position', async () => {
+    // --no-walk defaults to --no-walk=sorted, so git may emit the commits in
+    // an order other than the one they were asked for.
+    const { service } = serviceWith(async () => [
+      B,
+      ' 2 files changed, 2 insertions(+)',
+      A,
+      ' 1 file changed, 1 deletion(-)',
+      '',
+    ].join('\n'));
+
+    expect(await service.shortStatsFor([A, B])).toEqual(new Map([
+      [B, { filesChanged: 2, additions: 2, deletions: 0 }],
+      [A, { filesChanged: 1, additions: 0, deletions: 1 }],
+    ]));
+  });
+
   it('omits a hash git printed no stat line for rather than zeroing it', async () => {
     // `log --no-walk --shortstat` prints nothing under a merge commit.
     // Reporting `0 files changed` would be a lie the caller cannot tell
