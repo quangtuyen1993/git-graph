@@ -371,7 +371,14 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
         const git = deps.getGitService();
         if (!git) throw new Error('No git repository found');
         const resolved = await resolveReviewTarget(git, targetFromParams(p));
-        const result = await git.diff(resolved.baseRef, resolved.headRef);
+        // 'worktree' has no headRef to diff against — App.svelte's
+        // fetchReviewFiles routes every non-'pr' kind here, including a
+        // selected worktree review, so this must not fall through to
+        // git.diff(resolved.baseRef, resolved.headRef): 'Working Tree' is
+        // not a ref. Same working-tree path resolution already uses.
+        const result = resolved.kind === 'worktree'
+          ? await git.diffWorkingTree(resolved.baseRef)
+          : await git.diff(resolved.baseRef, resolved.headRef);
         return { files: result.files };
       }
 

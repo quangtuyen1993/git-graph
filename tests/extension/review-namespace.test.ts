@@ -599,4 +599,19 @@ describe('review.start for the working tree', () => {
     expect(runner.start).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ cached: false });
   });
+
+  it('fix round 1: compare returns the working tree\'s changed files instead of diffing HEAD against the literal ref "Working Tree"', async () => {
+    // App.svelte's fetchReviewFiles (added in Task 3, landed after this
+    // worktree branched) routes every non-'pr' kind through review.compare,
+    // which used to call git.diff(resolved.baseRef, resolved.headRef) —
+    // git.diff('HEAD', 'Working Tree') is not a valid ref pair and throws.
+    const { handler, git } = harness();
+    git.diffWorkingTree.mockResolvedValue({ files: [{ path: 'src/x.ts' }] } as never);
+
+    const result = await handler('review.compare', { kind: 'worktree' });
+
+    expect(result).toEqual({ files: [{ path: 'src/x.ts' }] });
+    expect(git.diffWorkingTree).toHaveBeenCalledWith('HEAD');
+    expect(git.diff).not.toHaveBeenCalled();
+  });
 });
