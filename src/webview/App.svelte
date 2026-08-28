@@ -2339,20 +2339,6 @@
     }
   }
 
-  /**
-   * Both reasons read the same sentence, deliberately. `runCommitSearch` gets
-   * its hashes from `git.searchCommits`, i.e. from the repository itself, so
-   * the commit exists and the layout is the only thing that can be missing it;
-   * with no filter active the lookup should not have missed at all. Rather than
-   * invent a second wording for a state with no user-facing meaning, this site
-   * keeps today's sentence and still asks the shared helper, so the three
-   * `getRow`-null sites move together if that reasoning ever stops holding.
-   */
-  const SEARCH_MISSING_ROW_MESSAGE: Record<MissingRowReason, string> = {
-    filtered: 'Commit is outside the current branch filter',
-    absent: 'Commit is outside the current branch filter',
-  };
-
   async function revealSearchMatch() {
     // Read the cursor directly rather than through `activeSearchHash`: callers
     // move it in the same tick, and the reactive alias only catches up on flush.
@@ -2365,9 +2351,20 @@
       }) as { row: number | null };
       if (requestedLayoutVersion !== layoutVersion) return;
       if (result.row === null) {
-        searchMessage = SEARCH_MISSING_ROW_MESSAGE[
-          missingRowReason({ branchFilterActive: selectedBranchFilters.length > 0 })
-        ];
+        // NOT yet routed through `missingRowReason`, unlike the other two
+        // `getRow`-null sites, and deliberately so. The spec assumed `absent`
+        // is unreachable here because a search hit comes from the repository;
+        // that assumption is wrong. `searchCommits` resolves a hash-shaped
+        // query with `rev-parse --verify <hash>^{commit}`, which succeeds for
+        // any commit object in the database, reachable or not, while the graph
+        // is built by `loadAllCommits` over `git log --all`, which walks only
+        // what refs reach. Paste the sha of a commit you just amended away,
+        // with no filter on, and the row is missing for the `absent` reason
+        // while the sentence below blames a filter that is not even active.
+        // Calling the helper and printing this regardless would discard its
+        // answer, so the call waits on a decision about the wording — which is
+        // pinned, along with its test, by Part 4's requirement 3.
+        searchMessage = 'Commit is outside the current branch filter';
         return;
       }
       searchMessage = '';
@@ -3782,9 +3779,14 @@
     animation: branch-focus-flash 300ms ease-out;
   }
 
+  /* The flash is the shadows blooming and settling -- a 6px bar easing to 4px,
+     a 2px ring to 1px, a 28px glow to 20px. No `filter` here either: it would
+     multiply the luminance of the row's text for the animation's 300ms, harder
+     than the steady-state `brightness(1.45)` this change removed. The rule
+     against repainting text over a background we tint ourselves has no
+     short-duration exemption. */
   @keyframes branch-focus-flash {
     from {
-      filter: brightness(2) saturate(1.8);
       box-shadow:
         inset 6px 0 0 rgb(var(--lane-rgb)),
         inset 0 0 0 2px rgb(var(--lane-rgb)),
