@@ -12,15 +12,32 @@ Meanwhile the panel duplicates a picker the product already has. The graph shows
 
 And the two surfaces cannot be seen at once: `Git Graph` and `Code Review` are sibling tabs in the same panel area. Comparing a diff against the review that discusses it means switching tabs.
 
-### An independent defect this design removes
+### The duplication runs deeper than the tabs
 
-The panel's repository picker does not work, and it fails in a way that mislabels data.
+Two context-menu items in the graph dispatch identical code:
 
-`handleRepoChange` writes `ui.setState('review.repo', …)` — a key nothing in `src/extension` ever reads. It then reloads branches and commits through `deps.getGitService()`, which serves the host's *active* repository, not the selected one. `review.start` files the result under `deps.getRepoId()`, likewise the active repository.
+```
+case 'reviewWithSelected':   review.setTarget { kind:'range', baseRef, headRef }
+case 'compareWithSelected':  review.setTarget { kind:'range', baseRef, headRef }
+```
+
+Not similar — the same parameters to the same method. `Compare with '<current>'` on the branch menu calls it too. So the review panel is already the graph's **compare surface**: `review.compare` returns the changed files, the panel lists them, clicking a row opens a diff, and no AI is involved. Compare is review without the run.
+
+That has a consequence for what gets deleted. `review.setTarget` and `review.compare` are not review-only machinery, and removing the panel without giving compare a destination would take a working feature with it.
+
+It also settles what `review.setTarget` does: it resolves, stores, focuses the panel and broadcasts. **It never starts a review** — the user presses a button afterwards. Every "review" gesture in the graph today is a navigation.
+
+### Three defects this design removes
+
+**The repository picker does not work**, and it fails in a way that mislabels data. `handleRepoChange` writes `ui.setState('review.repo', …)` — a key nothing in `src/extension` ever reads. It then reloads branches and commits through `deps.getGitService()`, which serves the host's *active* repository, not the selected one. `review.start` files the result under `deps.getRepoId()`, likewise the active repository.
 
 So selecting repository B relabels the panel, shows repository A's branches, commits and pull requests, and stores the review under A. Anyone who has used that dropdown has reviews filed against the wrong repository.
 
 This design deletes the picker: the graph already owns repository selection, and the review view follows it.
+
+**Two settings are declared and never read.** `gitGraphPro.aiReview.defaultProvider` (an enum defaulting to `auto`) and `gitGraphPro.aiReview.defaultModel` appear in `package.json` and no code anywhere reads either. The provider actually in force is persisted in the ui-state key `aiReview.provider`, written only by the panel's dropdown. A user who sets the documented setting sees nothing happen.
+
+This is the same shape as `review.repo` — declared, sometimes written, never read — which makes three such keys in one feature. This design makes the two settings live: `defaultProvider` selects the provider, `auto` means the first available one, `defaultModel` supplies the model, and the ui-state keys go.
 
 ## Design
 
@@ -58,7 +75,26 @@ Four of the five entry points already exist. This design routes existing gesture
 | A branch against another | Branch context menu → `Review '<branch>' vs '<current>'` | new, beside the existing `Compare with '<current>'` |
 | Uncommitted changes | Working-tree row context menu → `Review uncommitted changes` | new |
 
+And two gestures that open the same surface **without** running a review:
+
+| Target | Gesture | Status |
+|---|---|---|
+| A range, diff only | `Compare with selected` | exists — currently identical to `Review with selected` |
+| A branch against another, diff only | `Compare with '<current>'` | exists |
+
+`Review with selected` and `Compare with selected` stop being duplicates: one runs a review, the other does not.
+
 Triggering runs the review immediately. The detail panel switches to the review mode, shows progress while the runner streams, then the result.
+
+**This is a behaviour change, not a retargeting.** Today these gestures navigate: `review.setTarget` fills the panel's fields and the user presses Review. Making the gesture run the review is the point — it is what removes the second step — but it is new behaviour to build, not an existing call rerouted.
+
+### One surface, two states
+
+The review mode has a **diff-only** state: the resolved base and head, the changed-file list, no AI body. It is what the compare gestures open, and it is what a review shows before its run finishes.
+
+This falls out of the finding above rather than being invented for it. Compare is review without the run, so the same component serves both, `review.compare` keeps its caller, and the panel that compare depends on can be deleted safely.
+
+File rows in this state open a diff, as they do today.
 
 ### The target model
 
@@ -115,15 +151,17 @@ The bit travels with the target. The proxy goes away, and file rows are live whe
 - `ReviewApp.svelte` (~994 lines). The review mode becomes a component under `components/detail/`, beside `CommitDetail` and `PullRequestDetail`.
 - `review-main.ts`, the `gitGraphProReview` view container, and the `gitGraphPro.reviews` view.
 - **`createReviewSession` in `extension.ts` — the second webview host.**
-- `review.setTarget` and its focus-and-broadcast machinery. With one panel there is no handoff between panels.
-- The `review.mode` and `review.repo` ui-state keys.
+- `review.setTarget` and its focus-and-broadcast machinery. With one panel there is no handoff between panels — and with the diff-only state, nothing it served is left stranded.
+- The `review.mode` and `review.repo` ui-state keys, and the `aiReview.provider` and `aiReview.model` ones the settings replace.
 - Four tabs, five comboboxes, the provider dropdown, the model input, the Review button, the repository picker.
 
 Removing the second host is worth naming on its own: it deletes the requirement that every message namespace be registered on **both** hosts — a rule that has already produced one defect and one test that could not catch it.
 
 ## What is preserved
 
-- Every `review.*` method on the extension side: `start`, `rerun`, `list`, `get`, `cancel`, `delete`, `open`.
+- The handler's `review.*` methods, all thirteen, each accounted for rather than assumed:
+  - **Kept with callers:** `start`, `rerun`, `list`, `get`, `cancel`, `delete`, `open`, `compare` (the diff-only state), `saveTarget`.
+  - **Removed with what they served:** `setTarget` (the panel handoff), `getRepos` and `getCommits` (the pickers), `getTarget` (the panel's restore).
 - The review store on disk. **Reviews saved by the current version must still load and open.** This is a hard constraint.
 - `review.saveTarget`'s write-behind semantics for whatever still persists a target.
 - The forge-availability gate on restore: a stored `'pr'` target in a repository whose provider is gone must degrade, not error.
@@ -138,15 +176,17 @@ Removing the second host is worth naming on its own: it deletes the requirement 
 - The derived base renders for all three derived cases.
 - Pull request file rows open a diff when both commits are local, driven by `localBothPresent` rather than the kind.
 - An error from one operation does not appear to belong to another.
+- Both compare gestures open the diff-only state and start no review.
+- `gitGraphPro.aiReview.defaultProvider` selects the provider; `auto` picks the first available one.
 
 ## Roadmap
 
 | Phase | Deliverable | Depends on | Ships alone | Acceptance |
 |---|---|---|---|---|
 | **1** | The review mode in the detail panel, plus the `REVIEWS` sidebar section, both fed by the existing `review.*` methods. The old panel still exists and still works. | nothing | Yes | An existing stored review can be selected in `REVIEWS` and read in the detail panel, including its derived base and, for a failed one, its reason |
-| **2** | Entry points: the two new context-menu items, and the three existing ones retargeted to the detail panel | 1 | Yes | Each of the five gestures starts a review that appears in the detail panel; with no provider, each explains what is missing instead of offering a dead control |
+| **2** | Entry points: the two new context-menu items, the three review gestures changed from navigate to run, and the two compare gestures pointed at the diff-only state | 1 | Yes | Each of the five review gestures runs a review that appears in the detail panel; both compare gestures open the diff-only state and run nothing; with no provider, each review gesture explains what is missing instead of offering a dead control |
 | **3** | The `worktree` kind, with the diff-content hash in the review id | 2 | Yes | Review, edit, review again runs a second time; the id differs between the two |
 | **4** | The two silences and the attributed errors: cache-hit disclosure, failure reasons, per-operation error placement, and `localBothPresent` travelling to the webview | 1 | Yes | A cache hit is visibly a cache hit; a pull request file row opens a diff when both commits are local |
-| **5** | Remove the old panel: `ReviewApp.svelte`, `review-main.ts`, the view container, `createReviewSession`, `review.setTarget`, the dead ui-state keys | 2, 4 | Yes | The extension registers one webview host; every `review.*` method still has a caller; the full suite passes with the second host gone |
+| **5** | Remove the old panel: `ReviewApp.svelte`, `review-main.ts`, the view container, `createReviewSession`, `review.setTarget`, the dead ui-state keys | 2, 4 | Yes | The extension registers one webview host; each of the thirteen `review.*` methods is either kept with a caller or removed with what it served; both compare gestures still work; the full suite passes with the second host gone |
 
 Phase 1 ships a second way to read reviews while the old panel still works, so nothing is lost if later phases stall. Phase 5 is the only irreversible step and it runs last, once every gesture it would strand has a replacement.
