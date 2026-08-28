@@ -126,7 +126,7 @@ Nothing is removed in this phase. It adds a second way to read reviews, so if th
 1. A header naming what was reviewed, with the provider, model and when it ran.
 2. **The resolved base and head are shown as text**, each with its short sha and its human name. This is the plan's load-bearing display requirement: the base is derived in three of five cases, and the worst outcome of removing the tabs is a review whose base the user cannot see.
 3. The review body renders inline.
-4. **The changed-file list renders, and its rows open a diff.** This is not decoration carried over from the old panel: `review.compare` feeds it, the compare gestures depend on it, and phase 2 points them here.
+4. **The changed-file list renders.** This is not decoration carried over from the old panel: `review.compare` feeds it, the compare gestures depend on it, and phase 2 points them here. The rows do **not** open a diff in this phase — that needs `localBothPresent` from phase 4, so they render inert rather than as controls that do nothing.
 5. **A diff-only state** — base, head and files, no AI body, no progress. It is what compare opens and what a review shows before its run produces anything, so it is one state rather than two.
 6. A failed review shows its reason here in full.
 7. `Open as file` keeps the existing path to the review as markdown in an editor — a long review still needs search, folding and copy.
@@ -143,7 +143,7 @@ Nothing is removed in this phase. It adds a second way to read reviews, so if th
 | 3 | A failed review shows its reason without opening the file |
 | 4 | `Open as file` still opens the markdown |
 | 5 | Rendering with no review selected produces nothing, not a broken frame |
-| 6 | The changed-file list renders and a row dispatches a diff-open |
+| 6 | The changed-file list renders. **The rows are deliberately inert this phase** — opening a diff needs `localBothPresent`, which phase 4 delivers, and a button that dispatches into no listener is the failure this repo has already shipped once. Assert the rows are not interactive, so the day phase 4 wires them the change is visible |
 | 7 | The diff-only state renders base, head and files with no AI body and no progress affordance |
 
 ## Task 3: Wire the two together
@@ -367,6 +367,7 @@ Nothing is removed in this phase. It adds a second way to read reviews, so if th
 | # | Test obligation |
 |---|---|
 | 1 | A pull request whose commits are local has live file rows |
+| 1b | The review detail panel's file rows become interactive here — phase 1 left them inert deliberately, and this is where that debt is paid |
 | 2 | A pull request whose commits are not local still opens a file's diff, reconstructed |
 | 3 | No code path decides diff provenance from the target's kind |
 
@@ -378,6 +379,7 @@ Nothing is removed in this phase. It adds a second way to read reviews, so if th
 | Errors attributed to their operation | 1 |
 | Failure reasons visible | 1 |
 | `localBothPresent` travels; proxy removed | 2 |
+| Review detail file rows become interactive | 2 |
 
 ---
 
