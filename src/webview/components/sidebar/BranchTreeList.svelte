@@ -207,7 +207,7 @@
   .branch-group {
     min-height: 30px;
     padding: 6px 12px 6px calc(var(--sidebar-gutter, 12px) + var(--tree-indent));
-    color: var(--vscode-descriptionForeground, #767676);
+    color: var(--vscode-foreground, #cccccc);
     cursor: pointer;
   }
 
@@ -253,7 +253,7 @@
     width: 16px;
     height: 16px;
     flex-shrink: 0;
-    color: var(--vscode-descriptionForeground, #767676);
+    color: var(--vscode-foreground, #cccccc);
   }
 
   .group-name {
