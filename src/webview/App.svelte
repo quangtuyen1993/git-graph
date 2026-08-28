@@ -3675,10 +3675,11 @@
     --lane-alpha: 0.22;
   }
 
-  /* Selected rows keep the lane tint but add the theme's selection foreground
-     and a lane-coloured accent bar so selection stays obvious. */
+  /* Selected rows keep the lane tint and add a lane-coloured accent bar so
+     selection stays obvious. The text colour is left to the theme: this rule
+     tints the row's own background, so overriding the foreground on top of it
+     is what breaks contrast in light themes. */
   .commit-row.selected {
-    color: var(--vscode-list-activeSelectionForeground, #ffffff);
     box-shadow: inset 2px 0 0 0 rgb(var(--lane-rgb));
   }
 
@@ -3696,11 +3697,13 @@
     background: var(--vscode-editor-findMatchBackground, rgba(234, 92, 0, 0.56));
   }
 
+  /* Emphasis here comes from the box-shadows only -- an inset accent bar and a
+     ring plus glow at the row's edge, none of which touch a glyph. No `color`
+     and no `filter`: both would repaint the text over a background this rule
+     tints itself, which is unreadable in light themes. */
   .commit-row.branch-focused {
-    --lane-alpha: 0.72;
+    --lane-alpha: 0.35;
     z-index: 3;
-    color: #ffffff;
-    filter: brightness(1.45) saturate(1.35);
     box-shadow:
       inset 4px 0 0 rgb(var(--lane-rgb)),
       inset 0 0 0 1px rgba(var(--lane-rgb), 0.95),
