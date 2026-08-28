@@ -48,7 +48,12 @@ function graphSource(
 
 const STAT: ShortStat = { filesChanged: 2, additions: 9, deletions: 3 };
 
-/** Answers every requested hash except the ones named — merges print no stat line. */
+/**
+ * Answers every requested hash except the ones named. A named hash stands for
+ * one git never listed at all — an unresolvable or garbage-collected revision.
+ * A merge is *not* such a hash: git lists it and prints no stat line, which
+ * `parseShortStats` reports as `{0, 0, 0}`.
+ */
 function statsExcept(...silent: string[]) {
   return async (hashes: string[]) => new Map(
     hashes.filter((hash) => !silent.includes(hash)).map((hash) => [hash, STAT] as const),
@@ -161,7 +166,7 @@ describe('GraphMethodHandler', () => {
 describe('GraphMethodHandler stats cache', () => {
   const A = commit('a').hash;
   const B = commit('b').hash;
-  const MERGE = commit('m').hash;
+  const UNLISTED = commit('gone').hash;
 
   async function built(source: ReturnType<typeof graphSource>) {
     const handler = new GraphMethodHandler(new GraphService(), () => source);
@@ -210,17 +215,19 @@ describe('GraphMethodHandler stats cache', () => {
     expect(source.shortStatsFor.mock.calls[1][0]).toEqual([B]);
   });
 
-  it('caches a merge negatively so it is never requested twice', async () => {
-    // `log --no-walk --shortstat` prints no stat line for a merge, so the hash
-    // is absent from the map. Caching only what git answered for would re-ask
-    // for every merge on screen, forever.
-    const source = graphSource('/repo', async () => [commit('a')], statsExcept(MERGE));
+  it('caches a hash git never lists negatively so it is never requested twice', async () => {
+    // A revision git cannot resolve is absent from the map, not zeroed — that
+    // is the state the dim rule's error contract rests on. Caching only what
+    // git answered for would re-ask for such a hash on every window, forever.
+    // (A merge is not this case: git lists it, so it comes back as {0,0,0} and
+    // the webview excludes it by parent count instead.)
+    const source = graphSource('/repo', async () => [commit('a')], statsExcept(UNLISTED));
     const { handler } = await built(source);
 
-    expect(await handler.handle('graph.getStats', { hashes: [MERGE] })).toEqual({ [MERGE]: null });
+    expect(await handler.handle('graph.getStats', { hashes: [UNLISTED] })).toEqual({ [UNLISTED]: null });
     expect(source.shortStatsFor).toHaveBeenCalledTimes(1);
 
-    expect(await handler.handle('graph.getStats', { hashes: [MERGE] })).toEqual({ [MERGE]: null });
+    expect(await handler.handle('graph.getStats', { hashes: [UNLISTED] })).toEqual({ [UNLISTED]: null });
     expect(source.shortStatsFor).toHaveBeenCalledTimes(1);
   });
 

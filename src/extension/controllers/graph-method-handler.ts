@@ -106,6 +106,19 @@ export class GraphMethodHandler {
   /**
    * Shortstats for the given hashes, hash-addressed and cached.
    *
+   * A value is a `ShortStat` or `null`, and the two mean different things:
+   *
+   * - **`ShortStat`** — git answered. `filesChanged: 0` is a real answer: git
+   *   listed the commit and reported nothing changed, which is an empty commit
+   *   or a merge (`--no-walk` prints no stat line for a merge whether or not it
+   *   touched anything). A caller that must not treat a merge as empty excludes
+   *   it by its parent count, never by these numbers.
+   * - **`null`** — no answer. Either git never listed the hash (unresolvable or
+   *   garbage-collected) or the call failed. Callers render it as "unknown" and
+   *   must not read it as "nothing changed" — a failed request returns `null`
+   *   for every hash it covered, so treating `null` as empty would repaint the
+   *   whole screen on one transient git failure.
+   *
    * Failure is silent by contract: stats are decoration and the graph is the
    * feature, so a rejected git call returns `null` for the hashes it covered
    * rather than surfacing an error. Those hashes are deliberately left out of
@@ -117,8 +130,8 @@ export class GraphMethodHandler {
    *
    * - Hashes must be full and lowercase — the layout's `%H`, which is what the
    *   webview sends back. An abbreviation git resolves fine still comes back
-   *   under a key nobody asked for, so it caches as `null` and reads as a merge
-   *   for the rest of the session.
+   *   under a key nobody asked for, so it caches as `null` — "git gave no
+   *   answer" — for the rest of the session, for a commit git answered in full.
    * - A call should cover a window's worth of hashes (tens), not a whole
    *   repository: they all go onto one `git log` argv, which stops being
    *   spawnable somewhere near 780 hashes on Windows.
@@ -138,8 +151,8 @@ export class GraphMethodHandler {
         // to a repository the cache no longer represents.
         if (this.statsCacheGitService === gitService && this.statsCacheRepoPath === repoPath) {
           // Cache every hash that was asked for, not every hash git answered
-          // for: a merge has no stat line, and only a negative entry stops it
-          // being re-requested for the rest of the session.
+          // for: only a negative entry stops a hash git never lists being
+          // re-requested for the rest of the session.
           for (const hash of missing) {
             this.statsCache.set(hash, fetched.get(hash) ?? null);
           }

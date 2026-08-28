@@ -31,12 +31,29 @@ function quoteEditorArgument(value: string): string {
  *
  * The stat line that follows a commit reads
  * " 3 files changed, 10 insertions(+), 5 deletions(-)", with either the
- * insertions or the deletions clause omitted when it is zero. A hash with no
- * stat line under it (a merge) is left out of the map entirely.
+ * insertions or the deletions clause omitted when it is zero.
+ *
+ * The output distinguishes three states, and so does this map:
+ *
+ * - **Hash line, then a stat line** — a real change; the parsed numbers.
+ * - **Hash line, no stat line** — git listed the commit and had nothing to
+ *   report: an empty commit, or a merge. Mapped to `{0, 0, 0}`, because "git
+ *   says nothing changed" is an answer. Callers that must not treat a merge as
+ *   empty exclude it by its parent count, which is the only correct test — git
+ *   prints no stat line for a merge whether or not it touched anything.
+ * - **Hash never listed** — git did not answer for it at all (an unresolvable
+ *   or garbage-collected revision). Absent from the map, so a caller can tell
+ *   "no answer" apart from "nothing changed".
+ *
+ * Zeroing the middle state used to be conflated with the third, which made a
+ * genuinely empty commit indistinguishable from one git never answered for.
  */
 function parseShortStats(output: string): Map<string, ShortStat> {
   const stats = new Map<string, ShortStat>();
-  let currentHash = '';
+  // The hash whose stat line has not been seen yet. Still keyed off `%H`, never
+  // off the revision's position in argv.
+  let pendingHash = '';
+  const nothingChanged = (): ShortStat => ({ filesChanged: 0, additions: 0, deletions: 0 });
 
   for (const line of output.split('\n')) {
     const trimmed = line.trim();
@@ -44,24 +61,30 @@ function parseShortStats(output: string): Map<string, ShortStat> {
 
     // Hash line: full object name, 40 hex (SHA-1) or 64 hex (SHA-256)
     if (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(trimmed)) {
-      currentHash = trimmed;
+      // The previous commit was listed and no stat line ever followed it, so
+      // git reported nothing changed for it.
+      if (pendingHash) stats.set(pendingHash, nothingChanged());
+      pendingHash = trimmed;
       continue;
     }
 
     // Shortstat line: " 3 files changed, 10 insertions(+), 5 deletions(-)"
-    if (currentHash && trimmed.includes('changed')) {
+    if (pendingHash && trimmed.includes('changed')) {
       const filesMatch = trimmed.match(/(\d+) file/);
       const addMatch = trimmed.match(/(\d+) insertion/);
       const delMatch = trimmed.match(/(\d+) deletion/);
 
-      stats.set(currentHash, {
+      stats.set(pendingHash, {
         filesChanged: filesMatch ? parseInt(filesMatch[1], 10) : 0,
         additions: addMatch ? parseInt(addMatch[1], 10) : 0,
         deletions: delMatch ? parseInt(delMatch[1], 10) : 0,
       });
-      currentHash = '';
+      pendingHash = '';
     }
   }
+
+  // The last commit listed, if no stat line followed it.
+  if (pendingHash) stats.set(pendingHash, nothingChanged());
 
   return stats;
 }
@@ -548,17 +571,22 @@ export class GitService {
    * commits asked about — unlike a walk, it cannot drift with `--all` or the
    * branch filter. `--no-walk` stops git following parents from each one.
    *
-   * A merge commit prints no stat line under `--no-walk`; such a hash is
-   * absent from the map rather than present with zeroes, so callers can tell
-   * "nothing to report" apart from "genuinely changed nothing".
+   * Three states, and the map distinguishes all three (see `parseShortStats`):
+   * a hash git listed with a stat line carries its numbers; a hash git listed
+   * without one — an empty commit, or a merge, for which `--no-walk` prints no
+   * stat line either way — maps to `{0, 0, 0}`; a hash git never listed is
+   * absent, so "git did not answer" stays distinguishable from "git says
+   * nothing changed". Callers that must not treat a merge as empty exclude it
+   * by its parent count, the only test that is correct for a merge.
    *
    * Preconditions the caller owns:
    *
    * - **Full, lowercase hashes.** The map is keyed by the `%H` git prints back,
    *   which is always the full lowercase object name. Git resolves an
    *   abbreviated or uppercase revision happily, but the answer then comes back
-   *   under a key the caller did not ask for, so its lookup misses and the
-   *   commit looks like a merge. Callers that cache a miss make that permanent.
+   *   under a key the caller did not ask for, so its lookup misses and a commit
+   *   git answered for in full reads as one git never listed. Callers that
+   *   cache a miss make that permanent.
    * - **Bounded batches.** Every hash goes onto one `git log` argv at ~41 bytes
    *   each, so Windows' 32767-character command line is reached near 780
    *   hashes. Request a window's worth (tens), not a whole repository; this
