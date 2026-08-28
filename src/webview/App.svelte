@@ -1814,6 +1814,32 @@
       });
   }
 
+  /**
+   * Whether a row should be faded as a commit that changed no files.
+   *
+   * Guarded by the parent count, not by the numbers: git prints no stat line
+   * for a merge, so a merge's stats say nothing about whether it touched
+   * anything, and `parents.length > 1` excludes it regardless of what came
+   * back. A root commit has no parents and is an ordinary commit here.
+   *
+   * `filesChanged === null` never dims — unknown is not empty — and whatever
+   * the user is currently looking at is never dimmed, whatever its stats.
+   *
+   * The state flags are parameters rather than reads of the component's own
+   * variables so the template's `class:` binding lists them as dependencies:
+   * Svelte 4 recomputes the expression only when a variable it can see in the
+   * markup changes.
+   */
+  function isEmptyCommitRow(
+    node: GraphNode,
+    rowSelected: boolean,
+    rowSearchMatch: boolean,
+    rowBranchFocused: boolean,
+  ): boolean {
+    if (node.filesChanged !== 0 || node.parents.length > 1) return false;
+    return !rowSelected && !rowSearchMatch && !rowBranchFocused;
+  }
+
   async function refreshGraph() {
     const refreshToken = graphRefreshGate.issue();
     const branchFilters = selectedBranchFilters;
@@ -3346,6 +3372,12 @@
                 class:search-match={searchMatchSet.has(node.hash)}
                 class:search-match-active={activeSearchHash === node.hash}
                 class:compare-selected={selectedForCompare === node.hash}
+                class:dimmed={isEmptyCommitRow(
+                  node,
+                  selectedHash === node.hash || selectedHashes.has(node.hash),
+                  searchMatchSet.has(node.hash),
+                  focusedBranchHash === node.hash,
+                )}
                 data-files-changed={node.filesChanged}
                 data-additions={node.additions}
                 data-deletions={node.deletions}
@@ -3917,6 +3949,26 @@
     .commit-row.branch-focused {
       animation: none;
     }
+  }
+
+  /* A commit that changed no files fades, so the eye skips it. `opacity`, not
+     a `color` override: selection, find-match and branch-focus all tint the
+     row's own background, and repainting the foreground on top of that is what
+     breaks contrast in light themes -- the same rule those three follow.
+
+     `.col-graph` is deliberately absent. The lane and its edges stay at full
+     strength so the reader can follow topology straight through an empty
+     commit.
+
+     0.55 is a chosen number, not a measured one: jsdom performs no layout and
+     computes no colours, so no test can tell whether a faded row stays legible
+     against a given theme's row background. Verified by eye in a light and a
+     dark theme instead. */
+  .commit-row.dimmed .col-message,
+  .commit-row.dimmed .col-date,
+  .commit-row.dimmed .col-sha,
+  .commit-row.dimmed .col-author {
+    opacity: 0.55;
   }
 
   .commit-row .col-graph {
