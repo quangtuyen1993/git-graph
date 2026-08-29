@@ -370,28 +370,48 @@
   let graphWindow: GraphWindow | null = null;
 
   /**
-   * Count of `refreshGraph()` calls currently in flight. The graph builds
-   * progressively and `layoutVersion` only ever moves from null to a real
-   * value on a successful build, so on its own it cannot distinguish "no
-   * build has completed yet because one is running" from "no build has
-   * completed and none is running" (e.g. before the very first call, or
-   * after every attempt so far has failed). This counter is what makes that
-   * distinction — see `isGraphReady`/`waitForGraphReady` below.
+   * Count of long host calls currently in flight — every `refreshGraph()`
+   * plus every mutation or fetch run through `trackBackgroundWork`. It grew
+   * out of counting graph builds alone: the graph builds progressively and
+   * `layoutVersion` only ever moves from null to a real value on a successful
+   * build, so on its own it cannot distinguish "no build has completed yet
+   * because one is running" from "no build has completed and none is running"
+   * (e.g. before the very first call, or after every attempt so far has
+   * failed). This counter is what makes that distinction — see
+   * `isGraphReady`/`waitForGraphReady` below — and it is deliberately the
+   * SAME counter that drives the ambient progress bar, so "is the tool
+   * working?" has exactly one answer rather than one per feature.
    */
-  let graphRefreshesInFlight = 0;
-  /** Re-registering waiters for the next `graphRefreshesInFlight` transition to 0. */
-  let graphBuildSettleWaiters: Array<() => void> = [];
+  let backgroundWorkInFlight = 0;
+  /** Re-registering waiters for the next `backgroundWorkInFlight` transition to 0. */
+  let backgroundWorkSettleWaiters: Array<() => void> = [];
 
-  function notifyGraphBuildSettled(): void {
-    if (graphRefreshesInFlight > 0) return;
-    const waiters = graphBuildSettleWaiters;
-    graphBuildSettleWaiters = [];
+  function notifyBackgroundWorkSettled(): void {
+    if (backgroundWorkInFlight > 0) return;
+    const waiters = backgroundWorkSettleWaiters;
+    backgroundWorkSettleWaiters = [];
     waiters.forEach((resolve) => resolve());
+  }
+
+  /**
+   * Runs a long host call inside the counter above, so the progress bar covers
+   * it. Anything awaited in here counts as work in flight, which means a
+   * caller that is itself waiting for `isGraphReady()` must not nest inside
+   * it — that would be a wait on a counter the wait itself is holding up.
+   */
+  async function trackBackgroundWork<T>(operation: () => Promise<T>): Promise<T> {
+    backgroundWorkInFlight += 1;
+    try {
+      return await operation();
+    } finally {
+      backgroundWorkInFlight -= 1;
+      notifyBackgroundWorkSettled();
+    }
   }
 
   /** True only once a build has actually completed and nothing else is running. */
   function isGraphReady(): boolean {
-    return layoutVersion !== null && graphRefreshesInFlight === 0;
+    return layoutVersion !== null && backgroundWorkInFlight === 0;
   }
 
   /**
@@ -406,7 +426,7 @@
    * Resolves the next time the graph reaches a settled, ready state, or after
    * `GRAPH_READY_WAIT_TIMEOUT_MS`, whichever comes first. Re-checks on every
    * settle event rather than the first one: a build that fails (leaving
-   * `layoutVersion` null) still counts as "settled" for `graphRefreshesInFlight`,
+   * `layoutVersion` null) still counts as "settled" for `backgroundWorkInFlight`,
    * so this must keep waiting for the next attempt rather than resolving early
    * on a settle that did not actually finish loading anything.
    */
@@ -424,9 +444,9 @@
       function check(): void {
         if (settled) return;
         if (isGraphReady()) { finish(); return; }
-        graphBuildSettleWaiters.push(check);
+        backgroundWorkSettleWaiters.push(check);
       }
-      graphBuildSettleWaiters.push(check);
+      backgroundWorkSettleWaiters.push(check);
     });
   }
 
@@ -575,8 +595,23 @@
   $: branchPullRequests = deriveBranchPullRequests(pullRequests);
 
   let selectedPullRequestId: string | null = null;
-  /** True while `scrollToPullRequestHead` is waiting on `waitForGraphReady`. */
+  /**
+   * True while `scrollToPullRequestHead` is waiting on `waitForGraphReady`.
+   *
+   * This is a wait, not work, so it cannot live in `backgroundWorkInFlight`:
+   * that counter is what `waitForGraphReady` waits to reach zero, and a
+   * waiter that increments it would be waiting on itself. It contributes to
+   * the one visible busy state below instead, which is what keeps a jump that
+   * waits for a build and then fetches showing a single uninterrupted bar.
+   */
   let pullRequestScrollPending = false;
+  /**
+   * The single "is the tool working?" flag behind the ambient bar under the
+   * toolbar. Unlabelled on purpose: `mutationProgress` is the banner that says
+   * WHAT is happening, and this one only says THAT something is.
+   */
+  $: backgroundWorkVisible = backgroundWorkInFlight > 0 || pullRequestScrollPending;
+
   let pullRequestDetail: PullRequestDetailData | null = null;
   let pullRequestComments: ForgeComment[] = [];
   /**
@@ -746,18 +781,31 @@
 
   /**
    * Scrolls to a pull request's head commit through the same `graph.getRow`
-   * lookup commit search uses. A miss has two very different causes: the
-   * branch genuinely isn't fetched locally, or the graph — which builds
-   * progressively — simply hasn't got there yet. Only the first is true
-   * often enough to say out loud; the second is a lookup that should retry
-   * once the build settles, via `isGraphReady`/`waitForGraphReady`, rather
-   * than an explanation that might be wrong. Only once a build has actually
-   * completed and the commit is still missing does the not-fetched message
-   * — now paired with a Fetch action — earn its place, the same way
-   * `revealSearchMatch` explains a search match the branch filter excludes
-   * rather than moving nothing and leaving the user to guess why.
+   * lookup commit search uses. A miss has three causes, and only one of them
+   * is worth a sentence:
+   *
+   * - the graph — which builds progressively — simply hasn't got there yet.
+   *   That is a lookup to retry once the build settles, via
+   *   `isGraphReady`/`waitForGraphReady`, not an explanation that might be wrong;
+   * - the branch filter is hiding a commit that is already local. Fetching
+   *   would download nothing that helps, so this one keeps its message and its
+   *   **Clear filter** action, the same way `revealSearchMatch` explains a
+   *   search match the filter excludes rather than moving nothing;
+   * - the branch genuinely isn't fetched. This used to be a sentence and a
+   *   Fetch button, which the user summed up as "it reports that and then it
+   *   fetches it anyway". It is now simply fetched — `fetchAndScrollToPullRequestHead`
+   *   below — with the ambient bar standing in for the explanation. Only a
+   *   fetch that lands without producing the commit gets a message, because by
+   *   then there is nothing left to try.
+   *
+   * `alreadyFetched` is what makes that last step terminate: the retry after a
+   * fetch may not fetch again.
    */
-  async function scrollToPullRequestHead(pullRequestId: string, hash: string): Promise<void> {
+  async function scrollToPullRequestHead(
+    pullRequestId: string,
+    hash: string,
+    { alreadyFetched = false }: { alreadyFetched?: boolean } = {},
+  ): Promise<void> {
     if (!scrollContainer) return;
 
     if (!isGraphReady()) {
@@ -780,32 +828,45 @@
       return;
     }
 
+    let row: number | null;
     try {
-      const result = await bridge.send('graph.getRow', {
+      // Tracked so the bar covers the round trip too: between a build settling
+      // and the fetch below starting, this is the only work in flight, and a
+      // bar that blinked off in the gap would read as "finished".
+      const result = await trackBackgroundWork(() => bridge.send('graph.getRow', {
         hash, layoutVersion: requestedLayoutVersion,
-      }) as { row: number | null };
+      }) as Promise<{ row: number | null }>);
       if (requestedLayoutVersion !== layoutVersion || selectedPullRequestId !== pullRequestId) return;
-      if (result.row === null) {
-        // The two causes want opposite remedies, and offering the wrong one is
-        // worse than offering none: a Fetch under an active filter downloads
-        // nothing that helps, because the commit is already local.
-        if (missingRowReason({ branchFilterActive: selectedBranchFilters.length > 0 }) === 'filtered') {
-          showTransientMessage(
-            "This pull request's head commit is outside the current branch filter.",
-            { label: 'Clear filter', run: () => { void clearFilterAndScrollToPullRequestHead(pullRequestId, hash); } },
-          );
-          return;
-        }
-        showTransientMessage(
-          "This pull request's head commit isn't in the loaded graph — the branch may not be fetched locally.",
-          { label: 'Fetch', run: () => { void fetchAndScrollToPullRequestHead(pullRequestId, hash); } },
-        );
-        return;
-      }
-      await scrollToGraphRow(result.row);
+      row = result.row;
     } catch {
       // The layout moved on mid-lookup; the next selection starts clean.
+      return;
     }
+
+    if (row !== null) {
+      await scrollToGraphRow(row);
+      return;
+    }
+
+    // Everything below runs OUTSIDE `trackBackgroundWork`: the fetch retries
+    // through this same function, which waits for `isGraphReady()`, and a wait
+    // nested inside the counter it waits on would deadlock until the timeout.
+    if (missingRowReason({ branchFilterActive: selectedBranchFilters.length > 0 }) === 'filtered') {
+      showTransientMessage(
+        "This pull request's head commit is outside the current branch filter.",
+        { label: 'Clear filter', run: () => { void clearFilterAndScrollToPullRequestHead(pullRequestId, hash); } },
+      );
+      return;
+    }
+
+    if (alreadyFetched) {
+      showTransientMessage(
+        "Fetched from origin, but this pull request's head commit still isn't in the graph.",
+      );
+      return;
+    }
+
+    await fetchAndScrollToPullRequestHead(pullRequestId, hash);
   }
 
   /**
@@ -833,9 +894,14 @@
   }
 
   /**
-   * The action offered alongside the not-fetched notice. Fetches `origin` —
-   * the same remote the branch context menu's own Fetch action uses — then
-   * retries the lookup once the resulting rebuild lands.
+   * Fetches `origin` — the same remote the branch context menu's own Fetch
+   * action uses — then retries the lookup once the resulting rebuild lands.
+   * No longer offered as a button: a head commit missing from a completed,
+   * unfiltered build is a situation the tool can just resolve, and the
+   * ambient bar is what tells the user it is resolving it.
+   *
+   * A failure still speaks. The user clicked expecting to land somewhere, so
+   * silence would be worse than the message this replaces.
    */
   async function fetchAndScrollToPullRequestHead(pullRequestId: string, hash: string): Promise<void> {
     try {
@@ -845,8 +911,10 @@
       showTransientMessage(messageOf(e));
       return;
     }
+    // The user moved on to another pull request while the fetch ran; landing
+    // on the first one's commit now is not what anybody asked for.
     if (selectedPullRequestId !== pullRequestId) return;
-    await scrollToPullRequestHead(pullRequestId, hash);
+    await scrollToPullRequestHead(pullRequestId, hash, { alreadyFetched: true });
   }
 
   async function handlePullRequestSelect(event: CustomEvent<{ id: string }>): Promise<void> {
@@ -1870,7 +1938,7 @@
     const branchFilters = selectedBranchFilters;
     graphWindowRequestGate.issue();
     loading = false;
-    graphRefreshesInFlight += 1;
+    backgroundWorkInFlight += 1;
 
     try {
       const [nextBranches, nextTags, nextStashes, nextWorktrees, nextSubmodules, nextReviews, workingTreeStatus, build] = await Promise.all([
@@ -1955,8 +2023,8 @@
       }
       throw refreshError;
     } finally {
-      graphRefreshesInFlight -= 1;
-      notifyGraphBuildSettled();
+      backgroundWorkInFlight -= 1;
+      notifyBackgroundWorkSettled();
     }
   }
 
@@ -2344,16 +2412,23 @@
     contextMenuVisible = true;
   }
 
+  /**
+   * A host mutation plus the refresh it invalidates, as one unit of work: the
+   * ambient bar covers both, so it does not blink off in the gap between the
+   * mutation landing and the rebuild starting.
+   */
   async function runDirectMutation(label: string, operation: () => Promise<void>) {
-    await mutationGate.run(label, async () => {
-      mutationProgress = label;
-      try {
-        await operation();
-      } finally {
-        mutationProgress = null;
-      }
+    await trackBackgroundWork(async () => {
+      await mutationGate.run(label, async () => {
+        mutationProgress = label;
+        try {
+          await operation();
+        } finally {
+          mutationProgress = null;
+        }
+      });
+      await refreshGraph();
     });
-    await refreshGraph();
   }
 
   async function handleBranchCheckout(event: CustomEvent<{ name: string }>) {
@@ -3134,18 +3209,6 @@
       <span>{mutationProgress}</span>
     </div>
   {/if}
-  {#if pullRequestScrollPending}
-    <!-- A `graph.getRow` miss while the graph is still building is not a
-         failure — it just hasn't got there yet. This says so and retries,
-         rather than the not-fetched banner below, which is only true once a
-         completed build still lacks the commit. -->
-    <div class="mutation-progress" aria-live="polite">
-      <span class="mutation-spinner" aria-hidden="true">
-        <LoadingSpinner label="Waiting for the graph to finish loading…" />
-      </span>
-      <span>Waiting for the graph to finish loading…</span>
-    </div>
-  {/if}
   <header class="toolbar">
     <button
       class="toolbar-icon-btn"
@@ -3231,6 +3294,19 @@
       on:click={closeRightPanel}
     ><Icon name="layout-sidebar-right" /></button>
   </header>
+
+  <!--
+    The ambient "something is happening" bar. Always rendered and always zero
+    height: the bar itself is drawn out of flow over the toolbar's bottom
+    border, so it can come and go without moving a single row below it.
+    Unlabelled by design — `mutation-progress` above is the banner that names
+    an operation; this one only answers "is it working?".
+  -->
+  <div class="background-progress">
+    {#if backgroundWorkVisible}
+      <div class="background-progress-bar" role="progressbar" aria-label="Working"></div>
+    {/if}
+  </div>
 
   {#if error}
     <div class="error-banner">
@@ -3556,6 +3632,55 @@
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+
+  /*
+   * Zero-height track: it holds no space of its own, and the bar inside it is
+   * out of flow, so showing or hiding the bar can never shift the layout.
+   */
+  .background-progress {
+    position: relative;
+    height: 0;
+    flex-shrink: 0;
+  }
+
+  /* Sits on the toolbar's bottom border rather than below it. */
+  .background-progress-bar {
+    position: absolute;
+    top: -2px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .background-progress-bar::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 30%;
+    background: var(--vscode-progressBar-background, #0e70c0);
+    animation: background-progress-sweep 1.4s ease-in-out infinite;
+  }
+
+  @keyframes background-progress-sweep {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(430%); }
+  }
+
+  /*
+   * A moving sliver is precisely what this rule exists for. The bar still has
+   * to say "working", so reduced motion gets the whole width, held still,
+   * rather than nothing at all.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    .background-progress-bar::after {
+      width: 100%;
+      animation: none;
+    }
   }
 
   .mutation-spinner {

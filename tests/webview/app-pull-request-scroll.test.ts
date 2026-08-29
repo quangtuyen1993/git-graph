@@ -106,8 +106,13 @@ function bannerText(container: HTMLElement): string {
   return container.querySelector('.error-banner')?.textContent?.trim() ?? '';
 }
 
-function pendingText(container: HTMLElement): string {
-  return container.querySelector('.mutation-progress')?.textContent?.trim() ?? '';
+/**
+ * The ambient "work is in flight" bar under the toolbar — the one visible
+ * state every wait in this file resolves to, whether the wait is a graph
+ * build or the fetch a missing head commit now triggers on its own.
+ */
+function busyBar(container: HTMLElement): HTMLElement | null {
+  return container.querySelector('.background-progress-bar');
 }
 
 async function openPullRequestsSection(rendered: ReturnType<typeof render>): Promise<void> {
@@ -159,9 +164,10 @@ describe('Pull request head-commit scroll: graph still building', () => {
     await openPullRequestsSection(rendered);
     await clickPullRequest(rendered, 'Add widgets');
 
-    await waitFor(() => expect(pendingText(rendered.container)).not.toBe(''));
+    await waitFor(() => expect(busyBar(rendered.container)).not.toBeNull());
     expect(bannerText(rendered.container)).toBe('');
-    expect(pendingText(rendered.container).toLowerCase()).not.toContain('not fetched');
+    // Ambient, not labelled: it says "working", never what the work is.
+    expect(busyBar(rendered.container)!.textContent).toBe('');
 
     graphBuild.resolve({ totalRows: 500, maxLane: 0, layoutVersion: 1 });
   });
@@ -173,7 +179,7 @@ describe('Pull request head-commit scroll: graph still building', () => {
     const rendered = render(App);
     await openPullRequestsSection(rendered);
     await clickPullRequest(rendered, 'Add widgets');
-    await waitFor(() => expect(pendingText(rendered.container)).not.toBe(''));
+    await waitFor(() => expect(busyBar(rendered.container)).not.toBeNull());
 
     graphBuild.resolve({ totalRows: 500, maxLane: 0, layoutVersion: 1 });
 
@@ -193,7 +199,7 @@ describe('Pull request head-commit scroll: graph still building', () => {
     const rendered = render(App);
     await openPullRequestsSection(rendered);
     await clickPullRequest(rendered, 'Add widgets');
-    await waitFor(() => expect(pendingText(rendered.container)).not.toBe(''));
+    await waitFor(() => expect(busyBar(rendered.container)).not.toBeNull());
 
     // Switch to a different pull request while the first lookup is still
     // waiting for the build.
@@ -224,7 +230,7 @@ describe('Pull request head-commit scroll: graph still building', () => {
     const rendered = render(App);
     await openPullRequestsSection(rendered);
     await clickPullRequest(rendered, 'Add widgets');
-    await waitFor(() => expect(pendingText(rendered.container)).not.toBe(''));
+    await waitFor(() => expect(busyBar(rendered.container)).not.toBeNull());
 
     graphBuild.resolve({ totalRows: 500, maxLane: 0, layoutVersion: 1 });
     await waitFor(() => expect(send).toHaveBeenCalledWith('graph.getRow', {
@@ -248,73 +254,162 @@ describe('Pull request head-commit scroll: graph still building', () => {
     ).toBe(0);
   });
 
+  it('shows the bar while a jump waits even though no build is running', async () => {
+    // Every build so far has failed, so nothing is in flight and the graph
+    // will never be ready on its own — but the jump IS waiting, and the bar
+    // is the one thing telling the user so.
+    const { graphBuild } = stubApp({ getRow: () => ({ row: null }) });
+    graphBuild.reject(new Error('git log failed'));
+    const rendered = render(App);
+    await openPullRequestsSection(rendered);
+    await waitFor(() => expect(bannerText(rendered.container)).toContain('git log failed'));
+    expect(busyBar(rendered.container)).toBeNull();
+
+    await clickPullRequest(rendered, 'Add widgets');
+
+    await waitFor(() => expect(busyBar(rendered.container)).not.toBeNull());
+    expect(send).not.toHaveBeenCalledWith('git.fetch', expect.anything());
+  });
+
   it('shows a definite "not finished loading" state instead of spinning forever when the build never completes', async () => {
     vi.useFakeTimers();
     stubApp({ getRow: () => ({ row: null }) });
     const rendered = render(App);
     await openPullRequestsSection(rendered);
     await clickPullRequest(rendered, 'Add widgets');
-    await vi.waitFor(() => expect(pendingText(rendered.container)).not.toBe(''));
+    await vi.waitFor(() => expect(busyBar(rendered.container)).not.toBeNull());
 
     // The build never resolves. Advance just past the wait bound — but
     // short of the banner's own auto-clear window, so this checks the
     // message actually landed rather than merely that it eventually clears.
     await vi.advanceTimersByTimeAsync(20_500);
 
-    expect(pendingText(rendered.container)).toBe('');
+    // The bar legitimately stays up — the build really is still running; what
+    // has to change is that the jump stops waiting and says something definite.
     expect(bannerText(rendered.container)).not.toBe('');
     expect(bannerText(rendered.container).toLowerCase()).not.toContain('branch may not be fetched');
   });
 });
 
-describe('Pull request head-commit scroll: build already completed', () => {
-  it('shows the not-fetched message, with a Fetch action, when a completed build genuinely lacks the commit', async () => {
-    stubApp({
-      graphBuild: (() => {
-        const d = deferred<{ totalRows: number; maxLane: number; layoutVersion: number }>();
-        d.resolve({ totalRows: 500, maxLane: 0, layoutVersion: 1 });
-        return d;
-      })(),
-      getRow: () => ({ row: null }),
-    });
-    const rendered = render(App);
-    await openPullRequestsSection(rendered);
-    await clickPullRequest(rendered, 'Add widgets');
-
-    await waitFor(() => expect(bannerText(rendered.container)).toContain(
-      "isn't in the loaded graph",
-    ));
-    expect(rendered.getByRole('button', { name: /fetch/i })).toBeInTheDocument();
-  });
-
-  it('fetches and retries the scroll when the Fetch action is used', async () => {
+describe('Pull request head-commit scroll: the commit is genuinely absent', () => {
+  it('fetches on its own, with no button to press, and scrolls when the fetch lands', async () => {
     let fetchCalled = false;
     stubApp({
-      graphBuild: (() => {
-        const d = deferred<{ totalRows: number; maxLane: number; layoutVersion: number }>();
-        d.resolve({ totalRows: 500, maxLane: 0, layoutVersion: 1 });
-        return d;
-      })(),
-      getRow: ({ layoutVersion }) => {
-        if (layoutVersion === 1) return { row: null };
-        return { row: 42 };
-      },
-      overrides: {
-        'git.fetch': () => { fetchCalled = true; return undefined; },
-      },
+      graphBuild: resolvedBuild(),
+      // The commit only appears once the fetch has run and the graph rebuilt.
+      getRow: ({ layoutVersion }) => ({ row: layoutVersion === 1 ? null : 42 }),
+      overrides: { 'git.fetch': () => { fetchCalled = true; return undefined; } },
     });
     const rendered = render(App);
     await openPullRequestsSection(rendered);
     await clickPullRequest(rendered, 'Add widgets');
-    await waitFor(() => expect(bannerText(rendered.container)).toContain("isn't in the loaded graph"));
-
-    await fireEvent.click(rendered.getByRole('button', { name: /fetch/i }));
 
     await waitFor(() => expect(fetchCalled).toBe(true));
+    expect(send).toHaveBeenCalledWith('git.fetch', { remote: 'origin' });
     await waitFor(() => expect(
       (rendered.container.querySelector('.scroll-area') as HTMLElement).scrollTop,
     ).toBeGreaterThan(0));
+    // Nothing was explained and nothing was offered: the tool just did it.
     expect(bannerText(rendered.container)).toBe('');
+    expect(rendered.queryByRole('button', { name: /^fetch$/i })).toBeNull();
+  });
+
+  it('shows the ambient bar while that fetch is in flight', async () => {
+    const fetch = deferred<void>();
+    stubApp({
+      graphBuild: resolvedBuild(),
+      getRow: ({ layoutVersion }) => ({ row: layoutVersion === 1 ? null : 42 }),
+      overrides: { 'git.fetch': () => fetch.promise },
+    });
+    const rendered = render(App);
+    await openPullRequestsSection(rendered);
+    await clickPullRequest(rendered, 'Add widgets');
+
+    await waitFor(() => expect(send).toHaveBeenCalledWith('git.fetch', { remote: 'origin' }));
+    expect(busyBar(rendered.container)).not.toBeNull();
+
+    fetch.resolve(undefined);
+    await waitFor(() => expect(
+      (rendered.container.querySelector('.scroll-area') as HTMLElement).scrollTop,
+    ).toBeGreaterThan(0));
+    await waitFor(() => expect(busyBar(rendered.container)).toBeNull());
+  });
+
+  it('keeps the bar up across the row lookup, not just the build and the fetch', async () => {
+    // The gap between a build settling and the fetch starting is a real host
+    // round trip; a bar that blinked off in it would read as "finished".
+    const rowLookup = deferred<{ row: number | null }>();
+    stubApp({ graphBuild: resolvedBuild(), getRow: () => rowLookup.promise });
+    const rendered = render(App);
+    await openPullRequestsSection(rendered);
+    await clickPullRequest(rendered, 'Add widgets');
+
+    await waitFor(() => expect(send).toHaveBeenCalledWith('graph.getRow', {
+      hash: 'c'.repeat(40), layoutVersion: 1,
+    }));
+    expect(busyBar(rendered.container)).not.toBeNull();
+
+    rowLookup.resolve({ row: 42 });
+    await waitFor(() => expect(busyBar(rendered.container)).toBeNull());
+  });
+
+  it('says so when the fetch fails, rather than failing silently', async () => {
+    stubApp({
+      graphBuild: resolvedBuild(),
+      getRow: () => ({ row: null }),
+      overrides: { 'git.fetch': () => Promise.reject(new Error('could not read from origin')) },
+    });
+    const rendered = render(App);
+    await openPullRequestsSection(rendered);
+    await clickPullRequest(rendered, 'Add widgets');
+
+    await waitFor(() => expect(bannerText(rendered.container)).toContain('could not read from origin'));
+  });
+
+  it('fetches once and then says the commit is still missing, rather than fetching forever', async () => {
+    let fetchCount = 0;
+    stubApp({
+      graphBuild: resolvedBuild(),
+      // The fetch brings nothing new down: the commit stays missing.
+      getRow: () => ({ row: null }),
+      overrides: { 'git.fetch': () => { fetchCount += 1; return undefined; } },
+    });
+    const rendered = render(App);
+    await openPullRequestsSection(rendered);
+    await clickPullRequest(rendered, 'Add widgets');
+
+    await waitFor(() => expect(bannerText(rendered.container)).not.toBe(''));
+    expect(fetchCount).toBe(1);
+    expect(bannerText(rendered.container).toLowerCase()).toContain('still');
+    // Give a runaway retry loop room to show itself.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fetchCount).toBe(1);
+  });
+
+  it('does not scroll to a pull request that was superseded while its fetch was in flight', async () => {
+    const fetch = deferred<void>();
+    stubApp({
+      graphBuild: resolvedBuild(),
+      getRow: ({ hash, layoutVersion }) => {
+        if (layoutVersion === 1) return { row: null };
+        return { row: hash === 'c'.repeat(40) ? 42 : null };
+      },
+      overrides: { 'git.fetch': () => fetch.promise },
+    });
+    const rendered = render(App);
+    await openPullRequestsSection(rendered);
+    await clickPullRequest(rendered, 'Add widgets');
+    await waitFor(() => expect(send).toHaveBeenCalledWith('git.fetch', { remote: 'origin' }));
+
+    // The user moves on while the fetch is still running.
+    await clickPullRequest(rendered, 'Fix gizmos');
+    fetch.resolve(undefined);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(
+      (rendered.container.querySelector('.scroll-area') as HTMLElement).scrollTop,
+    ).toBe(0);
+    expect(send).not.toHaveBeenCalledWith('graph.getRow', { hash: 'c'.repeat(40), layoutVersion: 2 });
   });
 });
 
