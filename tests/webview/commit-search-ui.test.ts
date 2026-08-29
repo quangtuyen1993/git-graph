@@ -112,8 +112,28 @@ async function renderApp(fixtures: SearchFixtures = {}) {
   return { ...rendered, send, layout };
 }
 
-async function searchFor(query: string, fixtures: SearchFixtures) {
+/**
+ * Filters the graph down to `main` through the toolbar dropdown, so a test can
+ * put the app in the state where a missing row really is the filter's doing.
+ * Without this the app has no filter active, and a missing row means the commit
+ * is not in the layout at all — a different message, and a different bug.
+ */
+async function filterGraphToMain(rendered: Awaited<ReturnType<typeof renderApp>>): Promise<void> {
+  await fireEvent.click(rendered.getByLabelText('Filter graph by branch'));
+  await fireEvent.click(rendered.getByRole('checkbox', { name: 'main' }));
+  await waitFor(() => expect(send).toHaveBeenCalledWith(
+    'graph.build', { branches: ['main'], all: false },
+  ));
+  await settle();
+}
+
+async function searchFor(
+  query: string,
+  fixtures: SearchFixtures,
+  options: { branchFilterActive?: boolean } = {},
+) {
   const rendered = await renderApp(fixtures);
+  if (options.branchFilterActive) await filterGraphToMain(rendered);
   await fireEvent.click(rendered.getByLabelText('Search commits'));
   await settle();
 
@@ -286,11 +306,29 @@ describe('Commit search in the graph toolbar', () => {
   });
 
   it('explains when the match is filtered out of the graph', async () => {
+    const { search } = await searchFor(
+      'fix',
+      { hashes: ['a'.repeat(40)], rows: { ['a'.repeat(40)]: null } },
+      { branchFilterActive: true },
+    );
+    expect(search.textContent).toContain('outside the current branch filter');
+  });
+
+  /*
+   * `git.searchCommits` resolves a hash query with `rev-parse --verify
+   * <hash>^{commit}`, which finds any commit object in the database whether or
+   * not a ref reaches it, while the graph is built over `git log --all`, which
+   * walks refs only. A commit amended away is therefore findable and has no
+   * row — with no filter anywhere near it. Blaming the filter here is the
+   * wrong-guess defect this part exists to remove.
+   */
+  it('does not blame the branch filter when no filter is active', async () => {
     const { search } = await searchFor('fix', {
       hashes: ['a'.repeat(40)],
       rows: { ['a'.repeat(40)]: null },
     });
-    expect(search.textContent).toContain('outside the current branch filter');
+    expect(search.textContent).not.toContain('outside the current branch filter');
+    expect(search.textContent).toContain("isn't in the loaded graph");
   });
 
   it('clears results and highlight on Escape', async () => {

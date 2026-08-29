@@ -10,9 +10,12 @@ export interface GraphNode {
   lane: number;        // X column (0-based)
   row: number;         // Y position (0-based, index in commit list)
   color: number;       // color index (0-9)
-  filesChanged: number;  // number of files changed in this commit
-  additions: number;     // lines added
-  deletions: number;     // lines deleted
+  // null means "not fetched yet", not "zero" — graph.build leaves these unset
+  // and graph.getStats fills them in. A row must not render as an empty diff
+  // while its stats are still in flight.
+  filesChanged: number | null;  // number of files changed in this commit
+  additions: number | null;     // lines added
+  deletions: number | null;     // lines deleted
 }
 
 export interface GraphEdge {

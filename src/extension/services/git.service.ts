@@ -7,13 +7,92 @@ import {
   LOG_FORMAT, BRANCH_FORMAT, TAG_FORMAT
 } from '../utils/git-parser';
 import { transformRebaseTodo, type RebaseTodoPlan } from '../utils/rebase-todo';
-import type { Commit, Branch, Tag, FileChange, GitStatus, GitLogOptions, DiffResult, StashEntry, SubmoduleEntry, WorktreeEntry } from '../types/git.types';
+import type { Commit, Branch, Tag, FileChange, GitStatus, GitLogOptions, DiffResult, ShortStat, StashEntry, SubmoduleEntry, WorktreeEntry } from '../types/git.types';
 
 const REBASE_TIMEOUT_MS = 120000;
 const REBASE_TEMP_PREFIX = path.join(os.tmpdir(), 'git-graph-rebase-');
 
 function quoteEditorArgument(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * Parses `git log --shortstat --format=%H` output into hash → ShortStat.
+ *
+ * Keyed off the `%H` line rather than the position of the revision in argv:
+ * `--no-walk` defaults to `--no-walk=sorted`, so git may emit the commits in
+ * an order other than the one they were asked for. Reading the hash back out
+ * of the output is what makes that reordering harmless.
+ *
+ * `%H` is the full lowercase object name — 40 hex in a SHA-1 repository, 64
+ * in a SHA-256 one — so the hash line matches either length rather than
+ * hard-coding SHA-1's. Matching only 40 would silently yield an empty map for
+ * every commit in a SHA-256 repository.
+ *
+ * The stat line that follows a commit reads
+ * " 3 files changed, 10 insertions(+), 5 deletions(-)", with either the
+ * insertions or the deletions clause omitted when it is zero.
+ *
+ * The output distinguishes three states, and so does this map:
+ *
+ * - **Hash line, then a stat line** — a real change; the parsed numbers.
+ * - **Hash line, no stat line** — git listed the commit and had nothing to
+ *   report: an empty commit, or a merge. Mapped to `{0, 0, 0}`, because "git
+ *   says nothing changed" is an answer. Callers that must not treat a merge as
+ *   empty exclude it by its parent count, which is the only correct test — git
+ *   prints no stat line for a merge whether or not it touched anything.
+ * - **Hash never listed** — no answer for it. Absent from the map, so a caller
+ *   can tell "no answer" apart from "nothing changed". Parsed for defensively
+ *   rather than observed: git does not quietly omit a revision it cannot
+ *   resolve, it rejects the *whole* invocation — `fatal: bad object`, exit 128,
+ *   no output at all — so in practice the missing answer arrives as a thrown
+ *   `exec` covering every hash in the batch, and one pruned or amended-away
+ *   hash costs the entire window its stats. `shortStatsFor` does not catch
+ *   that; the caller decides what a failed batch means, and must not record it
+ *   as an answer for the hashes it covered.
+ *
+ * Zeroing the middle state used to be conflated with the third, which made a
+ * genuinely empty commit indistinguishable from one git never answered for.
+ */
+function parseShortStats(output: string): Map<string, ShortStat> {
+  const stats = new Map<string, ShortStat>();
+  // The hash whose stat line has not been seen yet. Still keyed off `%H`, never
+  // off the revision's position in argv.
+  let pendingHash = '';
+  const nothingChanged = (): ShortStat => ({ filesChanged: 0, additions: 0, deletions: 0 });
+
+  for (const line of output.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // Hash line: full object name, 40 hex (SHA-1) or 64 hex (SHA-256)
+    if (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(trimmed)) {
+      // The previous commit was listed and no stat line ever followed it, so
+      // git reported nothing changed for it.
+      if (pendingHash) stats.set(pendingHash, nothingChanged());
+      pendingHash = trimmed;
+      continue;
+    }
+
+    // Shortstat line: " 3 files changed, 10 insertions(+), 5 deletions(-)"
+    if (pendingHash && trimmed.includes('changed')) {
+      const filesMatch = trimmed.match(/(\d+) file/);
+      const addMatch = trimmed.match(/(\d+) insertion/);
+      const delMatch = trimmed.match(/(\d+) deletion/);
+
+      stats.set(pendingHash, {
+        filesChanged: filesMatch ? parseInt(filesMatch[1], 10) : 0,
+        additions: addMatch ? parseInt(addMatch[1], 10) : 0,
+        deletions: delMatch ? parseInt(delMatch[1], 10) : 0,
+      });
+      pendingHash = '';
+    }
+  }
+
+  // The last commit listed, if no stat line followed it.
+  if (pendingHash) stats.set(pendingHash, nothingChanged());
+
+  return stats;
 }
 
 function sequenceEditorSource(): string {
@@ -492,46 +571,46 @@ export class GitService {
   }
 
   /**
-   * Get shortstat (files changed, additions, deletions) for commits.
-   * Returns a map of hash → { filesChanged, additions, deletions }
+   * Aggregate diff size for a specific set of commits.
+   *
+   * The hashes are passed as revisions, so the answer is pinned to exactly the
+   * commits asked about — unlike a walk, it cannot drift with `--all` or the
+   * branch filter. `--no-walk` stops git following parents from each one.
+   *
+   * Three states, and the map distinguishes all three (see `parseShortStats`):
+   * a hash git listed with a stat line carries its numbers; a hash git listed
+   * without one — an empty commit, or a merge, for which `--no-walk` prints no
+   * stat line either way — maps to `{0, 0, 0}`; a hash git never listed is
+   * absent, so "git did not answer" stays distinguishable from "git says
+   * nothing changed". Callers that must not treat a merge as empty exclude it
+   * by its parent count, the only test that is correct for a merge.
+   *
+   * The third state is defensive, not the failure mode to plan for. Git does
+   * not drop a revision it cannot resolve from the listing — it fails the whole
+   * command (`fatal: bad object`, exit 128, no output), so this method
+   * *rejects* rather than returning a short map. One pruned, amended-away or
+   * otherwise unresolvable hash therefore takes down the answer for every hash
+   * batched with it, which is why a caller must leave a rejected batch's hashes
+   * unrecorded instead of caching "no stats" for a window of good commits.
+   *
+   * Preconditions the caller owns:
+   *
+   * - **Full, lowercase hashes.** The map is keyed by the `%H` git prints back,
+   *   which is always the full lowercase object name. Git resolves an
+   *   abbreviated or uppercase revision happily, but the answer then comes back
+   *   under a key the caller did not ask for, so its lookup misses and a commit
+   *   git answered for in full reads as one git never listed. Callers that
+   *   cache a miss make that permanent.
+   * - **Bounded batches.** Every hash goes onto one `git log` argv at ~41 bytes
+   *   each, so Windows' 32767-character command line is reached near 780
+   *   hashes. Request a window's worth (tens), not a whole repository; this
+   *   method deliberately does not chunk, because the argv it builds is part of
+   *   its contract.
    */
-  public async getShortStats(maxCount: number = 500, all: boolean = true): Promise<Map<string, { filesChanged: number; additions: number; deletions: number }>> {
-    const args = ['log', '--shortstat', '--format=%H'];
-    if (all) args.push('--all');
-    args.push(`--max-count=${maxCount}`);
-
-    const output = await this.cli.exec(args);
-    const stats = new Map<string, { filesChanged: number; additions: number; deletions: number }>();
-
-    const lines = output.split('\n');
-    let currentHash = '';
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-
-      // Hash line (40 hex chars)
-      if (/^[0-9a-f]{40}$/.test(trimmed)) {
-        currentHash = trimmed;
-        continue;
-      }
-
-      // Shortstat line: " 3 files changed, 10 insertions(+), 5 deletions(-)"
-      if (currentHash && trimmed.includes('changed')) {
-        const filesMatch = trimmed.match(/(\d+) file/);
-        const addMatch = trimmed.match(/(\d+) insertion/);
-        const delMatch = trimmed.match(/(\d+) deletion/);
-
-        stats.set(currentHash, {
-          filesChanged: filesMatch ? parseInt(filesMatch[1], 10) : 0,
-          additions: addMatch ? parseInt(addMatch[1], 10) : 0,
-          deletions: delMatch ? parseInt(delMatch[1], 10) : 0,
-        });
-        currentHash = '';
-      }
-    }
-
-    return stats;
+  public async shortStatsFor(hashes: string[]): Promise<Map<string, ShortStat>> {
+    if (hashes.length === 0) return new Map();
+    const output = await this.cli.exec(['log', '--no-walk', '--shortstat', '--format=%H', ...hashes]);
+    return parseShortStats(output);
   }
 
   /**

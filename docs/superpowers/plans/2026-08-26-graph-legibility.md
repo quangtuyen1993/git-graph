@@ -162,8 +162,14 @@ which is why it is not a bug.
    `filter: brightness(1.45) saturate(1.35);`. Lower `--lane-alpha` from `0.72` to `0.35`.
    `z-index: 3`, the three `box-shadow` layers, and `animation: branch-focus-flash 300ms ease-out`
    are unchanged.
-3. `@keyframes branch-focus-flash` and the reduced-motion override are untouched — neither
-   references the two dropped properties.
+3. **SUPERSEDED during implementation.** This said the keyframes reference neither dropped
+   property. They do: `@keyframes branch-focus-flash`'s `from` frame sets
+   `filter: brightness(2) saturate(1.8)` — a stronger multiplication than the
+   `brightness(1.45)` being removed, applied to the glyphs for the first 300ms. The rule this
+   part establishes has no 300ms exemption, so the `filter` line is deleted from the keyframe
+   and the box-shadow ramp (6px→4px bar, 2px→1px ring, 28px→20px glow) is kept. The flash then
+   comes entirely from shadows blooming and settling, which is the permitted form of emphasis.
+   The reduced-motion override is genuinely untouched.
 4. No rule in this file gains a `color` or `filter` override on a background whose alpha the
    rule itself sets, now or as a result of this change — the general principle the two edits
    above enact, worth checking by eye across the diff rather than assuming it from the two
@@ -224,12 +230,31 @@ whether a filter is active.
    commit is outside the current branch filter." with a **Clear filter** action that resets
    `selectedBranchFilters` and re-triggers the lookup. On `'absent'`, today's message
    ("...the branch may not be fetched locally.") and its **Fetch** action are unchanged.
-3. Commit search (`App.svelte:2298-2300`): switches to the helper. The message text is unchanged
-   from today's — it is already right, because a search hit is sourced from `git.searchCommits`
-   (`App.svelte:2272`), so a hash `runCommitSearch` finds cannot be `'absent'` by construction;
-   `'filtered'` is the only reason reachable here. This is also why `missingRowReason`'s single
-   `branchFilterActive` input suffices across all three sites: no site needs more than that one
-   fact to pick the right reason.
+3. **SUPERSEDED during implementation — the premise was false and was disproved in a real
+   repository, not argued away.** This claimed a search hit cannot be `'absent'` by
+   construction. It can. `git.service.ts:320-324` resolves a hash query with
+   `rev-parse --verify <hash>^{commit}` and returns that hash directly, never reaching the
+   `--all` log at :328; `rev-parse --verify` succeeds for **any commit object in the database,
+   reachable or not**, while the graph is built from `git log --all`, which walks refs only.
+   Amend a commit away and paste its sha with no filter active: search finds it, the layout has
+   no row, and today's single literal blames a filter that is not on. `--all` also skips
+   `refs/stash`, a second route to the same state.
+
+   So the search site takes a `Record<MissingRowReason, string>` like the other two.
+   `'filtered'` keeps today's literal verbatim; `'absent'` reads **"This commit isn't in the
+   loaded graph."**, matching the sidebar's phrasing so the three sites read as one family.
+   `commit-search-ui.test.ts:288` gains a real filter — its name already misdescribed its own
+   no-filter fixture, so it was asserting the filtered sentence against a state where the
+   helper says `absent`, which is precisely the defect this part removes — and a sibling test
+   covers the unfiltered case.
+
+   `missingRowReason`'s single `branchFilterActive` input still suffices, but for the honest
+   reason rather than the assumed one: one fact separates the two causes at every site,
+   because both causes are genuinely reachable at every site.
+
+   This is worth recording plainly: Part 4 exists to stop the code guessing wrong about why a
+   row is missing, and the spec guessed wrong about one of its own three sites. It was caught
+   only because the implementer went to a real repository instead of reasoning from the text.
 4. Sidebar branch jump (`App.svelte:2231`): stops returning silently on `result.row === null`.
    Shows the `'filtered'` message via `showTransientMessage` — a sidebar branch's hash is always
    locally present by construction (the branch list is sourced from local refs), so `'absent'` is
@@ -311,12 +336,29 @@ focused, single-purpose `GitService` test file and the `serviceWith()` seam it u
 6. The three listed test files no longer reference `getShortStats` — stubs and assertions
    updated or removed so nothing points at a method that no longer exists.
 
-**Named trap:** `git log --no-walk --shortstat` prints no stat line for a merge commit — the
-spec's own table documents this. `shortStatsFor` must not synthesize a
-`{ filesChanged: 0, ... }` entry for a hash git said nothing about; a hash with no stat line is
-simply absent from the returned `Map`. Deciding what an absent entry *means* belongs to Task 2's
-cache, not here — doing it in this method would collapse the "genuinely empty" and "merge" cases
-that the rest of Part 2 exists to keep apart.
+**Named trap — SUPERSEDED, and this instruction is the one that made the dimming rule
+unreachable.** It said `shortStatsFor` must not synthesize a `{ filesChanged: 0, ... }` entry
+for a hash git said nothing about, and that a hash with no stat line is simply absent from the
+returned `Map`. Following it exactly is what shipped a feature that could never fire.
+
+The error is in the premise. `git log --no-walk --shortstat` does not say *nothing* about a
+merge or an empty commit — it prints their hash line and omits only the stat line. So three
+states reach the parser, and the instruction collapsed the first two:
+
+| git printed | meaning | maps to |
+|---|---|---|
+| hash line, then a stat line | a real change | the parsed `ShortStat` |
+| hash line, no stat line | nothing changed | `{ filesChanged: 0, additions: 0, deletions: 0 }` |
+| no hash line at all | git did not answer | absent from the map |
+
+`shortStatsFor` therefore **must** synthesize the zero for the middle state — that is the only
+way an empty commit is distinguishable from an unanswered one. The "genuinely empty" and
+"merge" cases the original trap wanted kept apart are kept apart by the dimming rule's
+`parents.length` guard, on the webview side, where the spec always intended them to be.
+
+The real trap is one layer up: `null` means **not answered** and nothing else. A failed request
+returns it for every hash it covered, so reading it as "empty" would dim every non-merge row on
+screen the moment git errored.
 
 **Acceptance:**
 
@@ -325,7 +367,7 @@ that the rest of Part 2 exists to keep apart.
 | 1 | `shortStatsFor(['aa'.repeat(20), 'bb'.repeat(20)])` calls `exec` with `['log', '--no-walk', '--shortstat', '--format=%H', 'aa'.repeat(20), 'bb'.repeat(20)]` — argv assertion, not parsed-output assertion |
 | 2 | `shortStatsFor([])` returns an empty map and never calls `exec` |
 | 3 | A shortstat line missing an insertions or deletions clause parses the present number(s) and defaults the absent one to `0` |
-| 4 | A hash git returned no stat line for is absent from the returned map, not present with zeroed stats |
+| 4 | **SUPERSEDED** — see the named trap above. A hash git *listed* without a stat line is present with zeroed stats; only a hash git did not list at all is absent from the map |
 | 5 | `npm run typecheck` passes with `getShortStats` gone from `GitService` and the three listed test files updated |
 
 ## Task 2: The hash-keyed cache, `graph.getStats`, and null stat defaults
@@ -404,7 +446,7 @@ catch every event that could have invalidated it.
 | 2 | `graph.getWindow` returns nodes with `filesChanged`/`additions`/`deletions` at `null` and issues no git call itself |
 | 3 | Two `graph.getStats` calls for the same hash set issue exactly one `shortStatsFor` call |
 | 4 | A `graph.getStats` call mixing already-cached and new hashes fetches only the new ones |
-| 5 | A hash `shortStatsFor` returns no entry for (a merge) is cached as `null` after one call and is never requested again on a later `graph.getStats` for the same hash |
+| 5 | A hash `shortStatsFor` returns no entry for is cached as `null` after one call and is never requested again on a later `graph.getStats` for the same hash. **Not a merge** — a merge is listed and holds a real `{0,0,0}`; this row needs a hash git genuinely does not list |
 | 6 | A `repo.switch` invalidates the cache — a hash cached under the old repository is re-fetched after the switch |
 | 7 | An ordinary `invalidate()` that is not a repo switch (the file-watcher path) leaves a previously cached hash cached — no `shortStatsFor` call for it on the next `graph.getStats` |
 

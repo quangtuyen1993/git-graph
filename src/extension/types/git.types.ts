@@ -40,6 +40,13 @@ export interface FileChange {
   binary: boolean;
 }
 
+/** Aggregate diff size of one commit against its first parent. */
+export interface ShortStat {
+  filesChanged: number;
+  additions: number;
+  deletions: number;
+}
+
 export interface GitStatus {
   staged: FileStatusEntry[];
   unstaged: FileStatusEntry[];

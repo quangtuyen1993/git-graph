@@ -134,12 +134,29 @@ The cache holds an entry for every hash a `shortStatsFor` call was made for, not
 git returned a stat line for. `git log --no-walk --shortstat` prints nothing for a merge — the
 table above documents that — so without this, a merge would never enter the returned map, would
 therefore always read as absent from the cache, and would be re-requested from git on every
-window, forever. The consequence: a merge's cache entry holds `null`, the same value an
-unresolved commit holds. The dimming rule below is unaffected by this, because it reads
-`parents.length` and never reaches a merge's stats at all. But the +/− counts follow-up named in
-Out of scope will have to treat a merge's `null` as "no stat line exists for merges", not as "not
-loaded yet" — the two cases are indistinguishable in this cache, and will need to be told apart
-some other way if that follow-up is built.
+window, forever.
+
+**Corrected during implementation — the sentence above overstates what git omits, and the
+original wording made the dimming rule unreachable.** `git log --no-walk --shortstat` does not
+print *nothing* for a merge: it prints the hash line and omits only the stat line. The same is
+true of a genuinely empty commit — which is the exact case this part exists to dim. So the
+output carries three states, not two:
+
+| git printed | meaning |
+|---|---|
+| hash line, then a stat line | a real change |
+| hash line, no stat line | nothing changed — an empty commit, or a merge |
+| no hash line at all | git did not answer for it |
+
+The parser maps the middle state to `{ filesChanged: 0, additions: 0, deletions: 0 }`, so a
+merge and an empty commit both hold a real zero rather than `null`, and only the third state
+leaves an entry absent. A merge is still excluded from dimming by `parents.length`, exactly as
+designed; the +/− counts follow-up therefore has no ambiguity to resolve, because a merge's
+zero and an unanswered hash are now different values.
+
+`null` retains one meaning and one only: **not answered.** It must never be read as "empty",
+because a failed request returns it for every hash it covered — reading it as empty would dim
+every non-merge row on screen the moment git errored.
 
 **`graph.getWindow` stays synchronous and returns immediately, stats left at `null`.** It does
 not await `shortStatsFor`. The alternative — an awaited git subprocess in front of every
@@ -193,7 +210,10 @@ filesChanged === 0 && parents.length <= 1
 
 - **`.col-graph` keeps full strength.** The lane and its edges are structure; fading them breaks
   the reader's ability to follow topology past an empty commit.
-- **A row that is `selected`, `search-match` or `branch-focused` is never dimmed.** Whatever the
+- **A row that is `selected`, `search-match`, `branch-focused` or `compare-selected` is never
+  dimmed.** `compare-selected` was added during implementation for this list's own stated
+  reason: it is a live user pick — the pending compare base — whose only affordance is a 1px
+  dashed outline, so an empty commit chosen as the base would fade underneath it. Whatever the
   user is currently looking at must not quietly fade.
 
 Opacity rather than a `color` override, so this never fights the specificity of the selection

@@ -31,6 +31,7 @@
   import ResizeHandle from './components/layout/ResizeHandle.svelte';
   import CommitSearch from './components/toolbar/CommitSearch.svelte';
   import { classifyQuery, nextMatchIndex } from './lib/commit-search';
+  import { missingRowReason, type MissingRowReason } from './lib/missing-row';
   import {
     autoGraphColumnWidth,
     clampColumnWidth,
@@ -59,6 +60,37 @@
     state: 'initialized' | 'uninitialized' | 'modified' | 'conflicted';
   }
 
+  /**
+   * Mirrors `ShortStat` (src/extension/types/git.types.ts). Hand-copied, like
+   * every other type on this side of the bridge — the webview cannot import
+   * from `src/extension`.
+   *
+   * `graph.getStats` answers each hash with one of these or with `null`, and
+   * the two are different facts. A `ShortStat` means git answered, so
+   * `filesChanged: 0` is the real answer "nothing changed" — an empty commit,
+   * or a merge, which `--no-walk` never prints a stat line for either way.
+   * `null` means git gave no answer: the hash was not listed, or the request
+   * failed. `null` therefore never dims; a failed request returns it for every
+   * hash it covered, and reading it as "empty" would fade the whole screen.
+   */
+  interface ShortStat {
+    filesChanged: number;
+    additions: number;
+    deletions: number;
+  }
+
+  /**
+   * Mirrors `GraphNode` (src/extension/types/graph.types.ts). Hand-copied, so a
+   * field added on the extension side does not reach here on its own: every hop
+   * across the bridge is an `as` cast and neither `tsc` nor `svelte-check` can
+   * see the mismatch. A missing field here fails silently, by simply never
+   * rendering.
+   *
+   * `filesChanged`/`additions`/`deletions` are `null` until `graph.getStats`
+   * answers for the hash. `null` is "not known yet"; `0` is "known to have
+   * changed no files" — collapsing the two would flash a row dim while its
+   * stats were still in flight.
+   */
   interface GraphNode {
     hash: string;
     abbreviatedHash: string;
@@ -71,6 +103,9 @@
     lane: number;
     row: number;
     color: number;
+    filesChanged: number | null;
+    additions: number | null;
+    deletions: number | null;
   }
 
   interface GraphEdge {
@@ -751,6 +786,16 @@
       }) as { row: number | null };
       if (requestedLayoutVersion !== layoutVersion || selectedPullRequestId !== pullRequestId) return;
       if (result.row === null) {
+        // The two causes want opposite remedies, and offering the wrong one is
+        // worse than offering none: a Fetch under an active filter downloads
+        // nothing that helps, because the commit is already local.
+        if (missingRowReason({ branchFilterActive: selectedBranchFilters.length > 0 }) === 'filtered') {
+          showTransientMessage(
+            "This pull request's head commit is outside the current branch filter.",
+            { label: 'Clear filter', run: () => { void clearFilterAndScrollToPullRequestHead(pullRequestId, hash); } },
+          );
+          return;
+        }
         showTransientMessage(
           "This pull request's head commit isn't in the loaded graph — the branch may not be fetched locally.",
           { label: 'Fetch', run: () => { void fetchAndScrollToPullRequestHead(pullRequestId, hash); } },
@@ -761,6 +806,30 @@
     } catch {
       // The layout moved on mid-lookup; the next selection starts clean.
     }
+  }
+
+  /**
+   * The action offered alongside the filtered notice. Drops the branch filter,
+   * which rebuilds the graph over every branch, then retries the lookup on the
+   * layout that rebuild produced.
+   *
+   * It does not go through `handleGraphBranchFilters`: that clears the
+   * pull-request selection along with the rest of the filter-dependent view
+   * state, and the selection is the one thing this retry has to keep — every
+   * guard below, and inside `scrollToPullRequestHead`, is written against it.
+   */
+  async function clearFilterAndScrollToPullRequestHead(pullRequestId: string, hash: string): Promise<void> {
+    selectedBranchFilters = [];
+    clearBranchHighlight();
+    try {
+      await refreshGraph();
+    } catch (e) {
+      if (selectedPullRequestId !== pullRequestId) return;
+      showTransientMessage(messageOf(e));
+      return;
+    }
+    if (selectedPullRequestId !== pullRequestId) return;
+    await scrollToPullRequestHead(pullRequestId, hash);
   }
 
   /**
@@ -1669,6 +1738,133 @@
     }
   }
 
+  /**
+   * Stats the host has already answered for, keyed by hash. A `null` value is a
+   * real answer — "git printed no stat line for this commit" — and stops the
+   * hash being asked about again, exactly like a numeric one.
+   *
+   * Never cleared on a repository switch: a hash is content-addressed, so the
+   * same hash in another repository is the same commit with the same stats.
+   */
+  const commitStatsCache = new Map<string, ShortStat | null>();
+  /**
+   * Hashes with a `graph.getStats` request outstanding. The host caches by hash
+   * but has no in-flight de-duplication, and this caller fires on window
+   * arrival *and* on scroll — overlapping windows share rows, so without this
+   * two requests would each spawn a `git log`. `GitCLI.exec` serialises git
+   * behind one queue, so the duplicate delays every later git call in the
+   * session, not only itself.
+   */
+  const commitStatsInFlight = new Set<string>();
+
+  /**
+   * A copy of the window with every stat the cache already knows filled in.
+   * Pure: the nodes it changes are replaced rather than written through, so a
+   * node Svelte has already rendered from is never mutated behind its back.
+   */
+  function withKnownCommitStats(window: GraphWindow): GraphWindow {
+    return {
+      ...window,
+      nodes: window.nodes.map((node) => {
+        const stat = commitStatsCache.get(node.hash);
+        if (!stat || node.filesChanged === stat.filesChanged) return node;
+        return {
+          ...node,
+          filesChanged: stat.filesChanged,
+          additions: stat.additions,
+          deletions: stat.deletions,
+        };
+      }),
+    };
+  }
+
+  /**
+   * Republishes the rendered window with whatever stats have arrived since.
+   *
+   * Svelte 4 reactivity is assignment-based: writing `node.filesChanged = …`
+   * onto an object already inside the assigned `graphWindow.nodes` updates
+   * nothing. The nodes are replaced and `graphWindow` reassigned so the
+   * compiler can see it; the `{#each}` is keyed by hash, so rows are patched
+   * rather than torn down.
+   */
+  function applyCommitStatsToWindow(): void {
+    if (!graphWindow) return;
+    graphWindow = withKnownCommitStats(graphWindow);
+  }
+
+  /**
+   * Asks the host for the stats of rows it does not already know about.
+   *
+   * Fire-and-forget by contract: stats are decoration and the graph is the
+   * feature, so a failure leaves the affected rows at their default `null` —
+   * no retry loop, no banner, nothing surfaced.
+   *
+   * Failure has two shapes and neither is cached, so a later window covering
+   * the same hashes asks again:
+   *
+   * - The send rejects (transport), handled by the `.catch` below.
+   * - The host resolves with the hash **missing from the record**, which is how
+   *   it reports "the fetch covering this hash failed". A present `null` is the
+   *   opposite — a settled answer, "git listed nothing for this commit" — and
+   *   is cached. Only the keys the record actually carries are cached, because
+   *   git rejects a whole `--no-walk` batch on its first unresolvable revision,
+   *   so the missing-key case covers a full window at a time and caching it as
+   *   `null` would kill stats for the session.
+   */
+  function requestCommitStats(nodes: GraphNode[]): void {
+    const hashes = [...new Set(nodes.map((node) => node.hash))]
+      .filter((hash) => !commitStatsCache.has(hash) && !commitStatsInFlight.has(hash));
+    if (hashes.length === 0) return;
+
+    for (const hash of hashes) commitStatsInFlight.add(hash);
+    void (bridge.send('graph.getStats', { hashes }) as Promise<Record<string, ShortStat | null>>)
+      .then((stats) => {
+        for (const hash of hashes) {
+          if (!stats || !Object.prototype.hasOwnProperty.call(stats, hash)) continue;
+          commitStatsCache.set(hash, stats[hash] ?? null);
+        }
+        // Applied to the window on screen now, which need not be the one the
+        // request was issued for: an overlapping window can render while the
+        // request is still out.
+        applyCommitStatsToWindow();
+      })
+      .catch(() => {})
+      .finally(() => {
+        for (const hash of hashes) commitStatsInFlight.delete(hash);
+      });
+  }
+
+  /**
+   * Whether a row should be faded as a commit that changed no files.
+   *
+   * Guarded by the parent count, not by the numbers: git prints no stat line
+   * for a merge, so a merge's stats say nothing about whether it touched
+   * anything, and `parents.length > 1` excludes it regardless of what came
+   * back. A root commit has no parents and is an ordinary commit here.
+   *
+   * `filesChanged === null` never dims — unknown is not empty — and whatever
+   * the user is currently looking at is never dimmed, whatever its stats: the
+   * selection, a find match, the branch-focused row, and the pending compare
+   * base. The last is a live user pick whose only affordance is a 1px dashed
+   * outline, so fading the row under it is exactly the case the rule exists to
+   * prevent, even though the spec's list names only the first three.
+   *
+   * The state flags are parameters rather than reads of the component's own
+   * variables so the template's `class:` binding lists them as dependencies:
+   * Svelte 4 recomputes the expression only when a variable it can see in the
+   * markup changes.
+   */
+  function isEmptyCommitRow(
+    node: GraphNode,
+    rowSelected: boolean,
+    rowSearchMatch: boolean,
+    rowBranchFocused: boolean,
+    rowCompareSelected: boolean,
+  ): boolean {
+    if (node.filesChanged !== 0 || node.parents.length > 1) return false;
+    return !rowSelected && !rowSearchMatch && !rowBranchFocused && !rowCompareSelected;
+  }
+
   async function refreshGraph() {
     const refreshToken = graphRefreshGate.issue();
     const branchFilters = selectedBranchFilters;
@@ -1738,7 +1934,8 @@
       const queryToReRun = layoutChanged ? searchQuery : '';
       layoutVersion = build.layoutVersion;
       if (layoutChanged) clearCommitSearch();
-      graphWindow = nextWindow;
+      graphWindow = withKnownCommitStats(nextWindow);
+      requestCommitStats(nextWindow.nodes);
       currentStartRow = nextWindow.startRow;
       loading = false;
       status = formatFilterStatus(build.totalRows, branchFilters, nextBranches.length);
@@ -1784,7 +1981,8 @@
           layoutVersion: requestedLayoutVersion,
         }) as Promise<GraphWindow>,
         apply: (requestedWindow) => {
-          graphWindow = requestedWindow;
+          graphWindow = withKnownCommitStats(requestedWindow);
+          requestCommitStats(requestedWindow.nodes);
           currentStartRow = requestedWindow.startRow;
         },
         setLoading: (value) => { loading = value; },
@@ -2218,6 +2416,17 @@
     );
   }
 
+  /**
+   * A sidebar branch's hash comes from the local ref list, so `absent` should
+   * be unreachable here — the wording is kept anyway rather than assumed away,
+   * so a future source of branches that can name a commit the repository lacks
+   * gets a true sentence instead of a wrong one.
+   */
+  const BRANCH_JUMP_MISSING_ROW_MESSAGE: Record<MissingRowReason, string> = {
+    filtered: "This branch's head commit is outside the current branch filter.",
+    absent: "This branch's head commit isn't in the loaded graph.",
+  };
+
   async function handleBranchSelect(event: CustomEvent<{ name: string }>) {
     const branch = branches.find(candidate => candidate.name === event.detail.name);
     const requestedLayoutVersion = layoutVersion;
@@ -2228,7 +2437,16 @@
         hash: branch.hash,
         layoutVersion: requestedLayoutVersion,
       }) as { row: number | null };
-      if (result.row === null || requestedLayoutVersion !== layoutVersion) return;
+      if (requestedLayoutVersion !== layoutVersion) return;
+      if (result.row === null) {
+        // Returning silently here was the drift this helper exists to close:
+        // the same `null` explained itself in the pull-request panel and in
+        // commit search, and said nothing at all from the sidebar.
+        showTransientMessage(BRANCH_JUMP_MISSING_ROW_MESSAGE[
+          missingRowReason({ branchFilterActive: selectedBranchFilters.length > 0 })
+        ]);
+        return;
+      }
 
       clearBranchHighlight();
       selectedSidebarBranch = branch.name;
@@ -2284,6 +2502,21 @@
     }
   }
 
+  /**
+   * Both reasons are reachable here, contrary to the assumption that a search
+   * hit is always in the graph. `searchCommits` resolves a hash-shaped query
+   * with `rev-parse --verify <hash>^{commit}`, which finds any commit object in
+   * the database whether or not a ref reaches it, while the graph is built by
+   * `loadAllCommits` over `git log --all`, which walks refs only. A commit
+   * amended away is findable and has no row, with no filter involved — so
+   * `absent` needs its own sentence, or the search box blames a filter that is
+   * not even on.
+   */
+  const SEARCH_MISSING_ROW_MESSAGE: Record<MissingRowReason, string> = {
+    filtered: 'Commit is outside the current branch filter',
+    absent: "This commit isn't in the loaded graph.",
+  };
+
   async function revealSearchMatch() {
     // Read the cursor directly rather than through `activeSearchHash`: callers
     // move it in the same tick, and the reactive alias only catches up on flush.
@@ -2296,7 +2529,9 @@
       }) as { row: number | null };
       if (requestedLayoutVersion !== layoutVersion) return;
       if (result.row === null) {
-        searchMessage = 'Commit is outside the current branch filter';
+        searchMessage = SEARCH_MISSING_ROW_MESSAGE[
+          missingRowReason({ branchFilterActive: selectedBranchFilters.length > 0 })
+        ];
         return;
       }
       searchMessage = '';
@@ -3162,6 +3397,14 @@
                 class:search-match={searchMatchSet.has(node.hash)}
                 class:search-match-active={activeSearchHash === node.hash}
                 class:compare-selected={selectedForCompare === node.hash}
+                class:dimmed={isEmptyCommitRow(
+                  node,
+                  selectedHash === node.hash || selectedHashes.has(node.hash),
+                  searchMatchSet.has(node.hash),
+                  focusedBranchHash === node.hash,
+                  selectedForCompare === node.hash,
+                )}
+                data-files-changed={node.filesChanged}
                 on:click={(e) => handleRowClick(node.hash, e)}
                 on:keydown={(e) => { if (e.key === 'Enter') handleRowClick(node.hash); }}
                 on:contextmenu={(e) => handleRowContextMenu(e, node.hash)}
@@ -3675,10 +3918,11 @@
     --lane-alpha: 0.22;
   }
 
-  /* Selected rows keep the lane tint but add the theme's selection foreground
-     and a lane-coloured accent bar so selection stays obvious. */
+  /* Selected rows keep the lane tint and add a lane-coloured accent bar so
+     selection stays obvious. The text colour is left to the theme: this rule
+     tints the row's own background, so overriding the foreground on top of it
+     is what breaks contrast in light themes. */
   .commit-row.selected {
-    color: var(--vscode-list-activeSelectionForeground, #ffffff);
     box-shadow: inset 2px 0 0 0 rgb(var(--lane-rgb));
   }
 
@@ -3696,11 +3940,13 @@
     background: var(--vscode-editor-findMatchBackground, rgba(234, 92, 0, 0.56));
   }
 
+  /* Emphasis here comes from the box-shadows only -- an inset accent bar and a
+     ring plus glow at the row's edge, none of which touch a glyph. No `color`
+     and no `filter`: both would repaint the text over a background this rule
+     tints itself, which is unreadable in light themes. */
   .commit-row.branch-focused {
-    --lane-alpha: 0.72;
+    --lane-alpha: 0.35;
     z-index: 3;
-    color: #ffffff;
-    filter: brightness(1.45) saturate(1.35);
     box-shadow:
       inset 4px 0 0 rgb(var(--lane-rgb)),
       inset 0 0 0 1px rgba(var(--lane-rgb), 0.95),
@@ -3708,9 +3954,14 @@
     animation: branch-focus-flash 300ms ease-out;
   }
 
+  /* The flash is the shadows blooming and settling -- a 6px bar easing to 4px,
+     a 2px ring to 1px, a 28px glow to 20px. No `filter` here either: it would
+     multiply the luminance of the row's text for the animation's 300ms, harder
+     than the steady-state `brightness(1.45)` this change removed. The rule
+     against repainting text over a background we tint ourselves has no
+     short-duration exemption. */
   @keyframes branch-focus-flash {
     from {
-      filter: brightness(2) saturate(1.8);
       box-shadow:
         inset 6px 0 0 rgb(var(--lane-rgb)),
         inset 0 0 0 2px rgb(var(--lane-rgb)),
@@ -3722,6 +3973,36 @@
     .commit-row.branch-focused {
       animation: none;
     }
+  }
+
+  /* A commit that changed no files fades, so the eye skips it. `opacity`, not
+     a `color` override: selection, find-match and branch-focus all tint the
+     row's own background, and repainting the foreground on top of that is what
+     breaks contrast in light themes -- the same rule those three follow.
+
+     `.col-graph` is deliberately absent. The lane and its edges stay at full
+     strength so the reader can follow topology straight through an empty
+     commit.
+
+     0.55 is a chosen number, not a measured one: jsdom performs no layout and
+     computes no colours, so no test can tell whether a faded row stays legible
+     against a given theme's row background. Verified by eye in a light and a
+     dark theme instead. */
+  .commit-row.dimmed .col-message,
+  .commit-row.dimmed .col-date,
+  .commit-row.dimmed .col-sha,
+  .commit-row.dimmed .col-author {
+    opacity: 0.55;
+  }
+
+  /* `.author-name` fades itself to 0.7 on every row, and opacity composes
+     multiplicatively: 0.55 x 0.7 lands the dimmed row's author at 0.385, well
+     under the one value above that was chosen and checked by eye. Dropping the
+     inner fade inside a dimmed row leaves exactly the 0.55 the column asked
+     for. `.col-author` keeps the rule rather than the name so the avatar fades
+     with the text. */
+  .commit-row.dimmed .col-author .author-name {
+    opacity: 1;
   }
 
   .commit-row .col-graph {

@@ -80,7 +80,7 @@ describe('coverage closure helpers', () => {
       { name: 'delete tag', expected: ['tag', '-d', 'v'], run: () => service.deleteTag('v') },
       { name: 'abort merge', expected: ['merge', '--abort'], run: () => service.abortMerge() },
       { name: 'abort rebase', expected: ['rebase', '--abort'], run: () => service.abortRebase() },
-      { name: 'short stats', expected: ['log', '--shortstat', '--format=%H', '--all', '--max-count=500'], run: () => service.getShortStats() },
+      { name: 'short stats', expected: ['log', '--no-walk', '--shortstat', '--format=%H', 'h'], run: () => service.shortStatsFor(['h']) },
       { name: 'show file', expected: ['show', 'h:missing'], run: () => service.showFile('h', 'missing') },
       { name: 'parents', expected: ['rev-parse', 'h^'], run: () => service.getParents('h') },
       { name: 'worktrees', expected: ['worktree', 'list', '--porcelain'], run: () => service.worktreeList() },
