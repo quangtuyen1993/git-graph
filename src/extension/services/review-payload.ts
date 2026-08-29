@@ -57,6 +57,21 @@ export interface ReviewPayloadInput {
    * only useful as an escape hatch when a model rejects the request for size.
    */
   budget?: number;
+  /**
+   * The language the review body should be written in, as the user typed it
+   * (`gitGraphPro.aiReview.outputLanguage`). Free text, so anything from
+   * `Tiếng Việt` to `Brazilian Portuguese` works.
+   *
+   * Empty, absent or whitespace-only means *do not ask*: the payload is then
+   * byte-identical to the one this module produced before the setting existed,
+   * so a user who never expressed a preference spends no instruction on it and
+   * sees no change at all.
+   *
+   * This is the only place the instruction is added. There are several
+   * provider adapters and they all send `payloadText` through untouched — put
+   * it in them instead and they drift.
+   */
+  outputLanguage?: string;
 }
 
 export interface ReviewPayload {
@@ -83,6 +98,27 @@ export const REVIEW_INSTRUCTIONS = `You are a senior code reviewer. Review the c
 Ground every finding in the diff. Do not invent code that is not shown, and do not
 report style preferences as defects. If a section of the diff was omitted (noted
 below), say what you could not assess rather than guessing.`;
+
+/**
+ * The one sentence the output-language setting adds, and the only text in this
+ * module that is ever conditional.
+ *
+ * It deliberately fences off the tokens that carry meaning beyond prose. The
+ * extension parses nothing out of the review body today — it is stored and
+ * rendered as markdown — but the section names, the severity labels and the
+ * three verdict keywords are what a reader scans for and what any later
+ * parser would key on. A review whose verdict came back as `APROBAR` would be
+ * a different shape of output, not a translated one.
+ */
+export function languageInstruction(language: string): string {
+  return [
+    `Write the review in ${language}.`,
+    'That applies to your prose only: keep the four section names, the severity',
+    'labels (Critical, Important, Minor) and the verdict keyword (APPROVE,',
+    'REQUEST_CHANGES, COMMENT) exactly as written above, and never translate',
+    'code, identifiers, file paths, branch names or anything quoted from the diff.',
+  ].join('\n');
+}
 
 /** Split a unified diff into per-file chunks, keyed by the path git reports. */
 export function splitDiffByFile(diff: string): { path: string; text: string }[] {
@@ -141,9 +177,14 @@ function discussionLine(c: PriorDiscussionEntry): string {
 
 export function buildReviewPayload(input: ReviewPayloadInput): ReviewPayload {
   const { baseBranch, headBranch, diff, files, commits, priorDiscussion, budget } = input;
+  const language = input.outputLanguage?.trim() ?? '';
 
   const header: string[] = [
     REVIEW_INSTRUCTIONS,
+    // Nothing at all when no language is asked for — not a blank line, not an
+    // empty section. The payload must be byte-identical to what the previous
+    // version produced or an existing user's prompt has silently changed.
+    ...(language ? ['', languageInstruction(language)] : []),
     '',
     '---',
     '',

@@ -51,6 +51,17 @@ export interface ReviewHandlerDeps {
   getRepoId: () => string | undefined;
   getRepos: () => Array<{ path: string; name: string; active: boolean }>;
   getMaxDiffChars: () => number;
+  /**
+   * `gitGraphPro.aiReview.outputLanguage`, or empty when the user never set
+   * it. Injected the same way `getMaxDiffChars` is, so this module stays free
+   * of `vscode` and a test can drive the setting without a host.
+   *
+   * Read once, at the top of `review.start`, and nowhere else. Nothing that
+   * reads a *stored* review may consult it — a review keeps the language it
+   * was written in, and re-reading the setting to display an old one would
+   * claim a translation that never happened.
+   */
+  getOutputLanguage: () => string;
   openBody: (repoId: string, id: string) => Promise<void>;
   targets: ReviewTargetState;
   focusReviewView: () => Promise<void>;
@@ -134,6 +145,11 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
         if (!git) throw new Error('No git repository found');
         const provider = p.provider as string;
         const model = (p.model as string) || '';
+        // Read once, here, and threaded through both the id and the payload.
+        // It is part of the id deliberately: see buildReviewId's comment on
+        // `outputLanguage` for why a language that is not in the id turns a
+        // changed setting into a silent stale-language cache hit.
+        const outputLanguage = deps.getOutputLanguage();
         const target = targetFromParams(p);
 
         // A pull request's sha pair comes from PullRequestDetail, never from
@@ -167,7 +183,7 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
         // wasted work that ReviewRunner would just deduplicate again. Only a
         // finished, successful entry may be opened; a failure or a
         // cancellation must be retried, not served.
-        const id = buildReviewId({ kind: resolved.kind, baseSha: resolved.baseSha, headSha, provider, model });
+        const id = buildReviewId({ kind: resolved.kind, baseSha: resolved.baseSha, headSha, provider, model, outputLanguage });
         const existing = await deps.store.get(repoId, id);
         if (existing?.status === 'done') {
           await deps.openBody(repoId, id);
@@ -250,6 +266,7 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
           commits,
           priorDiscussion,
           budget: deps.getMaxDiffChars(),
+          outputLanguage,
         });
 
         const startedId = await deps.runner.start({
@@ -263,6 +280,9 @@ export function createReviewHandler(deps: ReviewHandlerDeps) {
           ...(providerId ? { providerId } : {}),
           provider, model,
           payloadText: payload.text,
+          // The runner rebuilds the id from its own input, so it needs the
+          // same language the id above was built from or the two disagree.
+          outputLanguage,
         });
         return { id: startedId, cached: false };
       }

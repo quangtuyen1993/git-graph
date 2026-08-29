@@ -55,6 +55,8 @@ function harness(over: Record<string, unknown> = {}) {
     getRepoId: () => 'repo-a',
     getRepos: () => [{ path: '/repo/a', name: 'repo-a', active: true }],
     getMaxDiffChars: () => 0,
+    // No output language configured — the default every existing test assumes.
+    getOutputLanguage: () => '',
     openBody: vi.fn(async () => {}),
     targets,
     focusReviewView,
