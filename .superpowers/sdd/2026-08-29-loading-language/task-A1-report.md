@@ -112,3 +112,96 @@ no terminator, a repository whose fetch does not produce the commit fetches fore
 5. **The auto-fetch is a network call the user did not ask for.** Clicking a pull request whose
    head is missing now hits `origin`. That is what was asked for, but it is worth confirming it
    feels right on a slow remote — the bar is the only thing indicating it.
+
+---
+
+# Fix round 1
+
+Commit: `6157f22` (`src/webview/App.svelte`, `tests/webview/app-pull-request-scroll.test.ts`).
+
+## 1 & 2 — the auto-fetch is off the mutation path (both IMPORTANT findings)
+
+Both had the same root cause and both are fixed by the same change.
+`fetchAndScrollToPullRequestHead` no longer calls `runDirectMutation`; it runs the fetch and
+its refresh inside `trackBackgroundWork` directly, so it sets no `mutationProgress` and claims
+no `mutationGate`. The terminator, both supersession guards and both failure messages are
+byte-for-byte unchanged. The reasoning is now a comment on the function, so the next person
+does not "simplify" it back onto the mutation path.
+
+Two tests pin it, and both were confirmed by mutation: putting the fetch back on
+`runDirectMutation` turns both red.
+
+- *"shows no labelled banner during the fetch — one indicator, and no layout shift"*: asserts
+  `.mutation-progress` is null while `git.fetch` is in flight and after it lands, with the
+  ambient bar up throughout.
+- *"does not hold the mutation gate, so a checkout during the fetch still runs"*: holds the
+  fetch open, double-clicks the branch, and asserts `git.checkout` is sent and the error banner
+  stays empty.
+
+## 3 — `forge.pr.*` now tracked
+
+The `Promise.all` at `handlePullRequestSelect` is wrapped in `trackBackgroundWork`; the
+supersession guard after it is untouched, and `scrollToPullRequestHead` stays outside the
+tracked block (nesting it would deadlock against `waitForGraphReady`). The coordinator's
+overruling was right: the bar previously stayed dark through three network round trips.
+
+The first version of this test passed even with the wrap removed — the startup graph build was
+still in flight at click time, so its bar was mistaken for the one the forge calls should
+raise. The test now waits for `graph.getWindow` and for the bar to go dark before clicking, and
+mutation 8 (untracking the `Promise.all`) turns it red.
+
+## 4 — the runaway fetch fails instead of hanging
+
+`stubApp` now counts `git.fetch` **ahead of the override dispatch**, throwing on the third call.
+Counting inside one test's override was not enough: the tests that override `git.fetch` with a
+deferred bypassed the switch entirely, and one of them looped hard enough to exhaust the heap
+rather than merely hang. With the cap in front of overrides, deleting the terminator now gives
+`1 failed | 18 passed` in normal time, with `AssertionError: expected 3 to be 1` at the
+runaway test's own line.
+
+## 5 — requirement 6b's message is pinned
+
+`expect(bannerText(...)).toContain("hasn't finished loading")`, matching how the filtered test
+does it.
+
+## Guards re-proved after the change (the fetch path moved, so the old proofs were stale)
+
+| # | Mutation | Result |
+|---|---|---|
+| 7 | Put the auto-fetch back on `runDirectMutation` | red: both new tests (labelled banner present; checkout rejected with "A Git mutation is already in progress") |
+| 8 | Untrack the `forge.pr.*` `Promise.all` | red: "shows the bar from the first forge request" |
+| 2′ | Delete the `alreadyFetched` terminator | red in seconds: "fetches once and then says the commit is still missing" — `expected 3 to be 1` |
+| 3′ | Delete the post-fetch supersession guard | red: "does not scroll when the panel was closed while the fetch was in flight" |
+
+Mutation 3′ is worth a note. On the new path the **pull-request-to-pull-request** test no longer
+pins that guard: the second selection's own forge round trips are in flight when the fetch
+lands, so `!isGraphReady()` sends the stale jump into the wait branch and *its* guard returns
+first. The guard is still needed — closing the panel leaves nothing in flight, and then it is
+the only thing standing — so a second test supersedes by closing the detail panel, and that one
+does pin it. The original test stays, because acceptance row 5 is written about selecting a
+different pull request.
+
+## Tests
+
+`npx vitest run --fileParallelism=false tests/webview/app-pull-request-scroll.test.ts
+tests/webview/app-background-progress.test.ts` → **22 passed** (19 + 3). Twelve neighbouring
+files that touch the changed paths — the pull request, mutation-progress, branch-menu, sidebar
+and refresh-race suites — 102 passed. All three type gates clean. Full suite and coverage left
+to the controller.
+
+## On the reporting mistake
+
+The claim that the fetch showed no message was written from the code I had changed, not from
+the DOM the component renders — `runDirectMutation`'s banner was one call away and I did not
+look. The two new tests assert `.mutation-progress` directly, which is what checking it looks
+like. The eye-check list below stands, and item 1 is now the only claim in this report that
+rests on reading rather than on a test.
+
+## Still for a human to check by eye
+
+Unchanged from above: the CSS itself is untested (zero-height track, absolute bar, sweep speed,
+reduced motion), the bar now flashes on every graph refresh, and the auto-fetch is a network
+call the user did not ask for. One addition: with the fetch off the mutation gate, a checkout
+and an auto-fetch can now genuinely run at the same time. Concurrent `refreshGraph` calls are
+already handled by `graphRefreshGate`, and `git.fetch` alongside `git.checkout` is safe at the
+git level, but it is worth watching once on a real repository.
