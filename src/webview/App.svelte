@@ -900,12 +900,32 @@
    * unfiltered build is a situation the tool can just resolve, and the
    * ambient bar is what tells the user it is resolving it.
    *
+   * Deliberately NOT `runDirectMutation`, which is the path an explicit click
+   * takes. Two things on that path are wrong for a fetch nobody asked for:
+   *
+   * - it sets `mutationProgress`, whose banner is an in-flow element above the
+   *   toolbar with no reserved height. On this one path the user would get two
+   *   busy indicators for one operation, and the graph would jump down and back
+   *   — the layout shift the ambient bar is built to avoid, arriving through
+   *   the other element;
+   * - it claims `mutationGate`, which throws rather than queues. An implicit
+   *   background fetch holding that gate would reject the user's next checkout
+   *   with "A Git mutation is already in progress" for an operation they cannot
+   *   see, and would itself be rejected by a confirm dialog that happened to be
+   *   open — an error for an action they never took.
+   *
+   * The refresh stays inside the same `trackBackgroundWork` as the fetch, so
+   * the bar covers both and the retry below runs on the rebuilt layout.
+   *
    * A failure still speaks. The user clicked expecting to land somewhere, so
    * silence would be worse than the message this replaces.
    */
   async function fetchAndScrollToPullRequestHead(pullRequestId: string, hash: string): Promise<void> {
     try {
-      await runDirectMutation('Fetching…', () => bridge.send('git.fetch', { remote: 'origin' }) as Promise<void>);
+      await trackBackgroundWork(async () => {
+        await bridge.send('git.fetch', { remote: 'origin' });
+        await refreshGraph();
+      });
     } catch (e) {
       if (selectedPullRequestId !== pullRequestId) return;
       showTransientMessage(messageOf(e));
@@ -939,11 +959,15 @@
     createPullRequestState = null;
 
     try {
-      const [detail, commentsResult, filesResult] = await Promise.all([
+      // The first thing a pull request click does is three network round
+      // trips, and they are exactly the "is it working?" gap the bar exists
+      // for — without this it stayed dark until `graph.getRow`. Tracked as
+      // one unit; the supersession guard below is unchanged.
+      const [detail, commentsResult, filesResult] = await trackBackgroundWork(() => Promise.all([
         bridge.send('forge.pr.get', { id }) as Promise<PullRequestDetailData>,
         bridge.send('forge.pr.comments', { id }) as Promise<{ comments: ForgeComment[] }>,
         bridge.send('forge.pr.files', { id }) as Promise<{ files: ForgeChangedFile[] }>,
-      ]);
+      ]));
       // A later selection superseded this one while it was in flight.
       if (selectedPullRequestId !== id) return;
       pullRequestDetail = detail;
