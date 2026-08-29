@@ -252,6 +252,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     },
     getMaxDiffChars: () =>
       vscode.workspace.getConfiguration('gitGraphPro.aiReview').get<number>('maxDiffChars') ?? 0,
+    // Read per review rather than captured once, so changing the setting takes
+    // effect on the next run without a window reload.
+    getOutputLanguage: () =>
+      vscode.workspace.getConfiguration('gitGraphPro.aiReview').get<string>('outputLanguage') ?? '',
     openBody,
     targets: reviewTargets,
     focusReviewView: async () => {

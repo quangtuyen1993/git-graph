@@ -59,6 +59,8 @@ describe('review.start against a real repository (pull request locality)', () =>
       getRepoId: () => 'repo-x',
       getRepos: () => [],
       getMaxDiffChars: () => 0,
+      // No output language configured — the default every existing test assumes.
+      getOutputLanguage: () => '',
       openBody: vi.fn(async () => {}),
       targets: new ReviewTargetState(),
       focusReviewView: vi.fn(async () => {}),
@@ -174,6 +176,8 @@ describe('review.setTarget against a real repository (pull request locality)', (
       getRepoId: () => 'repo-x',
       getRepos: () => [],
       getMaxDiffChars: () => 0,
+      // No output language configured — the default every existing test assumes.
+      getOutputLanguage: () => '',
       openBody: vi.fn(async () => {}),
       targets,
       focusReviewView,

@@ -104,6 +104,11 @@
           "minimum": 0,
           "description": "Cap the diff sent for review, in characters. Default 0 sends the complete diff so the reviewer sees the real change. Only set this if a model rejects the request for size; files are then dropped whole (never mid-hunk) and the omitted ones are named in the prompt."
         },
+        "gitGraphPro.aiReview.outputLanguage": {
+          "type": "string",
+          "default": "",
+          "description": "Language the review is written in, e.g. 'Tiếng Việt' or 'Brazilian Portuguese'. Any language the model knows works; leave empty to let it answer in whatever language it defaults to. Only the review prose is translated — section headings, the Critical/Important/Minor labels and the APPROVE/REQUEST_CHANGES/COMMENT verdict stay as they are, and so do code, file paths and branch names. Each language is stored as a separate review: reviews written before you changed this keep the language they were written in, and re-running produces a new one rather than replacing them."
+        },
         "gitGraphPro.forge.remote": {
           "type": "string",
           "default": "origin",

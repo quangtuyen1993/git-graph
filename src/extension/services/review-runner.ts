@@ -17,6 +17,14 @@ export interface StartReviewInput {
   provider: string;
   model: string;
   payloadText: string;
+  /**
+   * The language the payload asked for, or empty. This travels with the input
+   * only because `start()` rebuilds the id below and `buildReviewId` needs it:
+   * were it left out, the caller would look up one id and this would write
+   * another, so no run would ever be a cache hit and two languages would
+   * overwrite each other's body.
+   */
+  outputLanguage?: string;
 }
 
 interface InFlight {
@@ -60,6 +68,7 @@ export class ReviewRunner {
       headSha: input.headSha,
       provider: input.provider,
       model: input.model,
+      outputLanguage: input.outputLanguage,
     });
     if (this.inFlight.has(id)) return id;
 
